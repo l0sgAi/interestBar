@@ -1,0 +1,67 @@
+package conf
+
+import (
+	"fmt"
+
+	"github.com/fsnotify/fsnotify"
+	"github.com/spf13/viper"
+)
+
+var Config *AppConfig
+
+type AppConfig struct {
+	Server Server `mapstructure:"server" json:"server" yaml:"server"`
+	App    App    `mapstructure:"app" json:"app" yaml:"app"`
+	Log    Log    `mapstructure:"log" json:"log" yaml:"log"`
+	Pgsql  Pgsql  `mapstructure:"pgsql" json:"pgsql" yaml:"pgsql"`
+}
+
+type Server struct {
+	Port int    `mapstructure:"port" json:"port" yaml:"port"`
+	Mode string `mapstructure:"mode" json:"mode" yaml:"mode"`
+}
+
+type App struct {
+	Name    string `mapstructure:"name" json:"name" yaml:"name"`
+	Version string `mapstructure:"version" json:"version" yaml:"version"`
+}
+
+type Log struct {
+	Level    string `mapstructure:"level" json:"level" yaml:"level"`
+	Format   string `mapstructure:"format" json:"format" yaml:"format"`
+	Director string `mapstructure:"director" json:"director" yaml:"director"`
+}
+
+type Pgsql struct {
+	Path         string `mapstructure:"path" json:"path" yaml:"path"`
+	Port         string `mapstructure:"port" json:"port" yaml:"port"`
+	Config       string `mapstructure:"config" json:"config" yaml:"config"`
+	DbName       string `mapstructure:"db_name" json:"db_name" yaml:"db_name"`
+	Username     string `mapstructure:"username" json:"username" yaml:"username"`
+	Password     string `mapstructure:"password" json:"password" yaml:"password"`
+	MaxIdleConns int    `mapstructure:"max_idle_conns" json:"max_idle_conns" yaml:"max_idle_conns"`
+	MaxOpenConns int    `mapstructure:"max_open_conns" json:"max_open_conns" yaml:"max_open_conns"`
+	LogMode      string `mapstructure:"log_mode" json:"log_mode" yaml:"log_mode"`
+}
+
+func InitConfig(path string) {
+	v := viper.New()
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+
+	if err := v.ReadInConfig(); err != nil {
+		panic(fmt.Errorf("fatal error config file: %s", err))
+	}
+
+	v.WatchConfig()
+	v.OnConfigChange(func(e fsnotify.Event) {
+		fmt.Println("config file changed:", e.Name)
+		if err := v.Unmarshal(&Config); err != nil {
+			fmt.Println(err)
+		}
+	})
+
+	if err := v.Unmarshal(&Config); err != nil {
+		panic(err)
+	}
+}

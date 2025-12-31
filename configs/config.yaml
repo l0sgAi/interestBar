@@ -1,0 +1,20 @@
+server:
+  port: 8888
+  mode: debug
+app:
+  name: interestBar
+  version: v1.0.0
+log:
+  level: debug
+  format: console
+  director: ./logs
+pgsql:
+  path: 192.168.200.132
+  port: 3367
+  config: sslmode=disable TimeZone=Asia/Shanghai
+  db_name: interest_bar_DB
+  username: root
+  password: 1q2w3e4r5t
+  max_idle_conns: 10
+  max_open_conns: 100
+  log_mode: debug

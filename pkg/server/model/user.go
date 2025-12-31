@@ -1,0 +1,28 @@
+package model
+
+import (
+	"time"
+)
+
+type SysUser struct {
+	ID         uint       `json:"id" gorm:"primarykey;column:id"`
+	CreateTime time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
+	UpdateTime time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	Username   string     `json:"username" gorm:"column:username;not null"`
+	Password   string     `json:"-" gorm:"column:password;not null"`
+	Email      string     `json:"email" gorm:"column:email;unique;not null"`
+	Phone      string     `json:"phone,omitempty" gorm:"column:phone"`
+	GoogleID   string     `json:"google_id,omitempty" gorm:"column:google_id"`
+	XID        string     `json:"x_id,omitempty" gorm:"column:x_id"`
+	GithubID   string     `json:"github_id,omitempty" gorm:"column:github_id"`
+	AvatarURL  string     `json:"avatar_url,omitempty" gorm:"column:avatar_url"`
+	Gender     int        `json:"gender" gorm:"column:gender;default:0"`
+	Birthdate  *time.Time `json:"birthdate,omitempty" gorm:"column:birthdate"`
+	Status     int        `json:"status" gorm:"column:status;default:1"`
+	Role       int        `json:"role" gorm:"column:role;default:0"`
+	Deleted    int        `json:"deleted" gorm:"column:deleted;default:0"`
+}
+
+func (SysUser) TableName() string {
+	return "users"
+}
