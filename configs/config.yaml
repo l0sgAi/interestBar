@@ -18,3 +18,8 @@ pgsql:
   max_idle_conns: 10
   max_open_conns: 100
   log_mode: debug
+oauth:
+  google:
+    client_id: "xxx"
+    client_secret: "xxx"
+    redirect_url: "xxx"

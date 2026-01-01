@@ -22,4 +22,11 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		user.POST("login", userCtrl.Login)
 		user.GET("get", userCtrl.GetUser)
 	}
+
+	// Auth
+	auth := r.Group("auth")
+	{
+		auth.GET("google/login", userCtrl.GoogleLogin)
+		auth.GET("google/callback", userCtrl.GoogleCallback)
+	}
 }
