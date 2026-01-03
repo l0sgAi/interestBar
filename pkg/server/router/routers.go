@@ -1,8 +1,8 @@
 package router
 
 import (
+	"interestBar/pkg/conf"
 	"interestBar/pkg/server/controller"
-	"strings"
 
 	"github.com/click33/sa-token-go/stputil"
 	"github.com/gin-gonic/gin"
@@ -11,17 +11,15 @@ import (
 // SaTokenAuth Sa-Token 认证中间件
 func SaTokenAuth() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// 从配置文件获取请求头名称
+		tokenName := conf.Config.SaToken.TokenName
+
 		// 从 Header 获取 token
-		token := c.GetHeader("Authorization")
+		token := c.GetHeader(tokenName)
 		if token == "" {
 			c.JSON(401, gin.H{"code": 401, "message": "Token not found"})
 			c.Abort()
 			return
-		}
-
-		// 去掉 "Bearer " 前缀
-		if after, ok := strings.CutPrefix(token, "Bearer "); ok {
-			token = after
 		}
 
 		// 使用 Sa-Token-Go 验证登录状态

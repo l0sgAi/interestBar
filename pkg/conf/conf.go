@@ -11,6 +11,7 @@ var Config *AppConfig
 
 type AppConfig struct {
 	Server  Server  `mapstructure:"server" json:"server" yaml:"server"`
+	CORS    CORS    `mapstructure:"cors" json:"cors" yaml:"cors"`
 	App     App     `mapstructure:"app" json:"app" yaml:"app"`
 	Log     Log     `mapstructure:"log" json:"log" yaml:"log"`
 	Pgsql   Pgsql   `mapstructure:"pgsql" json:"pgsql" yaml:"pgsql"`
@@ -22,6 +23,10 @@ type AppConfig struct {
 type Server struct {
 	Port int    `mapstructure:"port" json:"port" yaml:"port"`
 	Mode string `mapstructure:"mode" json:"mode" yaml:"mode"`
+}
+
+type CORS struct {
+	AllowedOrigins []string `mapstructure:"allowed_origins" json:"allowed_origins" yaml:"allowed_origins"`
 }
 
 type App struct {
@@ -40,11 +45,12 @@ type Oauth struct {
 	Google Google `mapstructure:"google" json:"google" yaml:"google"`
 }
 
-// 新增：对应 yaml 中的 google 层级
+// 新增:对应 yaml 中的 google 层级
 type Google struct {
-	ClientID     string `mapstructure:"client_id" json:"client_id" yaml:"client_id"`
-	ClientSecret string `mapstructure:"client_secret" json:"client_secret" yaml:"client_secret"`
-	RedirectURL  string `mapstructure:"redirect_url" json:"redirect_url" yaml:"redirect_url"`
+	ClientID            string `mapstructure:"client_id" json:"client_id" yaml:"client_id"`
+	ClientSecret        string `mapstructure:"client_secret" json:"client_secret" yaml:"client_secret"`
+	RedirectURL         string `mapstructure:"redirect_url" json:"redirect_url" yaml:"redirect_url"`
+	FrontendRedirectURL string `mapstructure:"frontend_redirect_url" json:"frontend_redirect_url" yaml:"frontend_redirect_url"`
 }
 
 type Pgsql struct {

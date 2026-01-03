@@ -13,6 +13,7 @@ func InitRouter() *gin.Engine {
 	// Middleware
 	r.Use(middleware.Logger())
 	r.Use(gin.Recovery())
+	r.Use(middleware.CORS()) // 添加 CORS 中间件
 
 	// Register Routes
 	root := r.Group("")

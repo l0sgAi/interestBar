@@ -1,6 +1,15 @@
 server:
   port: 8888
   mode: debug
+
+# CORS 配置
+cors:
+  allowed_origins:
+    - "https://l0sgai.github.io"
+    - "https://l0sgai.github.io/interestBar-frontend/"
+    - "http://localhost:*"
+    - "http://127.0.0.1:*"
+
 app:
   name: interestBar
   version: v1.0.0
@@ -20,9 +29,10 @@ pgsql:
   log_mode: debug
 oauth:
   google:
-    client_id: "xxx"
-    client_secret: "xxx"
-    redirect_url: "https://l0sgAi.github.io/interestBar-frontend/success"
+    client_id: "your_client_id"
+    client_secret: "your_client_secret"
+    redirect_url: "your_url"
+    frontend_redirect_url: "your_url"
 
 redis:
   host: "192.168.200.132"
@@ -32,7 +42,7 @@ redis:
   pool_size: 10
 # Sa-Token 配置 (可选,用于覆盖默认配置)
 sa_token:
-  token_name: "Authorization"
+  token_name: "satoken" # 请求头名称
   timeout: 259200 # 3天过期时间(秒)
   active_timeout: 1800 # 30分钟活跃检测(秒)
   is_concurrent: true # 允许并发登录

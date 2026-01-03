@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"interestBar/pkg/conf"
 	"interestBar/pkg/server/auth"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
@@ -10,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/click33/sa-token-go/stputil"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -29,19 +30,17 @@ func (ctrl *UserController) GetUser(c *gin.Context) {
 
 // Logout handles user logout
 func (ctrl *UserController) Logout(c *gin.Context) {
+	// 从配置文件获取请求头名称
+	tokenName := conf.Config.SaToken.TokenName
+
 	// 从 Header 获取 token
-	token := c.GetHeader("Authorization")
+	token := c.GetHeader(tokenName)
 	if token == "" {
 		response.BadRequest(c, "Token not found")
 		return
 	}
 
-	// 去掉 "Bearer " 前缀
-	if strings.HasPrefix(token, "Bearer ") {
-		token = strings.TrimPrefix(token, "Bearer ")
-	}
-
-	// 使用 Sa-Token 登出
+	// Sa-Token登出
 	err := stputil.LogoutByToken(token)
 	if err != nil {
 		response.InternalError(c, "Failed to logout")
@@ -53,16 +52,14 @@ func (ctrl *UserController) Logout(c *gin.Context) {
 
 // GetCurrentUser returns the current authenticated user info
 func (ctrl *UserController) GetCurrentUser(c *gin.Context) {
+	// 从配置文件获取请求头名称
+	tokenName := conf.Config.SaToken.TokenName
+
 	// 从 Header 获取 token
-	token := c.GetHeader("Authorization")
+	token := c.GetHeader(tokenName)
 	if token == "" {
 		response.Unauthorized(c, "Token not found")
 		return
-	}
-
-	// 去掉 "Bearer " 前缀
-	if strings.HasPrefix(token, "Bearer ") {
-		token = strings.TrimPrefix(token, "Bearer ")
 	}
 
 	// 使用 Sa-Token-Go 获取登录用户信息
@@ -162,6 +159,11 @@ func (ctrl *UserController) GoogleCallback(c *gin.Context) {
 
 	// 使用 Sa-Token-Go 登录 (使用用户 ID 作为 loginId)
 	userIDStr := strconv.FormatUint(uint64(user.ID), 10)
+
+	// 登录前先注销该用户的所有旧 session,避免 token 积累
+	// TODO: 如果需要清理token，可以考虑先登出，但是这样就无法多端登录了
+	// stputil.Logout(userIDStr)
+
 	authToken, err := stputil.Login(userIDStr)
 	if err != nil {
 		response.InternalError(c, "Failed to login")
@@ -180,8 +182,13 @@ func (ctrl *UserController) GoogleCallback(c *gin.Context) {
 		session.Set("login_time", time.Now().Format(time.RFC3339))
 	}
 
-	response.Success(c, gin.H{
-		"token":  authToken,
-		"expire": "259200", // 3天 = 259200秒
-	})
+	// 重定向到前端页面,并将 token 作为参数传递
+	frontendURL := conf.Config.Oauth.Google.FrontendRedirectURL
+	if frontendURL == "" {
+		response.InternalError(c, "Frontend redirect URL not configured")
+		return
+	}
+
+	redirectURL := frontendURL + "?token=" + authToken
+	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
 }
