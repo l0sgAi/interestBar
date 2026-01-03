@@ -2,10 +2,50 @@ package router
 
 import (
 	"interestBar/pkg/server/controller"
-	"interestBar/pkg/server/router/middleware"
+	"strings"
 
+	"github.com/click33/sa-token-go/stputil"
 	"github.com/gin-gonic/gin"
 )
+
+// SaTokenAuth Sa-Token 认证中间件
+func SaTokenAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// 从 Header 获取 token
+		token := c.GetHeader("Authorization")
+		if token == "" {
+			c.JSON(401, gin.H{"code": 401, "message": "Token not found"})
+			c.Abort()
+			return
+		}
+
+		// 去掉 "Bearer " 前缀
+		if after, ok := strings.CutPrefix(token, "Bearer "); ok {
+			token = after
+		}
+
+		// 使用 Sa-Token-Go 验证登录状态
+		err := stputil.CheckLogin(token)
+		if err != nil {
+			c.JSON(401, gin.H{"code": 401, "message": "Invalid or expired token"})
+			c.Abort()
+			return
+		}
+
+		// 获取登录 ID 并存入上下文
+		loginID, err := stputil.GetLoginID(token)
+		if err != nil {
+			c.JSON(401, gin.H{"code": 401, "message": "Failed to get login ID"})
+			c.Abort()
+			return
+		}
+
+		c.Set("login_id", loginID)
+		c.Set("token", token)
+
+		c.Next()
+	}
+}
 
 func RegisterRoutes(r *gin.RouterGroup) {
 	// System / Hello
@@ -21,36 +61,36 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		userCtrl := controller.NewUserController()
 		auth.GET("google/login", userCtrl.GoogleLogin)
 		auth.GET("google/callback", userCtrl.GoogleCallback)
-		auth.POST("logout", middleware.Auth(), userCtrl.Logout)
-		auth.GET("me", middleware.Auth(), userCtrl.GetCurrentUser)
+		auth.POST("logout", SaTokenAuth(), userCtrl.Logout)
+		auth.GET("me", SaTokenAuth(), userCtrl.GetCurrentUser)
 	}
 
 	// User routes
 	userCtrl := controller.NewUserController()
 	user := r.Group("user")
 	{
-		user.GET("get", middleware.Auth(), userCtrl.GetUser)
+		user.GET("get", SaTokenAuth(), userCtrl.GetUser)
 	}
 
 	// Example: Protected routes with authentication
 	protected := r.Group("api")
-	protected.Use(middleware.Auth())
+	protected.Use(SaTokenAuth())
 	{
 		// Add your protected endpoints here
 		protected.GET("/profile", func(c *gin.Context) {
-			userID, _ := c.Get("user_id")
-			email, _ := c.Get("email")
+			loginID, _ := c.Get("login_id")
+			token, _ := c.Get("token")
 			c.JSON(200, gin.H{
 				"message": "This is a protected route",
-				"user_id": userID,
-				"email":   email,
+				"user_id": loginID,
+				"token":   token,
 			})
 		})
 	}
 
 	// Example: Admin routes with role-based access control
 	admin := r.Group("admin")
-	admin.Use(middleware.Auth(), middleware.RoleAuth(1)) // Require role >= 1 (admin)
+	admin.Use(SaTokenAuth())
 	{
 		admin.GET("/dashboard", func(c *gin.Context) {
 			c.JSON(200, gin.H{

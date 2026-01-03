@@ -4,12 +4,11 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"interestBar/pkg/server/response"
-	"interestBar/pkg/server/storage/cache/redis"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/click33/sa-token-go/stputil"
 )
 
 const (
@@ -54,18 +53,24 @@ func CSRF() gin.HandlerFunc {
 			return
 		}
 
-		// Get session ID from context (set by Auth middleware)
-		sessionID, exists := c.Get("user_id")
+		// Get login ID from context (set by SaTokenAuth middleware)
+		loginID, exists := c.Get("login_id")
 		if !exists {
 			response.Unauthorized(c, response.MsgLoginRequired)
 			c.Abort()
 			return
 		}
 
-		// Verify CSRF token in Redis
-		csrfKey := buildCSRFKey(sessionID.(uint))
-		storedToken, err := redis.Client.Get(redis.Ctx, csrfKey).Result()
-		if err != nil || storedToken != token {
+		// Verify CSRF token in Sa-Token Session
+		session, err := stputil.GetSession(loginID)
+		if err != nil {
+			response.InternalError(c, "Failed to get session")
+			c.Abort()
+			return
+		}
+
+		storedToken, exists := session.Get("csrf_token")
+		if !exists || storedToken != token {
 			response.Forbidden(c, response.MsgInvalidCSRFToken)
 			c.Abort()
 			return
@@ -77,7 +82,7 @@ func CSRF() gin.HandlerFunc {
 
 // SetCSRFToken generates and sets a new CSRF token for the session
 func SetCSRFToken(c *gin.Context) error {
-	userID, exists := c.Get("user_id")
+	loginID, exists := c.Get("login_id")
 	if !exists {
 		return nil // No user, no CSRF token needed
 	}
@@ -88,12 +93,14 @@ func SetCSRFToken(c *gin.Context) error {
 		return err
 	}
 
-	// Store in Redis with 24 hour expiration
-	csrfKey := buildCSRFKey(userID.(uint))
-	err = redis.Client.Set(redis.Ctx, csrfKey, token, 24*time.Hour).Err()
+	// Store in Sa-Token Session
+	session, err := stputil.GetSession(loginID)
 	if err != nil {
 		return err
 	}
+
+	session.Set("csrf_token", token)
+	session.Set("csrf_token_expires", time.Now().Add(24*time.Hour).Unix())
 
 	// Set in response header
 	c.Header(csrfHeaderKey, token)
@@ -103,23 +110,22 @@ func SetCSRFToken(c *gin.Context) error {
 
 // GetCSRFToken returns the CSRF token for the current session
 func GetCSRFToken(c *gin.Context) (string, error) {
-	userID, exists := c.Get("user_id")
+	loginID, exists := c.Get("login_id")
 	if !exists {
 		return "", nil
 	}
 
-	csrfKey := buildCSRFKey(userID.(uint))
-	token, err := redis.Client.Get(redis.Ctx, csrfKey).Result()
+	session, err := stputil.GetSession(loginID)
 	if err != nil {
 		return "", err
 	}
 
-	return token, nil
-}
+	token, exists := session.Get("csrf_token")
+	if !exists {
+		return "", nil
+	}
 
-// buildCSRFKey builds the Redis key for storing CSRF token
-func buildCSRFKey(userID uint) string {
-	return "csrf:token:" + strconv.FormatUint(uint64(userID), 10)
+	return token.(string), nil
 }
 
 // CSRFMiddleware is a convenient middleware that sets CSRF token for GET requests

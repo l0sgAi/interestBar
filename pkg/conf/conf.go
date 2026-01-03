@@ -10,16 +10,13 @@ import (
 var Config *AppConfig
 
 type AppConfig struct {
-	Server Server `mapstructure:"server" json:"server" yaml:"server"`
-	App    App    `mapstructure:"app" json:"app" yaml:"app"`
-	Log    Log    `mapstructure:"log" json:"log" yaml:"log"`
-	Pgsql  Pgsql  `mapstructure:"pgsql" json:"pgsql" yaml:"pgsql"`
-	// 新增：添加 OAuth 结构体映射
-	Oauth Oauth `mapstructure:"oauth" json:"oauth" yaml:"oauth"`
-	// 新增：添加 Redis 结构体映射
-	Redis Redis `mapstructure:"redis" json:"redis" yaml:"redis"`
-	// 新增：添加 JWT 配置
-	JwtSecret string `mapstructure:"jwt_secret" json:"jwt_secret" yaml:"jwt_secret"`
+	Server  Server  `mapstructure:"server" json:"server" yaml:"server"`
+	App     App     `mapstructure:"app" json:"app" yaml:"app"`
+	Log     Log     `mapstructure:"log" json:"log" yaml:"log"`
+	Pgsql   Pgsql   `mapstructure:"pgsql" json:"pgsql" yaml:"pgsql"`
+	Oauth   Oauth   `mapstructure:"oauth" json:"oauth" yaml:"oauth"`
+	Redis   Redis   `mapstructure:"redis" json:"redis" yaml:"redis"`
+	SaToken SaToken `mapstructure:"sa_token" json:"sa_token" yaml:"sa_token"`
 }
 
 type Server struct {
@@ -68,6 +65,14 @@ type Redis struct {
 	Password string `mapstructure:"password" json:"password" yaml:"password"`
 	D        int    `mapstructure:"db" json:"db" yaml:"db"`
 	PoolSize int    `mapstructure:"pool_size" json:"pool_size" yaml:"pool_size"`
+}
+
+type SaToken struct {
+	TokenName     string `mapstructure:"token_name" json:"token_name" yaml:"token_name"`
+	Timeout       int    `mapstructure:"timeout" json:"timeout" yaml:"timeout"`
+	ActiveTimeout int    `mapstructure:"active_timeout" json:"active_timeout" yaml:"active_timeout"`
+	IsConcurrent  bool   `mapstructure:"is_concurrent" json:"is_concurrent" yaml:"is_concurrent"`
+	IsShare       bool   `mapstructure:"is_share" json:"is_share" yaml:"is_share"`
 }
 
 func InitConfig(path string) {

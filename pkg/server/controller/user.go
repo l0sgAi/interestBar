@@ -4,14 +4,14 @@ import (
 	"interestBar/pkg/server/auth"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
-	"interestBar/pkg/server/storage/cache/redis"
 	"interestBar/pkg/server/storage/db/pgsql"
-	"interestBar/pkg/util"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/click33/sa-token-go/stputil"
 	"gorm.io/gorm"
 )
 
@@ -29,33 +29,23 @@ func (ctrl *UserController) GetUser(c *gin.Context) {
 
 // Logout handles user logout
 func (ctrl *UserController) Logout(c *gin.Context) {
-	// Get token from context (set by AuthMiddleware)
-	token, exists := c.Get("token")
-	if !exists {
-		response.BadRequest(c, response.MsgTokenRequired)
+	// 从 Header 获取 token
+	token := c.GetHeader("Authorization")
+	if token == "" {
+		response.BadRequest(c, "Token not found")
 		return
 	}
 
-	tokenStr, ok := token.(string)
-	if !ok {
-		response.InternalError(c)
-		return
+	// 去掉 "Bearer " 前缀
+	if strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
 	}
 
-	// Delete token from Redis
-	err := redis.DeleteToken(tokenStr)
+	// 使用 Sa-Token 登出
+	err := stputil.LogoutByToken(token)
 	if err != nil {
 		response.InternalError(c, "Failed to logout")
 		return
-	}
-
-	// Get user ID and delete session
-	userID, exists := c.Get("user_id")
-	if exists {
-		userIDUint, ok := userID.(uint)
-		if ok {
-			redis.DeleteUserSession(userIDUint)
-		}
 	}
 
 	response.SuccessWithMessage(c, "Logout successful", nil)
@@ -63,19 +53,37 @@ func (ctrl *UserController) Logout(c *gin.Context) {
 
 // GetCurrentUser returns the current authenticated user info
 func (ctrl *UserController) GetCurrentUser(c *gin.Context) {
-	userID, exists := c.Get("user_id")
-	if !exists {
-		response.Unauthorized(c)
+	// 从 Header 获取 token
+	token := c.GetHeader("Authorization")
+	if token == "" {
+		response.Unauthorized(c, "Token not found")
 		return
 	}
 
-	email, _ := c.Get("email")
-	role, _ := c.Get("role")
+	// 去掉 "Bearer " 前缀
+	if strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
+	}
+
+	// 使用 Sa-Token-Go 获取登录用户信息
+	loginID, err := stputil.GetLoginID(token)
+	if err != nil {
+		response.Unauthorized(c, "Invalid token")
+		return
+	}
+
+	// 从 Session 获取用户详细信息
+	session, err := stputil.GetSessionByToken(token)
+	if err != nil {
+		response.InternalError(c, "Failed to get session")
+		return
+	}
 
 	response.Success(c, gin.H{
-		"user_id": userID,
-		"email":   email,
-		"role":    role,
+		"user_id":  loginID,
+		"email":    session.GetString("email"),
+		"username": session.GetString("username"),
+		"role":     session.GetInt("role"),
 	})
 }
 
@@ -125,9 +133,9 @@ func (ctrl *UserController) GoogleCallback(c *gin.Context) {
 				Username:   username,
 				Email:      googleUser.Email,
 				GoogleID:   googleUser.ID,
-				AvatarURL:  googleUser.Picture, // 假设 GoogleUser 有 Picture 字段
-				Role:       0,                  // 默认普通用户
-				Status:     1,                  // 默认状态正常
+				AvatarURL:  googleUser.Picture,
+				Role:       0,
+				Status:     1,
 				Deleted:    0,
 				CreateTime: time.Now(),
 				UpdateTime: time.Now(),
@@ -139,61 +147,41 @@ func (ctrl *UserController) GoogleCallback(c *gin.Context) {
 				return
 			}
 
-			// 将创建好的用户赋值给 user 变量，供后续生成 token 使用
 			user = newUser
 		} else {
-			// 真正的数据库错误
 			response.InternalError(c, response.MsgDatabaseError)
 			return
 		}
 	}
 
-	// User found
 	// If GoogleID is missing (matched by email), update it
 	if user.GoogleID == "" {
 		user.GoogleID = googleUser.ID
 		pgsql.DB.Save(&user)
 	}
 
-	// Delete all old tokens for this user (session invalidation)
-	// This ensures only one active session per user
-	// Comment this out if you want to allow multiple concurrent sessions
-	err = redis.DeleteAllUserTokens(user.ID)
+	// 使用 Sa-Token-Go 登录 (使用用户 ID 作为 loginId)
+	userIDStr := strconv.FormatUint(uint64(user.ID), 10)
+	authToken, err := stputil.Login(userIDStr)
 	if err != nil {
-		// Log error but don't fail the login
-		// logger.Log.Warn("Failed to delete old tokens: " + err.Error())
-	}
-
-	// Generate Login Token
-	authToken, err := util.GenerateToken(user.ID, user.Email, user.Role)
-	if err != nil {
-		response.InternalError(c, "Failed to generate auth token")
+		response.InternalError(c, "Failed to login")
 		return
 	}
 
-	// Store token in Redis with 3 days expiration
-	err = redis.SetToken(authToken, user.ID, util.TokenExpiration)
-	if err != nil {
-		response.InternalError(c, "Failed to store token")
-		return
-	}
-
-	// Store user session in Redis
-	sessionData := map[string]interface{}{
-		"user_id":    user.ID,
-		"email":      user.Email,
-		"username":   user.Username,
-		"role":       user.Role,
-		"login_time": time.Now().Format(time.RFC3339),
-	}
-	err = redis.SetUserSession(user.ID, sessionData, util.TokenExpiration)
-	if err != nil {
-		// Log error but don't fail the login
-		// logger.Log.Warn("Failed to store user session: " + err.Error())
+	// 存储用户会话信息到 Sa-Token Session
+	session, err := stputil.GetSession(userIDStr)
+	if err == nil {
+		session.Set("user_id", user.ID)
+		session.Set("email", user.Email)
+		session.Set("username", user.Username)
+		session.Set("role", user.Role)
+		session.Set("google_id", user.GoogleID)
+		session.Set("avatar_url", user.AvatarURL)
+		session.Set("login_time", time.Now().Format(time.RFC3339))
 	}
 
 	response.Success(c, gin.H{
 		"token":  authToken,
-		"expire": util.TokenExpiration.String(),
+		"expire": "259200", // 3天 = 259200秒
 	})
 }
