@@ -22,4 +22,11 @@ oauth:
   google:
     client_id: "xxx"
     client_secret: "xxx"
-    redirect_url: "xxx"
+    redirect_url: "https://your_domain/auth/google/callback"
+redis:
+  host: "192.168.200.132"
+  port: 6389
+  password: ""
+  db: 0
+  pool_size: 10
+jwt_secret: "change_this_to_a_secure_random_string_at_least_32_characters_long"

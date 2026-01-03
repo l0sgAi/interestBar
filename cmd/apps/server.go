@@ -5,6 +5,7 @@ import (
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/router"
+	"interestBar/pkg/server/storage/cache/redis"
 	"interestBar/pkg/server/storage/db/pgsql"
 	"os"
 	"os/signal"
@@ -21,10 +22,15 @@ func Run(configPath string) {
 	// 3. Init DB
 	pgsql.InitDB()
 
-	// 4. Init Router
+	// 4. Init Redis
+	if err := redis.InitRedis(); err != nil {
+		logger.Log.Fatal("Failed to connect to Redis: " + err.Error())
+	}
+
+	// 5. Init Router
 	r := router.InitRouter()
 
-	// 5. Run Server
+	// 6. Run Server
 	addr := fmt.Sprintf(":%d", conf.Config.Server.Port)
 	logger.Log.Info("Server starting on " + addr)
 
@@ -39,4 +45,7 @@ func Run(configPath string) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Log.Info("Shutdown Server ...")
+
+	// Close Redis connection
+	redis.Close()
 }

@@ -16,6 +16,10 @@ type AppConfig struct {
 	Pgsql  Pgsql  `mapstructure:"pgsql" json:"pgsql" yaml:"pgsql"`
 	// 新增：添加 OAuth 结构体映射
 	Oauth Oauth `mapstructure:"oauth" json:"oauth" yaml:"oauth"`
+	// 新增：添加 Redis 结构体映射
+	Redis Redis `mapstructure:"redis" json:"redis" yaml:"redis"`
+	// 新增：添加 JWT 配置
+	JwtSecret string `mapstructure:"jwt_secret" json:"jwt_secret" yaml:"jwt_secret"`
 }
 
 type Server struct {
@@ -56,6 +60,14 @@ type Pgsql struct {
 	MaxIdleConns int    `mapstructure:"max_idle_conns" json:"max_idle_conns" yaml:"max_idle_conns"`
 	MaxOpenConns int    `mapstructure:"max_open_conns" json:"max_open_conns" yaml:"max_open_conns"`
 	LogMode      string `mapstructure:"log_mode" json:"log_mode" yaml:"log_mode"`
+}
+
+type Redis struct {
+	Host     string `mapstructure:"host" json:"host" yaml:"host"`
+	Port     int    `mapstructure:"port" json:"port" yaml:"port"`
+	Password string `mapstructure:"password" json:"password" yaml:"password"`
+	D        int    `mapstructure:"db" json:"db" yaml:"db"`
+	PoolSize int    `mapstructure:"pool_size" json:"pool_size" yaml:"pool_size"`
 }
 
 func InitConfig(path string) {

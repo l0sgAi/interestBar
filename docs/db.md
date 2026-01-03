@@ -9,7 +9,6 @@ CREATE TABLE users (
 
     -- 核心账号信息
     username        VARCHAR(50) NOT NULL,          -- 昵称
-    password        VARCHAR(255) NOT NULL,         -- 你的业务逻辑要求注册时必须设置密码
     email           VARCHAR(100) NOT NULL,         -- 核心唯一凭证
     phone           VARCHAR(20),                   -- 手机号
 
@@ -37,7 +36,6 @@ CREATE TABLE users (
 -- 添加列注释
 COMMENT ON COLUMN users.id IS 'ID';
 COMMENT ON COLUMN users.username IS '用户名/昵称';
-COMMENT ON COLUMN users.password IS '加密后的密码';
 COMMENT ON COLUMN users.email IS '邮箱(唯一凭证)';
 COMMENT ON COLUMN users.google_id IS 'Google平台唯一ID';
 COMMENT ON COLUMN users.x_id IS 'X/Twitter平台唯一ID';

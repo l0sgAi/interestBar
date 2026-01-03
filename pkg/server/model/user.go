@@ -9,7 +9,6 @@ type SysUser struct {
 	CreateTime time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
 	UpdateTime time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
 	Username   string     `json:"username" gorm:"column:username;not null"`
-	Password   string     `json:"-" gorm:"column:password;not null"`
 	Email      string     `json:"email" gorm:"column:email;unique;not null"`
 	Phone      string     `json:"phone,omitempty" gorm:"column:phone"`
 	GoogleID   string     `json:"google_id,omitempty" gorm:"column:google_id"`
