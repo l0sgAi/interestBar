@@ -29,10 +29,10 @@ pgsql:
   log_mode: debug
 oauth:
   google:
-    client_id: "your_client_id"
-    client_secret: "your_client_secret"
-    redirect_url: "your_url"
-    frontend_redirect_url: "your_url"
+    client_id: "xxx"
+    client_secret: "xxx"
+    redirect_url: "xxx"
+    frontend_redirect_url: "xxx"
 
 redis:
   host: "192.168.200.132"

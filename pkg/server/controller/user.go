@@ -24,8 +24,34 @@ func NewUserController() *UserController {
 }
 
 func (ctrl *UserController) GetUser(c *gin.Context) {
-	// TODO: Implement GetUser logic
-	response.Success(c, gin.H{"message": "get user stub"})
+	// 从上下文中获取 login_id（由Sa-Token中间件设置）
+	loginID, exists := c.Get("login_id")
+	if !exists {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	// 将 login_id 转换为 uint
+	userID, err := strconv.ParseUint(loginID.(string), 10, 32)
+	if err != nil {
+		response.BadRequest(c, "Invalid user ID")
+		return
+	}
+
+	// 使用带缓存的 GetUserByID 获取用户信息
+	user, err := model.GetUserByID(pgsql.DB, uint(userID))
+	if err != nil {
+		response.InternalError(c, "Failed to get user info")
+		return
+	}
+
+	if user == nil {
+		response.NotFound(c, "User not found")
+		return
+	}
+
+	// 返回用户信息
+	response.Success(c, user)
 }
 
 // Logout handles user logout
