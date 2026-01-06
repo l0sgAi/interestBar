@@ -59,6 +59,8 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		userCtrl := controller.NewUserController()
 		auth.GET("google/login", userCtrl.GoogleLogin)
 		auth.GET("google/callback", userCtrl.GoogleCallback)
+		auth.GET("github/login", userCtrl.GithubLogin)
+		auth.GET("github/callback", userCtrl.GithubCallback)
 		auth.POST("logout", SaTokenAuth(), userCtrl.Logout)
 		auth.GET("me", SaTokenAuth(), userCtrl.GetCurrentUser)
 	}

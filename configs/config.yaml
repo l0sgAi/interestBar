@@ -33,6 +33,11 @@ oauth:
     client_secret: "xxx"
     redirect_url: "xxx"
     frontend_redirect_url: "xxx"
+  github:
+    client_id: "xxx"
+    client_secret: "xxx"
+    redirect_url: "xxx"
+    frontend_redirect_url: "xxx"
 
 redis:
   host: "192.168.200.132"
