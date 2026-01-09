@@ -52,3 +52,12 @@ sa_token:
   active_timeout: 1800 # 30分钟活跃检测(秒)
   is_concurrent: true # 允许并发登录
   is_share: false # 不共享session
+
+# AWS S3 对象存储配置
+s3:
+  access_key_id: "xxx" # AWS 访问密钥 ID
+  secret_access_key: "xxx" # AWS 访问密钥
+  region: "xxx" # AWS 区域 (如: us-east-1, ap-southeast-1)
+  bucket: "xxx" # S3 存储桶名称
+  endpoint: "" # 可选: 自定义端点 (用于兼容 S3 的服务，如 MinIO)
+  presign_url_expire: 3600 # 预签名 URL 过期时间(秒)，默认 1 小时

@@ -59,8 +59,6 @@ CREATE INDEX idx_users_github_id ON users(github_id);
 CREATE INDEX idx_users_phone ON users(phone);
 ```
 
-
-
 ### 分类表
 
 ```sql
@@ -74,7 +72,7 @@ CREATE TABLE category (
     name VARCHAR(50) NOT NULL, -- 分类名称 (如：科技、生活)
     slug VARCHAR(60), -- SEO友好标识 (如：tech, life)
     icon VARCHAR(500), -- 图标/Icon URL
-    
+
     -- 层级结构 (支持无限级或二级分类)
     parent_id INT NOT NULL DEFAULT 0, -- 父分D，0表示顶级分类
 
@@ -115,9 +113,41 @@ CREATE UNIQUE INDEX idx_category_slug ON category(slug) WHERE deleted = 0;
 -- SQL: SELECT * FROM category WHERE parent_id=0 AND status=1 AND deleted=0 ORDER BY sort DESC
 CREATE INDEX idx_category_list ON category(parent_id, sort DESC) WHERE deleted = 0 AND status = 1;
 
+-- 插入顶级分类数据
+INSERT INTO category (name, slug, icon, parent_id, sort, circle_count) VALUES
+-- 第一梯队：超高热度/刚需
+('科技数码', 'tech', NULL, 0, 100, 0),
+('游戏电竞', 'gaming', NULL, 0, 95, 0),
+('生活日常', 'lifestyle', NULL, 0, 90, 0),
+('二次元', 'acg', NULL, 0, 85, 0),
+('影音娱乐', 'entertainment', NULL, 0, 80, 0), -- 电影、电视剧、综艺、音乐
+('流行文化', 'pop-culture', NULL, 0, 79, 0),
+
+('运动健身', 'sports', NULL, 0, 75, 0),
+('美食寻味', 'food', NULL, 0, 70, 0),
+('萌宠动物', 'pets', NULL, 0, 65, 0),
+('旅行户外', 'travel', NULL, 0, 60, 0), -- 露营、旅游
+('汽车出行', 'cars', NULL, 0, 55, 0), -- 汽车、摩托车
+
+('财经投资', 'finance', NULL, 0, 50, 0), -- 股票、基金、理财
+('职场发展', 'career', NULL, 0, 45, 0),
+('知识科普', 'knowledge', NULL, 0, 40, 0), -- 硬核知识、百科
+('校园教育', 'education', NULL, 0, 38, 0), -- 升学、考研、校园生活
+
+('阅读文学', 'reading', NULL, 0, 35, 0), -- 书籍、网文
+('摄影摄像', 'photography', NULL, 0, 30, 0),
+('时尚美妆', 'fashion', NULL, 0, 25, 0),
+('艺术设计', 'art', NULL, 0, 20, 0), -- 绘画、设计
+('家居房产', 'home', NULL, 0, 15, 0), -- 装修、租房
+
+('亲子育儿', 'parenting', NULL, 0, 10, 0),
+('情感心理', 'emotion', NULL, 0, 5, 0),
+('新闻政治', 'history-politic', NULL, 0, 4, 0),
+('历史人文', 'history-humannity', NULL, 0, 3, 0),
+('其它兴趣', 'others', NULL, 0, 2, 0),
+('小众猎奇', 'niche-exotic', NULL, 0, 1, 0)
+
 ```
-
-
 
 ### 兴趣圈表
 
@@ -184,8 +214,6 @@ CREATE UNIQUE INDEX idx_circle_slug ON circle(slug) WHERE deleted = 0;
 
 ```
 
-
-
 ### 权限表
 
 ```sql
@@ -198,7 +226,7 @@ CREATE TABLE circle_member (
     -- 核心关系
     circle_id BIGINT NOT NULL, -- 圈子ID
     user_id BIGINT NOT NULL, -- 用户ID
-    
+
     -- 角色与权限 (RBAC核心)
     -- 10=普通成员, 20=管理员, 30=圈主 (使用间隔数字，方便未来插入"副圈主"或"嘉宾")
     role SMALLINT NOT NULL DEFAULT 10,
@@ -206,7 +234,7 @@ CREATE TABLE circle_member (
     -- 成员状态 (控制访问权)
     -- 0=待审核(申请中), 1=正常, 2=禁言(Muted), 3=拉黑/踢出(Banned)
     status SMALLINT NOT NULL DEFAULT 1,
-    
+
     -- 禁言控制 (结合 status=2 使用)
     mute_end_time TIMESTAMPTZ, -- 禁言结束时间，NULL或过去时间代表无禁言
 
@@ -243,8 +271,6 @@ CREATE INDEX idx_member_circle_role ON circle_member(circle_id, role DESC, creat
 
 ```
 
-
-
 ### 帖子表
 
 ```sql
@@ -263,7 +289,7 @@ CREATE TABLE post (
     title VARCHAR(200) NOT NULL DEFAULT '', -- 标题 (允许为空，适配微博/朋友圈式的短内容)
     summary VARCHAR(500) NOT NULL DEFAULT '', -- 摘要 (纯文本，用于推送/列表预览，去除了HTML标签)
     content TEXT NOT NULL DEFAULT '',   -- 正文 (富文本/Mardown/HTML)
-    
+
     -- 3. 多媒体与扩展
     -- 存储图片URL列表、视频封面/地址、链接卡片信息等
     -- 结构示例: { "images": ["url1", "url2"], "video": {"url": "...", "cover": "..."}, "vote_id": 123 }
@@ -279,15 +305,15 @@ CREATE TABLE post (
     is_pinned SMALLINT NOT NULL DEFAULT 0,  -- 是否置顶：0=否, 1=是 (圈内置顶)
     is_essence SMALLINT NOT NULL DEFAULT 0, -- 是否加精：0=否, 1=是
     is_lock SMALLINT NOT NULL DEFAULT 0,    -- 是否锁定：0=否, 1=是 (禁止评论)
-    
+
     -- 6. 审核与生命周期
     -- 状态：0=草稿, 1=发布(正常), 2=审核中(若开启先审后发), 3=审核失败, 4=被屏蔽(软删/违规)
-    status SMALLINT NOT NULL DEFAULT 1,   
+    status SMALLINT NOT NULL DEFAULT 1,
     deleted SMALLINT DEFAULT 0, -- 用户自行删除：0=未删, 1=已删
 
     -- 7. 时间字段
     create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, 
+    update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     last_reply_time TIMESTAMPTZ -- 最后回复时间 (用于"按最新回复排序"的传统论坛模式，可选)
 );
 
@@ -326,8 +352,6 @@ CREATE INDEX idx_post_pinned ON post(circle_id) WHERE is_pinned = 1 AND deleted 
 
 ```
 
-
-
 ### 评论表
 
 ```sql
@@ -344,12 +368,12 @@ CREATE TABLE comment (
     -- 2. 盖楼/层级逻辑 (二级扁平化结构)
     -- 如果是顶级评论：root_id=0, reply_to_id=0
     -- 如果是回复某人：root_d=顶级评论ID, reply_to_id=被回复的评论ID
-    root_id BIGINT NOT NULL DEFAULT 0,      -- 根评论ID 0 为根 
+    root_id BIGINT NOT NULL DEFAULT 0,      -- 根评论ID 0 为根
     reply_to_id BIGINT NOT NULL DEFAULT 0,  -- 被回复的评论ID 0 为非回复
-    
+
     -- 3. 内容数据
     content TEXT NOT NULL, -- 评论内容 (PG推荐用TEXT，不限长)
-    
+
     -- 4. 统计数据 (反范式，建议Redis Write-Behind更新)
     like_count INT NOT NULL DEFAULT 0, -- 点赞数
     reply_count INT NOT NULL DEFAULT 0, -- 该评论下的回复数(子评论数)
@@ -374,13 +398,13 @@ COMMENT ON COLUMN comment.reply_count IS '子回复数量';
 -- 1. 【核心】帖子详情页的评论列表
 -- 场景：查询某帖子下的"顶级评论"，按热度或时间排序
 -- 逻辑：先查 root_id=0 的，展示出来
-CREATE INDEX idx_comment_post_list ON comment(post_id, like_count DESC, create_time DESC) 
+CREATE INDEX idx_comment_post_list ON comment(post_id, like_count DESC, create_time DESC)
 WHERE root_id = 0 AND deleted = 0;
 
 -- 2. 【核心】展开某条评论的回复（楼中楼）
 -- 场景：点击"查看全部10条回复"
 -- 逻辑：查询 root_id = ? 的所有子评论
-CREATE INDEX idx_comment_sub_list ON comment(root_id, create_time ASC) 
+CREATE INDEX idx_comment_sub_list ON comment(root_id, create_time ASC)
 WHERE root_id > 0 AND deleted = 0;
 
 -- 3. 【用户】我的评论历史
@@ -388,8 +412,6 @@ CREATE INDEX idx_comment_user ON comment(user_id, create_time DESC);
 
 
 ```
-
-
 
 ### 评论点赞表
 
@@ -409,7 +431,7 @@ CREATE TABLE comment_like (
     post_id BIGINT NOT NULL DEFAULT 0,  -- 冗余帖子ID，有助于查询
 
     -- 点赞状态 (0=有效点赞, 1=取消点赞)
-    deleted SMALLINT NOT NULL DEFAULT 0, 
+    deleted SMALLINT NOT NULL DEFAULT 0,
 
     create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -435,8 +457,6 @@ CREATE INDEX idx_clike_comment_active ON comment_like(comment_id, create_time DE
 
 ```
 
-
-
 ### 帖子点赞表
 
 ```sql
@@ -452,7 +472,7 @@ CREATE TABLE post_like (
     post_id BIGINT NOT NULL DEFAULT 0,  -- 帖子ID
 
     -- 点赞状态 (0=有效点赞, 1=取消点赞)
-    deleted SMALLINT NOT NULL DEFAULT 0, 
+    deleted SMALLINT NOT NULL DEFAULT 0,
 
     create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -472,7 +492,7 @@ CREATE UNIQUE INDEX uk_post_like_user_comment ON post_like(user_id, post_id);
 -- 当用户在个人中心查看"我赞过的帖子"时使用。
 CREATE INDEX idx_user_post_active ON post_like(user_id, create_time DESC) WHERE deleted = 0;
 
--- 3. 【统计/关联】查询某贴子的点赞者列表 
+-- 3. 【统计/关联】查询某贴子的点赞者列表
 -- 配合 `deleted=0` 查询有效点赞者。
 CREATE INDEX idx_clike_post_active ON post_like(post_id, create_time DESC) WHERE deleted = 0;
 

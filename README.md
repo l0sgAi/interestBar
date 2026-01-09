@@ -1,8 +1,13 @@
 # InterestBar
 
-一个基于 Go 语言兴趣社区后端，类似百度贴吧/Reddit 社区
+一个基于 Go 语言、Gin框架与各大中间件的兴趣社区后端，类似百度贴吧/Reddit 社区。
 
-## 主要特性
+## 功能特性
+
+一个典型的线上社区，图文帖子平台，支持外链视频，后续再考虑原生支持视频。
+基本的项目架构为：用户-兴趣圈-帖子-评论/回复，支持兴趣圈权限管理，使用权限表控制。
+
+## 技术特性
 
 ### 🔐 认证与授权
 
@@ -39,11 +44,13 @@
 - **[Viper](https://github.com/spf13/viper)** v1.21.0 - 配置管理
 - **[Zap](https://github.com/uber-go/zap)** v1.27.1 - 高性能日志库
 - **[OAuth2](https://github.com/golang/oauth2)** v0.34.0 - OAuth 2.0 客户端实现
+- [**sa-token-go**](https://github.com/click33/sa-token-go)v0.1.7- 鉴权框架
 
 ### 数据存储
 
 - **PostgreSQL** - 主数据库
 - **Redis** - 缓存与会话存储
+- **Elasticsearch** - 主页帖子推送与全文检索
 
 ## 项目结构
 
@@ -117,31 +124,7 @@ CREATE DATABASE interestbar;
 
 ### 5. 配置应用
 
-编辑 `configs/config.yaml` 文件，配置以下关键信息：
-
-```yaml
-server:
-  port: 8888
-  mode: debug
-
-oauth:
-  google:
-    client_id: "your-google-client-id"
-    client_secret: "your-google-client-secret"
-    redirect_url: "http://your-domain.com/auth/google/callback"
-    frontend_redirect_url: "http://your-frontend.com/callback"
-
-redis:
-  host: "192.168.200.132"
-  port: 6389
-  password: ""
-  db: 0
-
-sa_token:
-  token_name: "satoken"
-  timeout: 259200 # 3 天
-  active_timeout: 1800 # 30 分钟
-```
+编辑 `configs/config.yaml` 文件，配置您的中间件配置信息，包括中间件地址、账号密码、oauth配置等。
 
 ### 6. 运行应用
 
@@ -249,7 +232,7 @@ satoken: your-token-here
 
 ### CORS 配置
 
-允许的前端源（在 `config.yaml` 中配置）：
+允许的前端源（在 `config.yaml` 中配置），如：
 
 - `https://l0sgai.github.io`
 - `https://l0sgai.github.io/interestBar-frontend/`

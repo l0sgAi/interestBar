@@ -18,6 +18,7 @@ type AppConfig struct {
 	Oauth   Oauth   `mapstructure:"oauth" json:"oauth" yaml:"oauth"`
 	Redis   Redis   `mapstructure:"redis" json:"redis" yaml:"redis"`
 	SaToken SaToken `mapstructure:"sa_token" json:"sa_token" yaml:"sa_token"`
+	S3      S3      `mapstructure:"s3" json:"s3" yaml:"s3"`
 }
 
 type Server struct {
@@ -88,6 +89,16 @@ type SaToken struct {
 	ActiveTimeout int    `mapstructure:"active_timeout" json:"active_timeout" yaml:"active_timeout"`
 	IsConcurrent  bool   `mapstructure:"is_concurrent" json:"is_concurrent" yaml:"is_concurrent"`
 	IsShare       bool   `mapstructure:"is_share" json:"is_share" yaml:"is_share"`
+}
+
+// S3 AWS S3 对象存储配置
+type S3 struct {
+	AccessKeyID      string `mapstructure:"access_key_id" json:"access_key_id" yaml:"access_key_id"`
+	SecretAccessKey  string `mapstructure:"secret_access_key" json:"secret_access_key" yaml:"secret_access_key"`
+	Region           string `mapstructure:"region" json:"region" yaml:"region"`
+	Bucket           string `mapstructure:"bucket" json:"bucket" yaml:"bucket"`
+	Endpoint         string `mapstructure:"endpoint" json:"endpoint" yaml:"endpoint"`
+	PresignURLExpire int    `mapstructure:"presign_url_expire" json:"presign_url_expire" yaml:"presign_url_expire"`
 }
 
 func InitConfig(path string) {
