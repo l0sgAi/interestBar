@@ -368,29 +368,37 @@ func GenerateKey(basePath string, filename string) string {
 }
 
 // GenerateKeyWithUUID 生成带 UUID 的 S3 对象键名
-// 确保文件名唯一性
+// 确保文件名唯一性,按日期组织目录结构
+// 目录结构: {basePath}/{year}/{month}/{day}/{filename}_{timestamp}_{random}.ext
 func GenerateKeyWithUUID(basePath string, filename string) string {
 	// 获取文件扩展名
 	ext := filepath.Ext(filename)
 
-	// 生成唯一标识
-	uuid := time.Now().Format("20060102150405") + "_" + randomString(8)
+	// 生成唯一标识(时间戳 + 随机字符串)
+	timestamp := time.Now().Unix()
+	randomStr := randomString(8)
 
 	// 清理文件名
 	baseName := strings.TrimSuffix(filepath.Base(filename), ext)
 	baseName = strings.ReplaceAll(baseName, " ", "_")
 	baseName = strings.ReplaceAll(baseName, "..", "")
 
-	// 生成带时间戳的路径
+	// 生成按日期分层的路径结构
 	now := time.Now()
-	datePath := now.Format("2006/01/02")
+	datePath := fmt.Sprintf("%d/%02d/%02d", now.Year(), now.Month(), now.Day())
 
-	// 组合完整路径
+	// 组合完整路径: {basePath}/{year}/{month}/{day}/{filename}_{timestamp}_{random}.ext
 	var fullPath string
 	if basePath != "" {
-		fullPath = fmt.Sprintf("%s/%s/%s_%s%s", strings.TrimPrefix(basePath, "/"), datePath, baseName, uuid, ext)
+		fullPath = fmt.Sprintf("%s/%s/%s_%d_%s%s",
+			strings.TrimPrefix(basePath, "/"),
+			datePath,
+			baseName,
+			timestamp,
+			randomStr,
+			ext)
 	} else {
-		fullPath = fmt.Sprintf("%s/%s_%s%s", datePath, baseName, uuid, ext)
+		fullPath = fmt.Sprintf("%s/%s_%d_%s%s", datePath, baseName, timestamp, randomStr, ext)
 	}
 
 	// 确保路径使用正斜杠

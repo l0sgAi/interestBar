@@ -56,18 +56,14 @@ func (ctrl *UserController) GetUser(c *gin.Context) {
 
 // Logout handles user logout
 func (ctrl *UserController) Logout(c *gin.Context) {
-	// 从配置文件获取请求头名称
-	tokenName := conf.Config.SaToken.TokenName
-
-	// 从 Header 获取 token
-	token := c.GetHeader(tokenName)
-	if token == "" {
-		response.BadRequest(c, "Token not found")
+	loginID, exists := c.Get("login_id")
+	if !exists {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 
 	// Sa-Token登出
-	err := stputil.LogoutByToken(token)
+	err := stputil.Logout(loginID)
 	if err != nil {
 		response.InternalError(c, "Failed to logout")
 		return
@@ -78,25 +74,14 @@ func (ctrl *UserController) Logout(c *gin.Context) {
 
 // GetCurrentUser returns the current authenticated user info
 func (ctrl *UserController) GetCurrentUser(c *gin.Context) {
-	// 从配置文件获取请求头名称
-	tokenName := conf.Config.SaToken.TokenName
-
-	// 从 Header 获取 token
-	token := c.GetHeader(tokenName)
-	if token == "" {
-		response.Unauthorized(c, "Token not found")
-		return
-	}
-
-	// 使用 Sa-Token-Go 获取登录用户信息
-	loginID, err := stputil.GetLoginID(token)
-	if err != nil {
-		response.Unauthorized(c, "Invalid token")
+	loginID, exists := c.Get("login_id")
+	if !exists {
+		response.Unauthorized(c, "User not authenticated")
 		return
 	}
 
 	// 从 Session 获取用户详细信息
-	session, err := stputil.GetSessionByToken(token)
+	session, err := stputil.GetSession(loginID)
 	if err != nil {
 		response.InternalError(c, "Failed to get session")
 		return

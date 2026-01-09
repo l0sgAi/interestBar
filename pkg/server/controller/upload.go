@@ -2,8 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"path/filepath"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -26,13 +24,21 @@ func NewUploadController(logger *zap.Logger) *UploadController {
 
 // UploadImage 上传图片
 // @Summary 上传图片
-// @Description 上传图片到 S3，支持 jpg, png, gif, webp 等格式
+// @Description 上传图片到 S3，支持 jpg, png, gif, webp 等格式，需要 SaToken 鉴权
 // @Tags 文件上传
 // @Accept multipart/form-data
 // @Param file formData file true "图片文件"
 // @Success 200 {object} response.Response
 // @Router /api/v1/upload/image [post]
 func (uc *UploadController) UploadImage(c *gin.Context) {
+	loginID, exists := c.Get("login_id")
+	if !exists {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	loginIDStr := loginID.(string)
+
 	// 获取上传的文件
 	file, err := c.FormFile("file")
 	if err != nil {
@@ -50,122 +56,8 @@ func (uc *UploadController) UploadImage(c *gin.Context) {
 		return
 	}
 
-	// 生成 S3 对象键名
-	key := s3storage.GenerateKeyWithUUID("images", file.Filename)
-
-	// 上传到 S3
-	s3Client := s3storage.GetS3Client()
-	if s3Client == nil {
-		uc.logger.Error("S3 client is not initialized")
-		response.InternalError(c, "S3 service is not available")
-		return
-	}
-
-	fileURL, err := s3Client.UploadFile(c.Request.Context(), key, file, "public-read")
-	if err != nil {
-		uc.logger.Error("failed to upload file to S3", zap.Error(err))
-		response.InternalError(c, "Failed to upload file")
-		return
-	}
-
-	// 返回成功响应
-	response.Success(c, gin.H{
-		"url":      fileURL,
-		"key":      key,
-		"filename": file.Filename,
-		"size":     file.Size,
-	})
-}
-
-// UploadVideo 上传视频
-// @Summary 上传视频
-// @Description 上传视频到 S3，支持 mp4, avi, mov 等格式
-// @Tags 文件上传
-// @Accept multipart/form-data
-// @Param file formData file true "视频文件"
-// @Success 200 {object} response.Response
-// @Router /api/v1/upload/video [post]
-func (uc *UploadController) UploadVideo(c *gin.Context) {
-	// 获取上传的文件
-	file, err := c.FormFile("file")
-	if err != nil {
-		uc.logger.Error("failed to get uploaded file", zap.Error(err))
-		response.BadRequest(c, "Failed to get uploaded file")
-		return
-	}
-
-	// 验证文件类型
-	allowedExts := []string{".mp4", ".avi", ".mov", ".mkv", ".webm"}
-	err = s3storage.ValidateFile(file, allowedExts, 500*1024*1024) // 500MB
-	if err != nil {
-		uc.logger.Error("file validation failed", zap.Error(err))
-		response.BadRequest(c, fmt.Sprintf("File validation failed: %v", err))
-		return
-	}
-
-	// 生成 S3 对象键名
-	key := s3storage.GenerateKeyWithUUID("videos", file.Filename)
-
-	// 上传到 S3
-	s3Client := s3storage.GetS3Client()
-	if s3Client == nil {
-		uc.logger.Error("S3 client is not initialized")
-		response.InternalError(c, "S3 service is not available")
-		return
-	}
-
-	fileURL, err := s3Client.UploadFile(c.Request.Context(), key, file, "public-read")
-	if err != nil {
-		uc.logger.Error("failed to upload file to S3", zap.Error(err))
-		response.InternalError(c, "Failed to upload file")
-		return
-	}
-
-	// 返回成功响应
-	response.Success(c, gin.H{
-		"url":      fileURL,
-		"key":      key,
-		"filename": file.Filename,
-		"size":     file.Size,
-	})
-}
-
-// UploadAvatar 上传头像
-// @Summary 上传头像
-// @Description 上传用户头像到 S3
-// @Tags 文件上传
-// @Accept multipart/form-data
-// @Param file formData file true "头像文件"
-// @Success 200 {object} response.Response
-// @Router /api/v1/upload/avatar [post]
-func (uc *UploadController) UploadAvatar(c *gin.Context) {
-	// 获取用户 ID（假设从认证中间件获取）
-	userID := c.GetString("user_id")
-	if userID == "" {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-
-	// 获取上传的文件
-	file, err := c.FormFile("file")
-	if err != nil {
-		uc.logger.Error("failed to get uploaded file", zap.Error(err))
-		response.BadRequest(c, "Failed to get uploaded file")
-		return
-	}
-
-	// 验证文件类型
-	allowedExts := []string{".jpg", ".jpeg", ".png", ".gif", ".webp"}
-	err = s3storage.ValidateFile(file, allowedExts, 5*1024*1024) // 5MB
-	if err != nil {
-		uc.logger.Error("file validation failed", zap.Error(err))
-		response.BadRequest(c, fmt.Sprintf("File validation failed: %v", err))
-		return
-	}
-
 	// 生成 S3 对象键名（使用用户 ID 作为路径）
-	ext := strings.ToLower(filepath.Ext(file.Filename))
-	key := fmt.Sprintf("avatars/%s/%s%s", userID, userID, ext)
+	key := s3storage.GenerateKeyWithUUID(fmt.Sprintf("uploads/%s", loginIDStr), file.Filename)
 
 	// 上传到 S3
 	s3Client := s3storage.GetS3Client()
@@ -182,12 +74,14 @@ func (uc *UploadController) UploadAvatar(c *gin.Context) {
 		return
 	}
 
-	// 返回成功响应
+	uc.logger.Info("File uploaded successfully",
+		zap.String("user_id", loginIDStr),
+		zap.String("url", fileURL),
+	)
+
+	// 返回成功响应（只返回 URL）
 	response.Success(c, gin.H{
-		"url":      fileURL,
-		"key":      key,
-		"filename": file.Filename,
-		"size":     file.Size,
+		"url": fileURL,
 	})
 }
 
@@ -200,12 +94,13 @@ func (uc *UploadController) UploadAvatar(c *gin.Context) {
 // @Success 200 {object} response.Response
 // @Router /api/v1/upload/post-images [post]
 func (uc *UploadController) UploadPostImages(c *gin.Context) {
-	// 获取用户 ID
-	userID := c.GetString("user_id")
-	if userID == "" {
+	loginID, exists := c.Get("login_id")
+	if !exists {
 		response.Unauthorized(c, "User not authenticated")
 		return
 	}
+
+	userID := loginID.(string)
 
 	// 获取上传的文件（支持多文件）
 	form, err := c.MultipartForm()
@@ -280,6 +175,59 @@ func (uc *UploadController) UploadPostImages(c *gin.Context) {
 		"uploaded": len(uploadResults),
 		"total":    len(files),
 		"images":   uploadResults,
+	})
+}
+
+// UploadVideo 上传视频
+// @Summary 上传视频
+// @Description 上传视频到 S3，支持 mp4, avi, mov 等格式
+// @Tags 文件上传
+// @Accept multipart/form-data
+// @Param file formData file true "视频文件"
+// @Success 200 {object} response.Response
+// @Router /api/v1/upload/video [post]
+func (uc *UploadController) UploadVideo(c *gin.Context) {
+	// 获取上传的文件
+	file, err := c.FormFile("file")
+	if err != nil {
+		uc.logger.Error("failed to get uploaded file", zap.Error(err))
+		response.BadRequest(c, "Failed to get uploaded file")
+		return
+	}
+
+	// 验证文件类型
+	allowedExts := []string{".mp4", ".avi", ".mov", ".mkv", ".webm"}
+	err = s3storage.ValidateFile(file, allowedExts, 500*1024*1024) // 500MB
+	if err != nil {
+		uc.logger.Error("file validation failed", zap.Error(err))
+		response.BadRequest(c, fmt.Sprintf("File validation failed: %v", err))
+		return
+	}
+
+	// 生成 S3 对象键名
+	key := s3storage.GenerateKeyWithUUID("videos", file.Filename)
+
+	// 上传到 S3
+	s3Client := s3storage.GetS3Client()
+	if s3Client == nil {
+		uc.logger.Error("S3 client is not initialized")
+		response.InternalError(c, "S3 service is not available")
+		return
+	}
+
+	fileURL, err := s3Client.UploadFile(c.Request.Context(), key, file, "public-read")
+	if err != nil {
+		uc.logger.Error("failed to upload file to S3", zap.Error(err))
+		response.InternalError(c, "Failed to upload file")
+		return
+	}
+
+	// 返回成功响应
+	response.Success(c, gin.H{
+		"url":      fileURL,
+		"key":      key,
+		"filename": file.Filename,
+		"size":     file.Size,
 	})
 }
 
