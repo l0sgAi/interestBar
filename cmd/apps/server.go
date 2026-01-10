@@ -6,6 +6,7 @@ import (
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/auth"
 	"interestBar/pkg/server/router"
+	s3storage "interestBar/pkg/server/storage/s3"
 	"interestBar/pkg/server/storage/db/pgsql"
 	"interestBar/pkg/server/storage/redis"
 	"os"
@@ -35,10 +36,15 @@ func Run(configPath string) {
 		logger.Log.Fatal("Failed to initialize Sa-Token: " + err.Error())
 	}
 
-	// 6. Init Router
+	// 6. Init S3 Client for file storage
+	if err := s3storage.InitS3Client(); err != nil {
+		logger.Log.Fatal("Failed to initialize S3 client: " + err.Error())
+	}
+
+	// 7. Init Router
 	r := router.InitRouter()
 
-	// 7. Run Server
+	// 8. Run Server
 	addr := fmt.Sprintf(":%d", conf.Config.Server.Port)
 	logger.Log.Info("Server starting on " + addr)
 

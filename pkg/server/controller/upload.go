@@ -2,12 +2,14 @@ package controller
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"interestBar/pkg/server/response"
 	s3storage "interestBar/pkg/server/storage/s3"
+	"interestBar/pkg/server/utils"
 )
 
 // UploadController 文件上传控制器
@@ -31,13 +33,13 @@ func NewUploadController(logger *zap.Logger) *UploadController {
 // @Success 200 {object} response.Response
 // @Router /api/v1/upload/image [post]
 func (uc *UploadController) UploadImage(c *gin.Context) {
-	loginID, exists := c.Get("login_id")
-	if !exists {
-		response.Unauthorized(c, "User not authenticated")
+	// 使用工具类获取用户ID
+	userID, ok := utils.GetUserIDFromRequest(c)
+	if !ok {
 		return
 	}
 
-	loginIDStr := loginID.(string)
+	loginIDStr := strconv.FormatUint(userID, 10)
 
 	// 获取上传的文件
 	file, err := c.FormFile("file")
@@ -94,13 +96,11 @@ func (uc *UploadController) UploadImage(c *gin.Context) {
 // @Success 200 {object} response.Response
 // @Router /api/v1/upload/post-images [post]
 func (uc *UploadController) UploadPostImages(c *gin.Context) {
-	loginID, exists := c.Get("login_id")
-	if !exists {
-		response.Unauthorized(c, "User not authenticated")
+	// 使用工具类获取用户ID
+	userID, ok := utils.GetUserIDFromRequest(c)
+	if !ok {
 		return
 	}
-
-	userID := loginID.(string)
 
 	// 获取上传的文件（支持多文件）
 	form, err := c.MultipartForm()
@@ -145,7 +145,7 @@ func (uc *UploadController) UploadPostImages(c *gin.Context) {
 		}
 
 		// 生成 S3 对象键名
-		key := s3storage.GenerateKeyWithUUID(fmt.Sprintf("posts/%s", userID), file.Filename)
+		key := s3storage.GenerateKeyWithUUID(fmt.Sprintf("posts/%s", strconv.FormatUint(userID, 10)), file.Filename)
 
 		// 上传到 S3
 		fileURL, err := s3Client.UploadFile(c.Request.Context(), key, file, "public-read")

@@ -31,13 +31,13 @@ oauth:
   google:
     client_id: "xxx"
     client_secret: "xxx"
-    redirect_url: "xxx"
-    frontend_redirect_url: "xxx"
+    redirect_url: "xxx/auth/google/callback"
+    frontend_redirect_url: "xxx/success"
   github:
     client_id: "xxx"
     client_secret: "xxx"
-    redirect_url: "xxx"
-    frontend_redirect_url: "xxx"
+    redirect_url: "xxx/auth/github/callback"
+    frontend_redirect_url: "xxx/success"
 
 redis:
   host: "192.168.200.132"

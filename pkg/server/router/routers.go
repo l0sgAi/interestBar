@@ -27,6 +27,7 @@ func RegisterRoutes(r *gin.RouterGroup) {
 	user := r.Group("user")
 	{
 		user.GET("get", sagin.CheckLogin(), userCtrl.GetUser)
+		user.PUT("update", sagin.CheckLogin(), userCtrl.UpdateProfile)
 	}
 
 	// Upload routes (需要登录鉴权)

@@ -6,6 +6,7 @@ import (
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
+	"interestBar/pkg/server/utils"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,22 +25,14 @@ func NewUserController() *UserController {
 }
 
 func (ctrl *UserController) GetUser(c *gin.Context) {
-	// 从上下文中获取 login_id（由Sa-Token中间件设置）
-	loginID, exists := c.Get("login_id")
-	if !exists {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-
-	// 将 login_id 转换为 uint
-	userID, err := strconv.ParseUint(loginID.(string), 10, 32)
-	if err != nil {
-		response.BadRequest(c, "Invalid user ID")
+	// 使用工具类获取用户ID
+	userID, ok := utils.GetUserIDFromRequest(c)
+	if !ok {
 		return
 	}
 
 	// 使用带缓存的 GetUserByID 获取用户信息
-	user, err := model.GetUserByID(pgsql.DB, uint(userID))
+	user, err := model.GetUserByID(pgsql.DB, int64(userID))
 	if err != nil {
 		response.InternalError(c, "Failed to get user info")
 		return
@@ -74,16 +67,9 @@ func (ctrl *UserController) Logout(c *gin.Context) {
 
 // GetCurrentUser returns the current authenticated user info
 func (ctrl *UserController) GetCurrentUser(c *gin.Context) {
-	loginID, exists := c.Get("login_id")
-	if !exists {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-
-	// 从 Session 获取用户详细信息
-	session, err := stputil.GetSession(loginID)
-	if err != nil {
-		response.InternalError(c, "Failed to get session")
+	// 使用工具类获取用户信息和 session
+	loginID, session, ok := utils.GetCurrentUserFromRequest(c)
+	if !ok {
 		return
 	}
 
@@ -181,16 +167,10 @@ func (ctrl *UserController) GoogleCallback(c *gin.Context) {
 		return
 	}
 
-	// 存储用户会话信息到 Sa-Token Session
-	session, err := stputil.GetSession(userIDStr)
-	if err == nil {
-		session.Set("user_id", user.ID)
-		session.Set("email", user.Email)
-		session.Set("username", user.Username)
-		session.Set("role", user.Role)
-		session.Set("google_id", user.GoogleID)
-		session.Set("avatar_url", user.AvatarURL)
-		session.Set("login_time", time.Now().Format(time.RFC3339))
+	// 使用工具类存储用户会话信息到 Sa-Token Session
+	if err := utils.StoreUserSession(userIDStr, user); err != nil {
+		response.InternalError(c, "Failed to store session")
+		return
 	}
 
 	// 重定向到前端页面,并将 token 作为参数传递
@@ -291,16 +271,10 @@ func (ctrl *UserController) GithubCallback(c *gin.Context) {
 		return
 	}
 
-	// 存储用户会话信息到 Sa-Token Session
-	session, err := stputil.GetSession(userIDStr)
-	if err == nil {
-		session.Set("user_id", user.ID)
-		session.Set("email", user.Email)
-		session.Set("username", user.Username)
-		session.Set("role", user.Role)
-		session.Set("github_id", user.GithubID)
-		session.Set("avatar_url", user.AvatarURL)
-		session.Set("login_time", time.Now().Format(time.RFC3339))
+	// 使用工具类存储用户会话信息到 Sa-Token Session
+	if err := utils.StoreUserSession(userIDStr, user); err != nil {
+		response.InternalError(c, "Failed to store session")
+		return
 	}
 
 	// 重定向到前端页面,并将 token 作为参数传递
@@ -312,4 +286,126 @@ func (ctrl *UserController) GithubCallback(c *gin.Context) {
 
 	redirectURL := frontendURL + "?token=" + authToken
 	c.Redirect(http.StatusTemporaryRedirect, redirectURL)
+}
+
+// UpdateProfileRequest 修改用户信息的请求结构
+type UpdateProfileRequest struct {
+	Username  *string    `json:"username" binding:"omitempty,min=1,max=50"`
+	AvatarURL *string    `json:"avatar_url" binding:"omitempty,url"`
+	Phone     *string    `json:"phone" binding:"omitempty"`
+	Gender    *int       `json:"gender" binding:"omitempty,min=0,max=2"`
+	Birthdate *time.Time `json:"birthdate" binding:"omitempty"`
+}
+
+// UpdateProfile 修改用户自身信息（用户名、头像、手机号、性别、生日）
+func (ctrl *UserController) UpdateProfile(c *gin.Context) {
+	// 使用工具类获取用户ID
+	userID, ok := utils.GetUserIDFromRequest(c)
+	if !ok {
+		return
+	}
+
+	// 解析请求参数
+	var req UpdateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request parameters: "+err.Error())
+		return
+	}
+
+	// 至少需要修改一个字段
+	if req.Username == nil && req.AvatarURL == nil && req.Phone == nil && req.Gender == nil && req.Birthdate == nil {
+		response.BadRequest(c, "At least one field must be provided")
+		return
+	}
+
+	// 从数据库获取当前用户信息
+	var user model.SysUser
+	if err := pgsql.DB.Where("id = ? AND deleted = ?", userID, 0).First(&user).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.NotFound(c, "User not found")
+		} else {
+			response.InternalError(c, "Failed to get user info")
+		}
+		return
+	}
+
+	// 更新字段
+	updateData := make(map[string]interface{})
+
+	if req.Username != nil {
+		username := strings.TrimSpace(*req.Username)
+		if username == "" {
+			response.BadRequest(c, "Username cannot be empty")
+			return
+		}
+		updateData["username"] = username
+	}
+
+	if req.AvatarURL != nil {
+		updateData["avatar_url"] = *req.AvatarURL
+	}
+
+	if req.Phone != nil {
+		phone := strings.TrimSpace(*req.Phone)
+		// 如果传入了空字符串，设置为 NULL（删除手机号）
+		if phone == "" {
+			updateData["phone"] = nil
+		} else {
+			// 可以在这里添加手机号格式验证
+			updateData["phone"] = phone
+		}
+	}
+
+	if req.Gender != nil {
+		// 验证性别值：0=未知, 1=男, 2=女
+		if *req.Gender < 0 || *req.Gender > 2 {
+			response.BadRequest(c, "Gender must be 0 (unknown), 1 (male), or 2 (female)")
+			return
+		}
+		updateData["gender"] = *req.Gender
+	}
+
+	if req.Birthdate != nil {
+		// 验证生日不能是未来时间
+		if req.Birthdate.After(time.Now()) {
+			response.BadRequest(c, "Birthdate cannot be in the future")
+			return
+		}
+		updateData["birthdate"] = *req.Birthdate
+	}
+
+	// 更新数据库
+	if err := pgsql.DB.Model(&user).Updates(updateData).Error; err != nil {
+		response.InternalError(c, "Failed to update user info")
+		return
+	}
+
+	// 刷新数据库中的用户数据
+	if err := pgsql.DB.Where("id = ? AND deleted = ?", userID, 0).First(&user).Error; err != nil {
+		response.InternalError(c, "Failed to refresh user info")
+		return
+	}
+
+	// 同步更新 Session 缓存
+	userIDStr := strconv.FormatUint(userID, 10)
+	if err := utils.StoreUserSession(userIDStr, user); err != nil {
+		// Session 更新失败不影响主流程，记录日志即可
+		// 可以考虑添加日志记录
+	}
+
+	// 清除 Redis 缓存，强制下次从数据库读取最新数据
+	if err := model.InvalidateUserCache(int64(userID)); err != nil {
+		// 缓存清除失败不影响主流程
+		// 可以考虑添加日志记录
+	}
+
+	response.SuccessWithMessage(c, "Profile updated successfully", gin.H{
+		"id":         user.ID,
+		"username":   user.Username,
+		"email":      user.Email,
+		"avatar_url": user.AvatarURL,
+		"phone":      user.Phone,
+		"gender":     user.Gender,
+		"birthdate":  user.Birthdate,
+	})
 }

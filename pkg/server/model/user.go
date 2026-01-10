@@ -11,7 +11,7 @@ import (
 )
 
 type SysUser struct {
-	ID         uint       `json:"id" gorm:"primarykey;column:id"`
+	ID         int64      `json:"id" gorm:"primarykey;column:id"`
 	CreateTime time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
 	UpdateTime time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
 	Username   string     `json:"username" gorm:"column:username;not null"`
@@ -41,7 +41,7 @@ const (
 
 // GetUserByID 根据用户ID获取用户信息（带Redis缓存）
 // 缓存策略：先查Redis，未命中则查数据库并写入缓存
-func GetUserByID(db *gorm.DB, userID uint) (*SysUser, error) {
+func GetUserByID(db *gorm.DB, userID int64) (*SysUser, error) {
 	// 1. 尝试从Redis缓存获取
 	cacheKey := GetUserCacheKey(userID)
 	cachedData, err := redis.Get(cacheKey)
@@ -75,13 +75,13 @@ func GetUserByID(db *gorm.DB, userID uint) (*SysUser, error) {
 }
 
 // InvalidateUserCache 使指定用户的缓存失效
-func InvalidateUserCache(userID uint) error {
+func InvalidateUserCache(userID int64) error {
 	cacheKey := GetUserCacheKey(userID)
 	return redis.Del(cacheKey)
 }
 
 // GetUserCacheKey 生成用户缓存键
-func GetUserCacheKey(userID uint) string {
+func GetUserCacheKey(userID int64) string {
 	return fmt.Sprintf("%s%d", UserCachePrefix, userID)
 }
 

@@ -80,18 +80,12 @@ func (c *Client) UploadFile(ctx context.Context, key string, file *multipart.Fil
 	// 重置文件指针
 	src.Seek(0, 0)
 
-	// 如果没有指定 ACL，默认使用 public-read
-	if acl == "" {
-		acl = "public-read"
-	}
-
-	// 上传到 S3
+	// 上传到 S3（不使用 ACL，使用 bucket 策略控制访问）
 	_, err = c.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(buffer),
 		ContentType: aws.String(file.Header.Get("Content-Type")),
-		ACL:         types.ObjectCannedACL(acl),
 	})
 	if err != nil {
 		c.logger.Error("failed to upload file to S3",
@@ -114,18 +108,12 @@ func (c *Client) UploadFile(ctx context.Context, key string, file *multipart.Fil
 
 // UploadFileFromBytes 从字节数组上传文件到 S3
 func (c *Client) UploadFileFromBytes(ctx context.Context, key string, data []byte, contentType string, acl string) (string, error) {
-	// 如果没有指定 ACL，默认使用 public-read
-	if acl == "" {
-		acl = "public-read"
-	}
-
-	// 上传到 S3
+	// 上传到 S3（不使用 ACL，使用 bucket 策略控制访问）
 	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		Body:        bytes.NewReader(data),
 		ContentType: aws.String(contentType),
-		ACL:         types.ObjectCannedACL(acl),
 	})
 	if err != nil {
 		c.logger.Error("failed to upload file to S3",
@@ -148,18 +136,12 @@ func (c *Client) UploadFileFromBytes(ctx context.Context, key string, data []byt
 
 // UploadFileFromReader 从 io.Reader 上传文件到 S3
 func (c *Client) UploadFileFromReader(ctx context.Context, key string, reader io.Reader, contentType, filename string, acl string) (string, error) {
-	// 如果没有指定 ACL，默认使用 public-read
-	if acl == "" {
-		acl = "public-read"
-	}
-
-	// 上传到 S3
+	// 上传到 S3（不使用 ACL，使用 bucket 策略控制访问）
 	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(c.bucket),
 		Key:         aws.String(key),
 		Body:        reader,
 		ContentType: aws.String(contentType),
-		ACL:         types.ObjectCannedACL(acl),
 	})
 	if err != nil {
 		c.logger.Error("failed to upload file to S3",
