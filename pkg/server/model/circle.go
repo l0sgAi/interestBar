@@ -92,3 +92,30 @@ func GetCirclesByCreator(db *gorm.DB, creatorID int64) ([]Circle, error) {
 		Find(&circles).Error
 	return circles, err
 }
+
+// CreateCircle 创建圈子并自动将创建者设为圈主（使用事务）
+func CreateCircle(db *gorm.DB, circle *Circle) error {
+	// 使用事务确保数据一致性
+	return db.Transaction(func(tx *gorm.DB) error {
+		// 1. 插入 circle 表
+		if err := tx.Create(circle).Error; err != nil {
+			return err
+		}
+
+		// 2. 同步插入 circle_member 表，赋予创建者圈主权限
+		member := CircleMember{
+			CircleID:   circle.ID,
+			UserID:     circle.CreatorID,
+			Role:       MemberRoleOwner, // 30=圈主
+			Status:     MemberStatusNormal, // 1=正常
+			IsTop:      0,
+			IsDisturb:  0,
+		}
+
+		if err := tx.Create(&member).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}

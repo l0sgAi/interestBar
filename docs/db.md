@@ -253,7 +253,7 @@ COMMENT ON COLUMN circle_member.role IS '角色: 10=成员, 20=管理员, 30=圈
 COMMENT ON COLUMN circle_member.status IS '状态: 0=申请中, 1=正常, 2=禁言, 3=拉黑';
 COMMENT ON COLUMN circle_member.mute_end_time IS '禁言截止时间';
 
--- --- 索引优化 (针对 PG + ES 架构) ---
+-- --- 索引优化---
 
 -- 1. 【必须】唯一性约束 (防止重复加入)
 -- 每个用户在同一个圈子只能有一条记录

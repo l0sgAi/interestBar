@@ -38,4 +38,14 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		upload.POST("/image", sagin.CheckLogin(), uploadCtrl.UploadImage)
 	}
 
+	// Circle routes (需要登录鉴权)
+	circleCtrl := controller.NewCircleController()
+	circle := r.Group("circle")
+	{
+		// 创建兴趣圈接口 - 需要登录
+		circle.POST("/create", sagin.CheckLogin(), circleCtrl.CreateCircle)
+		// 发帖接口 - 需要登录
+		circle.POST("/post/create", sagin.CheckLogin(), circleCtrl.CreatePost)
+	}
+
 }
