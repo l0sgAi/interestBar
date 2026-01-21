@@ -20,14 +20,15 @@ import (
 
 // Client S3 客户端封装
 type Client struct {
-	client         *s3.Client
-	bucket         string
-	presignExpire  time.Duration
-	logger         *zap.Logger
+	client            *s3.Client
+	bucket            string
+	presignExpire     time.Duration
+	logger            *zap.Logger
+	cloudfrontDomain  string // CloudFront 分发域名
 }
 
 // NewClient 创建 S3 客户端
-func NewClient(accessKeyID, secretAccessKey, region, bucket, endpoint string, presignExpire int, logger *zap.Logger) (*Client, error) {
+func NewClient(accessKeyID, secretAccessKey, region, bucket, endpoint string, presignExpire int, cloudfrontDomain string, logger *zap.Logger) (*Client, error) {
 	// 配置 AWS 凭证
 	cfg, err := config.LoadDefaultConfig(context.TODO(),
 		config.WithRegion(region),
@@ -54,10 +55,11 @@ func NewClient(accessKeyID, secretAccessKey, region, bucket, endpoint string, pr
 	}
 
 	return &Client{
-		client:        client,
-		bucket:        bucket,
-		presignExpire: expire,
-		logger:        logger,
+		client:           client,
+		bucket:           bucket,
+		presignExpire:    expire,
+		logger:           logger,
+		cloudfrontDomain: cloudfrontDomain,
 	}, nil
 }
 
@@ -97,7 +99,13 @@ func (c *Client) UploadFile(ctx context.Context, key string, file *multipart.Fil
 	}
 
 	// 返回文件的完整 URL
-	fileURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", c.bucket, c.client.Options().Region, key)
+	// 如果配置了 CloudFront 域名，则使用 CloudFront URL，否则使用 S3 原始 URL
+	var fileURL string
+	if c.cloudfrontDomain != "" {
+		fileURL = fmt.Sprintf("https://%s/%s", c.cloudfrontDomain, key)
+	} else {
+		fileURL = fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", c.bucket, c.client.Options().Region, key)
+	}
 	c.logger.Info("file uploaded successfully",
 		zap.String("key", key),
 		zap.String("url", fileURL),
@@ -125,7 +133,13 @@ func (c *Client) UploadFileFromBytes(ctx context.Context, key string, data []byt
 	}
 
 	// 返回文件的完整 URL
-	fileURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", c.bucket, c.client.Options().Region, key)
+	// 如果配置了 CloudFront 域名，则使用 CloudFront URL，否则使用 S3 原始 URL
+	var fileURL string
+	if c.cloudfrontDomain != "" {
+		fileURL = fmt.Sprintf("https://%s/%s", c.cloudfrontDomain, key)
+	} else {
+		fileURL = fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", c.bucket, c.client.Options().Region, key)
+	}
 	c.logger.Info("file uploaded successfully",
 		zap.String("key", key),
 		zap.String("url", fileURL),
@@ -153,7 +167,13 @@ func (c *Client) UploadFileFromReader(ctx context.Context, key string, reader io
 	}
 
 	// 返回文件的完整 URL
-	fileURL := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", c.bucket, c.client.Options().Region, key)
+	// 如果配置了 CloudFront 域名，则使用 CloudFront URL，否则使用 S3 原始 URL
+	var fileURL string
+	if c.cloudfrontDomain != "" {
+		fileURL = fmt.Sprintf("https://%s/%s", c.cloudfrontDomain, key)
+	} else {
+		fileURL = fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", c.bucket, c.client.Options().Region, key)
+	}
 	c.logger.Info("file uploaded successfully",
 		zap.String("key", key),
 		zap.String("url", fileURL),
@@ -512,6 +532,10 @@ func randomString(length int) string {
 
 // GetPublicURL 获取文件的公共 URL（适用于公开访问的文件）
 func (c *Client) GetPublicURL(key string) string {
+	// 如果配置了 CloudFront 域名，则使用 CloudFront URL，否则使用 S3 原始 URL
+	if c.cloudfrontDomain != "" {
+		return fmt.Sprintf("https://%s/%s", c.cloudfrontDomain, key)
+	}
 	return fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", c.bucket, c.client.Options().Region, key)
 }
 

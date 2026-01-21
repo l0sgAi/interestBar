@@ -49,3 +49,12 @@ func GetCategoriesByParentID(db *gorm.DB, parentID int) ([]Category, error) {
 		Find(&categories).Error
 	return categories, err
 }
+
+// GetAllActiveCategories 获取所有启用的分类列表
+func GetAllActiveCategories(db *gorm.DB) ([]Category, error) {
+	var categories []Category
+	err := db.Where("status = ? AND deleted = ?", CategoryStatusEnabled, 0).
+		Order("sort DESC").
+		Find(&categories).Error
+	return categories, err
+}

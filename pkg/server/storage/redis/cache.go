@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -62,4 +63,22 @@ func Exists(keys ...string) (int64, error) {
 // Expire 设置键的过期时间
 func Expire(key string, expiration time.Duration) error {
 	return Client.Expire(ctx, key, expiration).Err()
+}
+
+// SetJSON 设置JSON对象（自动序列化）
+func SetJSON(key string, value interface{}, expiration time.Duration) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	return Client.Set(ctx, key, data, expiration).Err()
+}
+
+// GetJSON 获取JSON对象（自动反序列化）
+func GetJSON(key string, dest interface{}) error {
+	data, err := Client.Get(ctx, key).Bytes()
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(data, dest)
 }

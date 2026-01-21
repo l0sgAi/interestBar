@@ -14,6 +14,7 @@ type Circle struct {
 	AvatarURL   string    `json:"avatar_url,omitempty" gorm:"column:avatar_url;type:varchar(500)"` // 兴趣圈头像
 	CoverURL    string    `json:"cover_url,omitempty" gorm:"column:cover_url;type:varchar(500)"`  // 背景图URL
 	Description string    `json:"description" gorm:"column:description;type:varchar(2000);not null"` // 描述信息
+	Rule        string    `json:"rule,omitempty" gorm:"column:rule;type:text"`                    // 圈子规则/公告
 	CreatorID   int64     `json:"creator_id" gorm:"column:creator_id;not null"`                    // 创建人ID
 	CategoryID  int       `json:"category_id" gorm:"column:category_id;default:0"`                 // 分类ID
 	Hot         int       `json:"hot" gorm:"column:hot;default:0"`                                 // 热度值

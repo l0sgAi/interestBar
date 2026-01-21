@@ -57,7 +57,8 @@ sa_token:
 s3:
   access_key_id: "xxx" # AWS 访问密钥 ID
   secret_access_key: "xxx" # AWS 访问密钥
-  region: "xxx" # AWS 区域 (如: us-east-1, ap-southeast-1)
+  region: "ap-southeast-1" # AWS 区域 (如: us-east-1, ap-southeast-1)
   bucket: "xxx" # S3 存储桶名称
   endpoint: "" # 可选: 自定义端点 (用于兼容 S3 的服务，如 MinIO)
   presign_url_expire: 3600 # 预签名 URL 过期时间(秒)，默认 1 小时
+  cloudfront_domain: "xxx" # CloudFront 分发域名（用于生成文件访问 URL）

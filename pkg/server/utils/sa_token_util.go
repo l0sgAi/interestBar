@@ -7,41 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/click33/sa-token-go/core/session"
 	"github.com/click33/sa-token-go/stputil"
 	"github.com/gin-gonic/gin"
 )
-
-// GetCurrentUserFromRequest 从请求中获取当前登录用户信息
-// 返回 loginID (string) 和 session (interface{})
-// 如果获取失败，会直接返回错误响应给客户端
-func GetCurrentUserFromRequest(c *gin.Context) (string, *session.Session, bool) {
-	// 从配置文件获取请求头名称
-	tokenName := conf.Config.SaToken.TokenName
-
-	// 从 Header 获取 token
-	token := c.GetHeader(tokenName)
-	if token == "" {
-		response.Unauthorized(c, "Token not found")
-		return "", nil, false
-	}
-
-	// 使用 Sa-Token-Go 获取登录用户信息
-	loginID, err := stputil.GetLoginID(token)
-	if err != nil {
-		response.Unauthorized(c, "Invalid token")
-		return "", nil, false
-	}
-
-	// 从 Session 获取用户详细信息
-	session, err := stputil.GetSessionByToken(token)
-	if err != nil {
-		response.InternalError(c, "Failed to get session")
-		return loginID, nil, false
-	}
-
-	return loginID, session, true
-}
 
 // GetLoginIDFromRequest 从请求中获取当前登录用户的 loginID
 // 如果获取失败，会直接返回错误响应给客户端
@@ -84,29 +52,99 @@ func GetUserIDFromRequest(c *gin.Context) (uint64, bool) {
 	return userID, true
 }
 
-// StoreUserSession 存储用户会话信息到 Sa-Token Session
-// 在用户登录成功后调用此方法存储用户信息到 session
-func StoreUserSession(userIDStr string, user model.SysUser) error {
-	session, err := stputil.GetSession(userIDStr)
+// SessionKeyForUser session中存储用户信息的key
+const SessionKeyForUser = "user_info"
+
+// SetUserToSession 将用户信息存储到当前session
+func SetUserToSession(loginID string, user *model.SysUser) error {
+	session, err := stputil.GetSession(loginID)
 	if err != nil {
 		return err
 	}
+	return session.Set(SessionKeyForUser, user)
+}
 
-	// 存储用户基本信息
-	session.Set("user_id", user.ID)
-	session.Set("email", user.Email)
-	session.Set("username", user.Username)
-	session.Set("role", user.Role)
-	session.Set("avatar_url", user.AvatarURL)
-	session.Set("login_time", time.Now().Format(time.RFC3339))
-
-	// 存储 OAuth 相关信息
-	if user.GoogleID != "" {
-		session.Set("google_id", user.GoogleID)
-	}
-	if user.GithubID != "" {
-		session.Set("github_id", user.GithubID)
+// GetUserFromSession 从当前请求的session中获取用户信息
+func GetUserFromSession(c *gin.Context) (*model.SysUser, bool) {
+	loginID, ok := GetLoginIDFromRequest(c)
+	if !ok {
+		return nil, false
 	}
 
-	return nil
+	// 从 session 获取用户信息
+	session, err := stputil.GetSession(loginID)
+	if err != nil {
+		response.InternalError(c, "Failed to get session")
+		return nil, false
+	}
+
+	// 尝试直接从 session 获取用户信息
+	userData, exists := session.Get(SessionKeyForUser)
+	if !exists || userData == nil {
+		response.InternalError(c, "User info not found in session")
+		return nil, false
+	}
+
+	// userData 可能是 map[string]interface{} 类型，需要转换为 SysUser
+	// 先尝试类型断言
+	var user *model.SysUser
+
+	switch v := userData.(type) {
+	case *model.SysUser:
+		user = v
+	case map[string]interface{}:
+		// 从 map 中手动提取字段
+		user = &model.SysUser{}
+		if id, ok := v["id"].(float64); ok {
+			user.ID = int64(id)
+		}
+		if username, ok := v["username"].(string); ok {
+			user.Username = username
+		}
+		if email, ok := v["email"].(string); ok {
+			user.Email = email
+		}
+		if phone, ok := v["phone"].(string); ok {
+			user.Phone = phone
+		}
+		if googleID, ok := v["google_id"].(string); ok {
+			user.GoogleID = googleID
+		}
+		if githubID, ok := v["github_id"].(string); ok {
+			user.GithubID = githubID
+		}
+		if avatarURL, ok := v["avatar_url"].(string); ok {
+			user.AvatarURL = avatarURL
+		}
+		if gender, ok := v["gender"].(float64); ok {
+			user.Gender = int(gender)
+		}
+		if status, ok := v["status"].(float64); ok {
+			user.Status = int(status)
+		}
+		if role, ok := v["role"].(float64); ok {
+			user.Role = int(role)
+		}
+		// 处理时间字段
+		if createTime, ok := v["create_time"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, createTime); err == nil {
+				user.CreateTime = t
+			}
+		}
+		if updateTime, ok := v["update_time"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, updateTime); err == nil {
+				user.UpdateTime = t
+			}
+		}
+	default:
+		response.InternalError(c, "Invalid user data type in session")
+		return nil, false
+	}
+
+	if user == nil {
+		response.InternalError(c, "Failed to parse user data from session")
+		return nil, false
+	}
+
+	return user, true
 }

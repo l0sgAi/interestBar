@@ -26,6 +26,7 @@ type CreateCircleRequest struct {
 	AvatarURL   string `json:"avatar_url" binding:"omitempty,url"`
 	CoverURL    string `json:"cover_url" binding:"omitempty,url"`
 	Description string `json:"description" binding:"required,min=1,max=2000"`
+	Rule        string `json:"rule" binding:"omitempty,max=2000"` // 圈子规则/公告，最多5000字符
 	CategoryID  int    `json:"category_id" binding:"required,min=0"`
 	JoinType    int16  `json:"join_type" binding:"omitempty,min=0,max=2"`
 }
@@ -88,6 +89,7 @@ func (ctrl *CircleController) CreateCircle(c *gin.Context) {
 		AvatarURL:   req.AvatarURL,
 		CoverURL:    req.CoverURL,
 		Description: strings.TrimSpace(req.Description),
+		Rule:        strings.TrimSpace(req.Rule),
 		CreatorID:   int64(userID),
 		CategoryID:  req.CategoryID,
 		Hot:         0,
@@ -104,21 +106,8 @@ func (ctrl *CircleController) CreateCircle(c *gin.Context) {
 		return
 	}
 
-	// 返回创建的圈子信息
-	response.Created(c, gin.H{
-		"id":           circle.ID,
-		"name":         circle.Name,
-		"slug":         circle.Slug,
-		"avatar_url":   circle.AvatarURL,
-		"cover_url":    circle.CoverURL,
-		"description":  circle.Description,
-		"creator_id":   circle.CreatorID,
-		"category_id":  circle.CategoryID,
-		"member_count": circle.MemberCount,
-		"join_type":    circle.JoinType,
-		"status":       circle.Status,
-		"create_time":  circle.CreateTime,
-	})
+	// 返回创建成功消息
+	response.SuccessWithMessage(c, "创建圈子成功", nil)
 }
 
 // CreatePostRequest 创建帖子的请求结构
@@ -144,7 +133,7 @@ func (ctrl *CircleController) CreatePost(c *gin.Context) {
 	// 解析请求参数
 	var req CreatePostRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request parameters: "+err.Error())
+		response.BadRequest(c, "Invalid request parameters")
 		return
 	}
 
@@ -239,19 +228,10 @@ func (ctrl *CircleController) CreatePost(c *gin.Context) {
 
 	// 创建帖子（会更新圈子的帖子计数）
 	if err := model.CreatePost(pgsql.DB, &post); err != nil {
-		response.InternalError(c, "Failed to create post: "+err.Error())
+		response.InternalError(c, "Failed to create post")
 		return
 	}
 
-	// 返回创建的帖子信息
-	response.Created(c, gin.H{
-		"id":          post.ID,
-		"circle_id":   post.CircleID,
-		"user_id":     post.UserID,
-		"type":        post.Type,
-		"title":       post.Title,
-		"summary":     post.Summary,
-		"status":      post.Status,
-		"create_time": post.CreateTime,
-	})
+	// 返回创建成功消息
+	response.SuccessWithMessage(c, "发帖成功", nil)
 }

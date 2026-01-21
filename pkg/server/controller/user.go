@@ -25,21 +25,9 @@ func NewUserController() *UserController {
 }
 
 func (ctrl *UserController) GetUser(c *gin.Context) {
-	// 使用工具类获取用户ID
-	userID, ok := utils.GetUserIDFromRequest(c)
+	// 从 sa-token session 获取用户信息
+	user, ok := utils.GetUserFromSession(c)
 	if !ok {
-		return
-	}
-
-	// 使用带缓存的 GetUserByID 获取用户信息
-	user, err := model.GetUserByID(pgsql.DB, int64(userID))
-	if err != nil {
-		response.InternalError(c, "Failed to get user info")
-		return
-	}
-
-	if user == nil {
-		response.NotFound(c, "User not found")
 		return
 	}
 
@@ -49,7 +37,8 @@ func (ctrl *UserController) GetUser(c *gin.Context) {
 
 // Logout handles user logout
 func (ctrl *UserController) Logout(c *gin.Context) {
-	loginID, exists := c.Get("login_id")
+	// 使用工具类获取用户ID
+	loginID, exists := utils.GetUserIDFromRequest(c)
 	if !exists {
 		response.Unauthorized(c, "User not authenticated")
 		return
@@ -67,18 +56,14 @@ func (ctrl *UserController) Logout(c *gin.Context) {
 
 // GetCurrentUser returns the current authenticated user info
 func (ctrl *UserController) GetCurrentUser(c *gin.Context) {
-	// 使用工具类获取用户信息和 session
-	loginID, session, ok := utils.GetCurrentUserFromRequest(c)
+	// 从 sa-token session 获取用户信息
+	user, ok := utils.GetUserFromSession(c)
 	if !ok {
 		return
 	}
 
-	response.Success(c, gin.H{
-		"user_id":  loginID,
-		"email":    session.GetString("email"),
-		"username": session.GetString("username"),
-		"role":     session.GetInt("role"),
-	})
+	// 返回用户信息
+	response.Success(c, user)
 }
 
 // GoogleLogin redirects the user to the Google OAuth login page
@@ -167,9 +152,9 @@ func (ctrl *UserController) GoogleCallback(c *gin.Context) {
 		return
 	}
 
-	// 使用工具类存储用户会话信息到 Sa-Token Session
-	if err := utils.StoreUserSession(userIDStr, user); err != nil {
-		response.InternalError(c, "Failed to store session")
+	// 将用户信息存储到 sa-token session
+	if err := utils.SetUserToSession(userIDStr, &user); err != nil {
+		response.InternalError(c, "Failed to store user info in session")
 		return
 	}
 
@@ -271,9 +256,9 @@ func (ctrl *UserController) GithubCallback(c *gin.Context) {
 		return
 	}
 
-	// 使用工具类存储用户会话信息到 Sa-Token Session
-	if err := utils.StoreUserSession(userIDStr, user); err != nil {
-		response.InternalError(c, "Failed to store session")
+	// 将用户信息存储到 sa-token session
+	if err := utils.SetUserToSession(userIDStr, &user); err != nil {
+		response.InternalError(c, "Failed to store user info in session")
 		return
 	}
 
@@ -386,16 +371,10 @@ func (ctrl *UserController) UpdateProfile(c *gin.Context) {
 		return
 	}
 
-	// 同步更新 Session 缓存
-	userIDStr := strconv.FormatUint(userID, 10)
-	if err := utils.StoreUserSession(userIDStr, user); err != nil {
-		// Session 更新失败不影响主流程，记录日志即可
-		// 可以考虑添加日志记录
-	}
-
-	// 清除 Redis 缓存，强制下次从数据库读取最新数据
-	if err := model.InvalidateUserCache(int64(userID)); err != nil {
-		// 缓存清除失败不影响主流程
+	// 同步更新 session 中的用户信息（保持会话一致性）
+	loginID := strconv.FormatUint(uint64(userID), 10)
+	if err := utils.SetUserToSession(loginID, &user); err != nil {
+		// session 更新失败不影响主流程
 		// 可以考虑添加日志记录
 	}
 

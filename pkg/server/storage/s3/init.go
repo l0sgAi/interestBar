@@ -37,6 +37,7 @@ func InitS3Client() error {
 			s3Config.Bucket,
 			s3Config.Endpoint,
 			s3Config.PresignURLExpire,
+			s3Config.CloudfrontDomain,
 			logger.Log,
 		)
 		if err != nil {
