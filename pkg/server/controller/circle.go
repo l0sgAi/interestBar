@@ -1,9 +1,13 @@
 package controller
 
 import (
+	"encoding/json"
+	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
+	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
+	rabbitmq "interestBar/pkg/server/storage/rabbitmq"
 	"interestBar/pkg/server/utils"
 	"strings"
 	"time"
@@ -104,6 +108,26 @@ func (ctrl *CircleController) CreateCircle(c *gin.Context) {
 	if err := model.CreateCircle(pgsql.DB, &circle); err != nil {
 		response.InternalError(c, "Failed to create circle: "+err.Error())
 		return
+	}
+
+	// 异步同步到 Elasticsearch（通过 RabbitMQ）
+	createTime := circle.CreateTime.Format("2006-01-02T15:04:05Z07:00")
+	if err := rabbitmq.PublishCircleSync(
+		rabbitmq.CircleSyncActionCreate,
+		circle.ID,
+		circle.Name,
+		circle.Description,
+		circle.Hot,
+		circle.CategoryID,
+		circle.MemberCount,
+		circle.PostCount,
+		createTime,
+		circle.Status,
+		circle.Deleted,
+		circle.JoinType,
+	); err != nil {
+		// 仅记录日志，不影响主流程
+		logger.Log.Error("Failed to publish circle sync message: " + err.Error())
 	}
 
 	// 返回创建成功消息
@@ -234,4 +258,62 @@ func (ctrl *CircleController) CreatePost(c *gin.Context) {
 
 	// 返回创建成功消息
 	response.SuccessWithMessage(c, "发帖成功", nil)
+}
+
+// GetCirclesRequest 获取圈子列表的请求结构
+type GetCirclesRequest struct {
+	Keyword    string `form:"keyword"`     // 搜索关键字
+	Size       int    `form:"size"`        // 每页数量，默认20
+	SearchAfter string `form:"search_after"` // 上一页返回的search_after值（JSON字符串）
+}
+
+// GetCircles 获取圈子列表
+// GET /circle/list
+func (ctrl *CircleController) GetCircles(c *gin.Context) {
+	// 解析请求参数
+	var req GetCirclesRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.BadRequest(c, "Invalid request parameters: "+err.Error())
+		return
+	}
+
+	// 设置默认每页数量
+	size := req.Size
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	// 解析 search_after 参数
+	var searchAfter []interface{}
+	if req.SearchAfter != "" {
+		if err := json.Unmarshal([]byte(req.SearchAfter), &searchAfter); err != nil {
+			response.BadRequest(c, "Invalid search_after parameter")
+			return
+		}
+	}
+
+	// 调用 Elasticsearch 搜索
+	result, err := elasticsearch.SearchCircles(req.Keyword, size, searchAfter)
+	if err != nil {
+		response.InternalError(c, "Failed to search circles: "+err.Error())
+		return
+	}
+
+	// 将 search_after 转换为 JSON 字符串返回
+	var searchAfterJSON string
+	if result.SearchAfter != nil {
+		if bytes, err := json.Marshal(result.SearchAfter); err == nil {
+			searchAfterJSON = string(bytes)
+		}
+	}
+
+	// 构建响应数据
+	responseData := map[string]interface{}{
+		"circles":      result.Circles,
+		"total":        result.Total,
+		"size":         result.Size,
+		"search_after": searchAfterJSON,
+	}
+
+	response.Success(c, responseData)
 }

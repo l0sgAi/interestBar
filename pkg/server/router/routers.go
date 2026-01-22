@@ -46,14 +46,16 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		circle.POST("/create", sagin.CheckLogin(), circleCtrl.CreateCircle)
 		// 发帖接口 - 需要登录
 		circle.POST("/post/create", sagin.CheckLogin(), circleCtrl.CreatePost)
+		// 获取圈子列表
+		circle.GET("/list", sagin.CheckLogin(), circleCtrl.GetCircles)
 	}
 
-	// Category routes (公开访问，不需要鉴权)
+	// Category routes
 	categoryCtrl := controller.NewCategoryController()
 	category := r.Group("category")
 	{
-		// 获取分类列表 - 公开接口
-		category.GET("/get", categoryCtrl.GetCategories)
+		// 获取分类列表
+		category.GET("/get", sagin.CheckLogin(), categoryCtrl.GetCategories)
 	}
 
 }

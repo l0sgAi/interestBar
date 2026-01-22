@@ -8,6 +8,8 @@ import (
 	"interestBar/pkg/server/router"
 	s3storage "interestBar/pkg/server/storage/s3"
 	"interestBar/pkg/server/storage/db/pgsql"
+	"interestBar/pkg/server/storage/elasticsearch"
+	rabbitmq "interestBar/pkg/server/storage/rabbitmq"
 	"interestBar/pkg/server/storage/redis"
 	"os"
 	"os/signal"
@@ -41,10 +43,25 @@ func Run(configPath string) {
 		logger.Log.Fatal("Failed to initialize S3 client: " + err.Error())
 	}
 
-	// 7. Init Router
+	// 7. Init Elasticsearch for full-text search
+	if err := elasticsearch.InitElasticsearch(); err != nil {
+		logger.Log.Warn("Failed to initialize Elasticsearch: " + err.Error())
+		logger.Log.Info("Running without Elasticsearch search functionality")
+	}
+
+	// 8. Init RabbitMQ for async message processing
+	if err := rabbitmq.InitRabbitMQ(); err != nil {
+		logger.Log.Warn("Failed to initialize RabbitMQ: " + err.Error())
+		logger.Log.Info("Running without RabbitMQ message queue functionality")
+	} else {
+		// 启动消费者处理圈子同步消息
+		go rabbitmq.StartConsumerWithRetry()
+	}
+
+	// 9. Init Router
 	r := router.InitRouter()
 
-	// 8. Run Server
+	// 10. Run Server
 	addr := fmt.Sprintf(":%d", conf.Config.Server.Port)
 	logger.Log.Info("Server starting on " + addr)
 

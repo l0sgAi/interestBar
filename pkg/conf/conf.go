@@ -10,15 +10,17 @@ import (
 var Config *AppConfig
 
 type AppConfig struct {
-	Server  Server  `mapstructure:"server" json:"server" yaml:"server"`
-	CORS    CORS    `mapstructure:"cors" json:"cors" yaml:"cors"`
-	App     App     `mapstructure:"app" json:"app" yaml:"app"`
-	Log     Log     `mapstructure:"log" json:"log" yaml:"log"`
-	Pgsql   Pgsql   `mapstructure:"pgsql" json:"pgsql" yaml:"pgsql"`
-	Oauth   Oauth   `mapstructure:"oauth" json:"oauth" yaml:"oauth"`
-	Redis   Redis   `mapstructure:"redis" json:"redis" yaml:"redis"`
-	SaToken SaToken `mapstructure:"sa_token" json:"sa_token" yaml:"sa_token"`
-	S3      S3      `mapstructure:"s3" json:"s3" yaml:"s3"`
+	Server       Server       `mapstructure:"server" json:"server" yaml:"server"`
+	CORS         CORS         `mapstructure:"cors" json:"cors" yaml:"cors"`
+	App          App          `mapstructure:"app" json:"app" yaml:"app"`
+	Log          Log          `mapstructure:"log" json:"log" yaml:"log"`
+	Pgsql        Pgsql        `mapstructure:"pgsql" json:"pgsql" yaml:"pgsql"`
+	Oauth        Oauth        `mapstructure:"oauth" json:"oauth" yaml:"oauth"`
+	Redis        Redis        `mapstructure:"redis" json:"redis" yaml:"redis"`
+	SaToken      SaToken      `mapstructure:"sa_token" json:"sa_token" yaml:"sa_token"`
+	S3           S3           `mapstructure:"s3" json:"s3" yaml:"s3"`
+	Elasticsearch Elasticsearch `mapstructure:"elasticsearch" json:"elasticsearch" yaml:"elasticsearch"`
+	RabbitMQ     RabbitMQ     `mapstructure:"rabbitmq" json:"rabbitmq" yaml:"rabbitmq"`
 }
 
 type Server struct {
@@ -100,6 +102,31 @@ type S3 struct {
 	Endpoint          string `mapstructure:"endpoint" json:"endpoint" yaml:"endpoint"`
 	PresignURLExpire  int    `mapstructure:"presign_url_expire" json:"presign_url_expire" yaml:"presign_url_expire"`
 	CloudfrontDomain  string `mapstructure:"cloudfront_domain" json:"cloudfront_domain" yaml:"cloudfront_domain"`
+}
+
+// Elasticsearch Elasticsearch 配置
+type Elasticsearch struct {
+	URL             string `mapstructure:"url" json:"url" yaml:"url"`
+	Index           string `mapstructure:"index" json:"index" yaml:"index"`
+	RefreshInterval string `mapstructure:"refresh_interval" json:"refresh_interval" yaml:"refresh_interval"`
+}
+
+// RabbitMQ RabbitMQ 配置
+type RabbitMQ struct {
+	Host       string      `mapstructure:"host" json:"host" yaml:"host"`
+	Port       int         `mapstructure:"port" json:"port" yaml:"port"`
+	Username   string      `mapstructure:"username" json:"username" yaml:"username"`
+	Password   string      `mapstructure:"password" json:"password" yaml:"password"`
+	VHost      string      `mapstructure:"vhost" json:"vhost" yaml:"vhost"`
+	Exchange   string      `mapstructure:"exchange" json:"exchange" yaml:"exchange"`
+	Queue      string      `mapstructure:"queue" json:"queue" yaml:"queue"`
+	RoutingKey string      `mapstructure:"routing_key" json:"routing_key" yaml:"routing_key"`
+	Retry      RabbitMQRetry `mapstructure:"retry" json:"retry" yaml:"retry"`
+}
+
+// RabbitMQRetry RabbitMQ 重试配置
+type RabbitMQRetry struct {
+	MaxAttempts int `mapstructure:"max_attempts" json:"max_attempts" yaml:"max_attempts"`
 }
 
 func InitConfig(path string) {
