@@ -72,11 +72,11 @@ func processMessage(d amqp.Delivery) error {
 	// 根据操作类型执行相应的 ES 操作
 	switch message.Action {
 	case CircleSyncActionCreate:
-		if err := es.IndexCircle(message.CircleID, message.Name, message.Description, message.Hot, message.CategoryID, message.MemberCount, message.PostCount, message.CreateTime, message.Status, message.Deleted, message.JoinType); err != nil {
+		if err := es.IndexCircle(message.CircleID, message.Name, message.AvatarURL, message.Description, message.Hot, message.CategoryID, message.MemberCount, message.PostCount, message.CreateTime, message.Status, message.Deleted, message.JoinType); err != nil {
 			return fmt.Errorf("failed to index circle: %w", err)
 		}
 	case CircleSyncActionUpdate:
-		if err := es.UpdateCircle(message.CircleID, message.Name, message.Description, message.Hot, message.CategoryID, message.MemberCount, message.PostCount, message.CreateTime, message.Status, message.Deleted, message.JoinType); err != nil {
+		if err := es.UpdateCircle(message.CircleID, message.Name, message.AvatarURL, message.Description, message.Hot, message.CategoryID, message.MemberCount, message.PostCount, message.CreateTime, message.Status, message.Deleted, message.JoinType); err != nil {
 			return fmt.Errorf("failed to update circle: %w", err)
 		}
 	case CircleSyncActionDelete:

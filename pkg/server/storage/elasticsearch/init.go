@@ -16,6 +16,7 @@ var Client *elasticsearch.Client
 type CircleDocument struct {
 	ID          int64  `json:"id"`
 	Name        string `json:"name"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
 	Description string `json:"description"`
 	Hot         int    `json:"hot"`
 	CategoryID  int    `json:"category_id"`
@@ -109,6 +110,10 @@ func createCircleIndex() error {
 						},
 					},
 				},
+				"avatar_url": map[string]interface{}{
+					"type":         "keyword",
+					"ignore_above": 500,
+				},
 				"description": map[string]interface{}{
 					"type":            "text",
 					"analyzer":        "ik_max_word",
@@ -167,10 +172,11 @@ func createCircleIndex() error {
 }
 
 // IndexCircle 同步圈子文档到 ES
-func IndexCircle(circleID int64, name string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
+func IndexCircle(circleID int64, name string, avatarURL string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
 	doc := CircleDocument{
 		ID:          circleID,
 		Name:        name,
+		AvatarURL:   avatarURL,
 		Description: description,
 		Hot:         hot,
 		CategoryID:  categoryID,
@@ -211,10 +217,11 @@ func IndexCircle(circleID int64, name string, description string, hot int, categ
 }
 
 // UpdateCircle 更新圈子文档
-func UpdateCircle(circleID int64, name string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
+func UpdateCircle(circleID int64, name string, avatarURL string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
 	doc := CircleDocument{
 		ID:          circleID,
 		Name:        name,
+		AvatarURL:   avatarURL,
 		Description: description,
 		Hot:         hot,
 		CategoryID:  categoryID,
@@ -471,6 +478,7 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 		doc := CircleDocument{
 			ID:          int64(sourceMap["id"].(float64)),
 			Name:        sourceMap["name"].(string),
+			AvatarURL:   getString("avatar_url"),
 			Description: getString("description"),
 			Hot:         getInt("hot"),
 			CategoryID:  getInt("category_id"),

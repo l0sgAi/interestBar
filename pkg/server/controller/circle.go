@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
@@ -47,7 +48,8 @@ func (ctrl *CircleController) CreateCircle(c *gin.Context) {
 	// 解析请求参数
 	var req CreateCircleRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request parameters: "+err.Error())
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		response.BadRequest(c, "Invalid request parameters:")
 		return
 	}
 
@@ -106,7 +108,8 @@ func (ctrl *CircleController) CreateCircle(c *gin.Context) {
 
 	// 使用事务创建圈子并添加创建者为圈主
 	if err := model.CreateCircle(pgsql.DB, &circle); err != nil {
-		response.InternalError(c, "Failed to create circle: "+err.Error())
+		logger.Log.Error("Failed to create circle: " + err.Error())
+		response.InternalError(c, "Failed to create circle")
 		return
 	}
 
@@ -116,6 +119,7 @@ func (ctrl *CircleController) CreateCircle(c *gin.Context) {
 		rabbitmq.CircleSyncActionCreate,
 		circle.ID,
 		circle.Name,
+		circle.AvatarURL,
 		circle.Description,
 		circle.Hot,
 		circle.CategoryID,
@@ -262,8 +266,8 @@ func (ctrl *CircleController) CreatePost(c *gin.Context) {
 
 // GetCirclesRequest 获取圈子列表的请求结构
 type GetCirclesRequest struct {
-	Keyword    string `form:"keyword"`     // 搜索关键字
-	Size       int    `form:"size"`        // 每页数量，默认20
+	Keyword     string `form:"keyword"`      // 搜索关键字
+	Size        int    `form:"size"`         // 每页数量，默认20
 	SearchAfter string `form:"search_after"` // 上一页返回的search_after值（JSON字符串）
 }
 
@@ -273,7 +277,8 @@ func (ctrl *CircleController) GetCircles(c *gin.Context) {
 	// 解析请求参数
 	var req GetCirclesRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
-		response.BadRequest(c, "Invalid request parameters: "+err.Error())
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		response.BadRequest(c, "Invalid request parameters")
 		return
 	}
 
@@ -295,7 +300,8 @@ func (ctrl *CircleController) GetCircles(c *gin.Context) {
 	// 调用 Elasticsearch 搜索
 	result, err := elasticsearch.SearchCircles(req.Keyword, size, searchAfter)
 	if err != nil {
-		response.InternalError(c, "Failed to search circles: "+err.Error())
+		logger.Log.Error("Failed to search circles: " + err.Error())
+		response.InternalError(c, "Failed to search circles")
 		return
 	}
 
@@ -316,4 +322,107 @@ func (ctrl *CircleController) GetCircles(c *gin.Context) {
 	}
 
 	response.Success(c, responseData)
+}
+
+// CircleDetailVO 兴趣圈详情VO（包含Circle所有字段 + 用户成员信息）
+type CircleDetailVO struct {
+	// Circle 所有字段
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Slug        string    `json:"slug,omitempty"`
+	AvatarURL   string    `json:"avatar_url,omitempty"`
+	CoverURL    string    `json:"cover_url,omitempty"`
+	Description string    `json:"description"`
+	Rule        string    `json:"rule,omitempty"`
+	CreatorID   int64     `json:"creator_id"`
+	CategoryID  int       `json:"category_id"`
+	Hot         int       `json:"hot"`
+	MemberCount int       `json:"member_count"`
+	PostCount   int       `json:"post_count"`
+	JoinType    int16     `json:"join_type"`
+	Status      int16     `json:"status"`
+	Deleted     int16     `json:"deleted"`
+	CreateTime  time.Time `json:"create_time"`
+	UpdateTime  time.Time `json:"update_time"`
+
+	// 用户在圈子的成员信息
+	IsJoined          bool       `json:"is_joined"`                      // 是否已加入圈子
+	MemberRole        int16      `json:"member_role,omitempty"`          // 角色
+	MemberStatus      int16      `json:"member_status,omitempty"`        // 成员状态
+	MemberMuteEndTime *time.Time `json:"member_mute_end_time,omitempty"` // 禁言结束时间
+	MemberIsTop       int16      `json:"member_is_top,omitempty"`        // 是否置顶显示
+	MemberIsDisturb   int16      `json:"member_is_disturb,omitempty"`    // 消息免打扰
+}
+
+// GetCircleDetail 获取兴趣圈详情
+// GET /circle/detail/:id
+func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
+	// 获取当前登录用户ID
+	userID, ok := utils.GetUserIDFromRequest(c)
+	if !ok {
+		return
+	}
+
+	// 获取circle_id参数
+	circleIDStr := c.Param("id")
+	var circleID int64
+	if _, err := fmt.Sscanf(circleIDStr, "%d", &circleID); err != nil || circleID <= 0 {
+		response.BadRequest(c, "Invalid circle id")
+		return
+	}
+
+	// 1. 查询circle基本信息
+	circle, err := model.GetCircleByID(pgsql.DB, circleID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.NotFound(c, "Circle not found")
+			return
+		}
+		logger.Log.Error("Failed to get circle: " + err.Error())
+		response.InternalError(c, "Failed to get circle")
+		return
+	}
+
+	// 2. 查询用户在圈子的成员信息
+	member, err := model.GetMember(pgsql.DB, circleID, int64(userID))
+	if err != nil && err != gorm.ErrRecordNotFound {
+		logger.Log.Error("Failed to get member info: " + err.Error())
+		response.InternalError(c, "Failed to get member info")
+		return
+	}
+
+	// 3. 组装VO
+	vo := CircleDetailVO{
+		ID:          circle.ID,
+		Name:        circle.Name,
+		Slug:        circle.Slug,
+		AvatarURL:   circle.AvatarURL,
+		CoverURL:    circle.CoverURL,
+		Description: circle.Description,
+		Rule:        circle.Rule,
+		CreatorID:   circle.CreatorID,
+		CategoryID:  circle.CategoryID,
+		Hot:         circle.Hot,
+		MemberCount: circle.MemberCount,
+		PostCount:   circle.PostCount,
+		JoinType:    circle.JoinType,
+		Status:      circle.Status,
+		Deleted:     circle.Deleted,
+		CreateTime:  circle.CreateTime,
+		UpdateTime:  circle.UpdateTime,
+	}
+
+	// 如果用户是圈子成员，添加成员信息
+	if member != nil {
+		vo.IsJoined = true
+		vo.MemberRole = member.Role
+		vo.MemberStatus = member.Status
+		vo.MemberMuteEndTime = member.MuteEndTime
+		vo.MemberIsTop = member.IsTop
+		vo.MemberIsDisturb = member.IsDisturb
+	} else {
+		vo.IsJoined = false
+	}
+
+	response.Success(c, vo)
 }

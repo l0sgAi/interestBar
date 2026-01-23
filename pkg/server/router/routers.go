@@ -48,6 +48,8 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		circle.POST("/post/create", sagin.CheckLogin(), circleCtrl.CreatePost)
 		// 获取圈子列表
 		circle.GET("/list", sagin.CheckLogin(), circleCtrl.GetCircles)
+		// 获取圈子详情
+		circle.GET("/detail/:id", sagin.CheckLogin(), circleCtrl.GetCircleDetail)
 	}
 
 	// Category routes

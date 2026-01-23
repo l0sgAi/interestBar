@@ -19,6 +19,7 @@ type CircleSyncMessage struct {
 	Action      string `json:"action"` // create, update, delete
 	CircleID    int64  `json:"circle_id"`
 	Name        string `json:"name"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
 	Description string `json:"description"`
 	Hot         int    `json:"hot"`
 	CategoryID  int    `json:"category_id"`
@@ -102,7 +103,7 @@ func InitRabbitMQ() error {
 }
 
 // PublishCircleSync 发布圈子同步消息
-func PublishCircleSync(action string, circleID int64, name string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
+func PublishCircleSync(action string, circleID int64, name string, avatarURL string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
 	if channel == nil {
 		return fmt.Errorf("RabbitMQ channel is not initialized")
 	}
@@ -111,6 +112,7 @@ func PublishCircleSync(action string, circleID int64, name string, description s
 		Action:      action,
 		CircleID:    circleID,
 		Name:        name,
+		AvatarURL:   avatarURL,
 		Description: description,
 		Hot:         hot,
 		CategoryID:  categoryID,

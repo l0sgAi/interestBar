@@ -159,7 +159,7 @@ CREATE TABLE circle (
 
     name VARCHAR(50) NOT NULL, -- 兴趣圈名称
     slug VARCHAR(60), -- 唯一标识符(用于URL SEO，如 /circle/coding-life)，允许为空
-    avatar_url VARCHAR(500), -- 兴趣圈id
+    avatar_url VARCHAR(500), -- 兴趣圈头像url
     cover_url VARCHAR(500), -- 背景图url
     description TEXT NOT NULL, -- 描述信息
     rule TEXT NOT NULL, -- 圈内规则

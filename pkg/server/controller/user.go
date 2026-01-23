@@ -2,6 +2,7 @@ package controller
 
 import (
 	"interestBar/pkg/conf"
+	"interestBar/pkg/logger"
 	"interestBar/pkg/server/auth"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
@@ -85,7 +86,8 @@ func (ctrl *UserController) GoogleCallback(c *gin.Context) {
 	config := auth.GetGoogleOAuthConfig()
 	token, err := config.Exchange(c, code)
 	if err != nil {
-		response.InternalError(c, "Failed to exchange token: "+err.Error())
+		logger.Log.Error("Failed to exchange token: " + err.Error())
+		response.InternalError(c, "Failed to exchange token")
 		return
 	}
 
@@ -122,7 +124,8 @@ func (ctrl *UserController) GoogleCallback(c *gin.Context) {
 
 			// 插入数据库
 			if createErr := pgsql.DB.Create(&newUser).Error; createErr != nil {
-				response.InternalError(c, "Failed to create user account: "+createErr.Error())
+				logger.Log.Error("Failed to create user account: " + err.Error())
+				response.InternalError(c, "Failed to create user account")
 				return
 			}
 
@@ -188,7 +191,8 @@ func (ctrl *UserController) GithubCallback(c *gin.Context) {
 	config := auth.GetGithubOAuthConfig()
 	token, err := config.Exchange(c, code)
 	if err != nil {
-		response.InternalError(c, "Failed to exchange token: "+err.Error())
+		logger.Log.Error("Failed to exchange token: " + err.Error())
+		response.InternalError(c, "Failed to exchange token")
 		return
 	}
 
@@ -226,7 +230,8 @@ func (ctrl *UserController) GithubCallback(c *gin.Context) {
 
 			// 插入数据库
 			if createErr := pgsql.DB.Create(&newUser).Error; createErr != nil {
-				response.InternalError(c, "Failed to create user account: "+createErr.Error())
+				logger.Log.Error("Failed to create user account: " + err.Error())
+				response.InternalError(c, "Failed to create user account")
 				return
 			}
 
@@ -293,7 +298,8 @@ func (ctrl *UserController) UpdateProfile(c *gin.Context) {
 	// 解析请求参数
 	var req UpdateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request parameters: "+err.Error())
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		response.BadRequest(c, "Invalid request parameters")
 		return
 	}
 
