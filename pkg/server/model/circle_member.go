@@ -1,6 +1,7 @@
 package model
 
 import (
+	"fmt"
 	"time"
 
 	"gorm.io/gorm"
@@ -38,6 +39,7 @@ const (
 	MemberStatusNormal   = 1 // 正常
 	MemberStatusMuted    = 2 // 禁言
 	MemberStatusBanned   = 3 // 拉黑/踢出
+	MemberStatusLeft     = 4 // 已退出(暂时退出，保留记录)
 )
 
 // GetMember 获取成员信息
@@ -120,4 +122,95 @@ func IsOwner(db *gorm.DB, circleID, userID int64) (bool, error) {
 		return false, err
 	}
 	return member.Role == MemberRoleOwner, nil
+}
+
+// JoinCircle 用户加入圈子
+func JoinCircle(db *gorm.DB, circleID, userID int64, joinType int16) (*CircleMember, error) {
+	// 检查是否已经是成员
+	var existingMember CircleMember
+	err := db.Where("circle_id = ? AND user_id = ?", circleID, userID).First(&existingMember).Error
+	if err == nil {
+		// 已存在成员记录
+		if existingMember.Status == MemberStatusBanned {
+			return nil, fmt.Errorf("user is banned from this circle")
+		}
+		if existingMember.Status == MemberStatusNormal {
+			return nil, fmt.Errorf("user is already a member of this circle")
+		}
+		// 如果是待审核状态，更新为正常
+		if existingMember.Status == MemberStatusPending {
+			existingMember.Status = MemberStatusNormal
+			err = db.Save(&existingMember).Error
+			if err != nil {
+				return nil, err
+			}
+			return &existingMember, nil
+		}
+		// 如果是已退出状态，恢复为正常状态
+		if existingMember.Status == MemberStatusLeft {
+			existingMember.Status = MemberStatusNormal
+			err = db.Save(&existingMember).Error
+			if err != nil {
+				return nil, err
+			}
+			return &existingMember, nil
+		}
+	}
+	if err != gorm.ErrRecordNotFound {
+		return nil, err
+	}
+
+	// 确定初始状态
+	var status int16 = MemberStatusNormal
+	if joinType == CircleJoinTypeApproval {
+		status = MemberStatusPending
+	} else if joinType == CircleJoinTypePrivate {
+		return nil, fmt.Errorf("this circle is private and requires invitation")
+	}
+
+	// 创建新成员记录
+	member := CircleMember{
+		CircleID:   circleID,
+		UserID:     userID,
+		Role:       MemberRoleMember,
+		Status:     status,
+		IsTop:      0,
+		IsDisturb:  0,
+	}
+
+	if err := db.Create(&member).Error; err != nil {
+		return nil, err
+	}
+
+	return &member, nil
+}
+
+// LeaveCircle 用户退出圈子
+func LeaveCircle(db *gorm.DB, circleID, userID int64) error {
+	// 检查是否是成员
+	var member CircleMember
+	err := db.Where("circle_id = ? AND user_id = ?", circleID, userID).First(&member).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return fmt.Errorf("user is not a member of this circle")
+		}
+		return err
+	}
+
+	// 圈主不能退出圈子
+	if member.Role == MemberRoleOwner {
+		return fmt.Errorf("circle owner cannot leave the circle")
+	}
+
+	// 只有正常状态的成员才能退出（已退出或拉黑状态的不能再退出）
+	if member.Status != MemberStatusNormal {
+		return fmt.Errorf("member status is not normal, cannot leave")
+	}
+
+	// 更新成员状态为已退出（保留记录，防止被拉黑后退出再重进刷状态）
+	if err := db.Model(&member).Update("status", MemberStatusLeft).Error; err != nil {
+		return err
+	}
+
+	return nil
 }

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"interestBar/pkg/logger"
+
 	"github.com/redis/go-redis/v9"
 )
 
@@ -81,4 +83,27 @@ func GetJSON(key string, dest interface{}) error {
 		return err
 	}
 	return json.Unmarshal(data, dest)
+}
+
+// BatchSet 批量设置键值对（使用 Pipeline）
+// keyValues 是一个 map，key 是 Redis key，value 是要设置的值
+func BatchSet(keyValues map[string]interface{}, expiration time.Duration) error {
+	if len(keyValues) == 0 {
+		return nil
+	}
+
+	pipe := Client.Pipeline()
+	for key, value := range keyValues {
+		pipe.Set(ctx, key, value, expiration)
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		logger.Log.Warn(
+			fmt.Sprintf("Redis BatchSet failed, keyCount=%d, err=%v",
+				len(keyValues), err,
+			),
+		)
+	}
+	return err
 }

@@ -426,3 +426,141 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 
 	response.Success(c, vo)
 }
+
+// JoinCircleRequest 加入圈子的请求结构
+type JoinCircleRequest struct {
+	CircleID int64 `json:"circle_id" binding:"required,min=1"`
+}
+
+// JoinCircle 加入兴趣圈
+// POST /circle/join
+func (ctrl *CircleController) JoinCircle(c *gin.Context) {
+	// 获取当前登录用户ID
+	userID, ok := utils.GetUserIDFromRequest(c)
+	if !ok {
+		return
+	}
+
+	// 解析请求参数
+	var req JoinCircleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	// 1. 检查圈子是否存在
+	circle, err := model.GetCircleByID(pgsql.DB, req.CircleID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.NotFound(c, "Circle not found")
+			return
+		}
+		logger.Log.Error("Failed to get circle: " + err.Error())
+		response.InternalError(c, "Failed to get circle")
+		return
+	}
+
+	// 2. 检查圈子状态
+	if circle.Status != model.CircleStatusNormal {
+		response.Forbidden(c, "This circle is not available for joining")
+		return
+	}
+
+	// 3. 加入圈子
+	member, err := model.JoinCircle(pgsql.DB, req.CircleID, int64(userID), circle.JoinType)
+	if err != nil {
+		logger.Log.Error("Failed to join circle: " + err.Error())
+		if err.Error() == "user is already a member of this circle" {
+			response.Conflict(c, "Already a member of this circle")
+			return
+		}
+		if err.Error() == "this circle is private and requires invitation" {
+			response.Forbidden(c, "This circle is private and requires invitation")
+			return
+		}
+		response.InternalError(c, "Failed to join circle")
+		return
+	}
+
+	// 4. 如果直接加入成功（不需要审核），发送MQ消息更新成员计数
+	if member.Status == model.MemberStatusNormal {
+		if err := rabbitmq.PublishJoinMsg(req.CircleID, 1); err != nil {
+			// 仅记录日志，不影响主流程
+			logger.Log.Error("Failed to publish join message: " + err.Error())
+		}
+	}
+
+	// 返回成功消息
+	if member.Status == model.MemberStatusPending {
+		response.SuccessWithMessage(c, "Join request submitted, awaiting approval", nil)
+	} else {
+		response.SuccessWithMessage(c, "Successfully joined the circle", nil)
+	}
+}
+
+// LeaveCircleRequest 退出圈子的请求结构
+type LeaveCircleRequest struct {
+	CircleID int64 `json:"circle_id" binding:"required,min=1"`
+}
+
+// LeaveCircle 退出兴趣圈
+// POST /circle/leave
+func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
+	// 获取当前登录用户ID
+	userID, ok := utils.GetUserIDFromRequest(c)
+	if !ok {
+		return
+	}
+
+	// 解析请求参数
+	var req LeaveCircleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	// 1. 检查圈子是否存在
+	_, err := model.GetCircleByID(pgsql.DB, req.CircleID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.NotFound(c, "Circle not found")
+			return
+		}
+		logger.Log.Error("Failed to get circle: " + err.Error())
+		response.InternalError(c, "Failed to get circle")
+		return
+	}
+
+	// 2. 检查是否是成员
+	member, err := model.GetMember(pgsql.DB, req.CircleID, int64(userID))
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.NotFound(c, "Not a member of this circle")
+			return
+		}
+		logger.Log.Error("Failed to get member: " + err.Error())
+		response.InternalError(c, "Failed to check membership")
+		return
+	}
+
+	// 3. 退出圈子
+	if err := model.LeaveCircle(pgsql.DB, req.CircleID, int64(userID)); err != nil {
+		logger.Log.Error("Failed to leave circle: " + err.Error())
+		if err.Error() == "circle owner cannot leave the circle" {
+			response.Forbidden(c, "Circle owner cannot leave the circle")
+			return
+		}
+		response.InternalError(c, "Failed to leave circle")
+		return
+	}
+
+	// 4. 发送MQ消息更新成员计数（仅当成员状态为正常时）
+	if member.Status == model.MemberStatusNormal {
+		if err := rabbitmq.PublishJoinMsg(req.CircleID, -1); err != nil {
+			// 仅记录日志，不影响主流程
+			logger.Log.Error("Failed to publish leave message: " + err.Error())
+		}
+	}
+
+	response.SuccessWithMessage(c, "Successfully left the circle", nil)
+}

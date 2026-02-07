@@ -35,6 +35,7 @@ const (
 	CircleMemberStatusNormal    CircleMemberStatus = 1 // 正常
 	CircleMemberStatusMuted     CircleMemberStatus = 2 // 禁言
 	CircleMemberStatusBanned    CircleMemberStatus = 3 // 拉黑/踢出
+	CircleMemberStatusLeft      CircleMemberStatus = 4 // 已退出(暂时退出，保留记录)
 )
 
 // String 返回加入方式的字符串表示
@@ -90,6 +91,8 @@ func (s CircleMemberStatus) String() string {
 		return "禁言"
 	case CircleMemberStatusBanned:
 		return "拉黑"
+	case CircleMemberStatusLeft:
+		return "已退出"
 	default:
 		return "未知"
 	}
@@ -112,7 +115,7 @@ func (r CircleMemberRole) IsValid() bool {
 
 // IsValid 检查成员状态是否有效
 func (s CircleMemberStatus) IsValid() bool {
-	return s >= CircleMemberStatusPending && s <= CircleMemberStatusBanned
+	return s >= CircleMemberStatusPending && s <= CircleMemberStatusLeft
 }
 
 // IsAdmin 检查是否为管理员或圈主

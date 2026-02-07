@@ -50,6 +50,10 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		circle.GET("/list", sagin.CheckLogin(), circleCtrl.GetCircles)
 		// 获取圈子详情
 		circle.GET("/detail/:id", sagin.CheckLogin(), circleCtrl.GetCircleDetail)
+		// 加入兴趣圈
+		circle.POST("/join", sagin.CheckLogin(), circleCtrl.JoinCircle)
+		// 退出兴趣圈
+		circle.POST("/leave", sagin.CheckLogin(), circleCtrl.LeaveCircle)
 	}
 
 	// Category routes

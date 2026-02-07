@@ -232,7 +232,7 @@ CREATE TABLE circle_member (
     role SMALLINT NOT NULL DEFAULT 10,
 
     -- 成员状态 (控制访问权)
-    -- 0=待审核(申请中), 1=正常, 2=禁言(Muted), 3=拉黑/踢出(Banned)
+    -- 0=待审核(申请中), 1=正常, 2=禁言(Muted), 3=拉黑/踢出(Banned) 4=暂时退出
     status SMALLINT NOT NULL DEFAULT 1,
 
     -- 禁言控制 (结合 status=2 使用)

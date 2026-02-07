@@ -56,6 +56,8 @@ func Run(configPath string) {
 	} else {
 		// 启动消费者处理圈子同步消息
 		go rabbitmq.StartConsumerWithRetry()
+		// 启动消费者处理成员计数聚合
+		go rabbitmq.StartMemberCountConsumerWithRetry()
 	}
 
 	// 9. Init Router
