@@ -25,8 +25,11 @@ const (
 	// CircleMemberCountExchange 圈子成员计数交换机
 	CircleMemberCountExchange = "circle_member_count_exchange"
 
-	// CircleMemberCountQueue 圈子成员计数队列
+	// CircleMemberCountQueue 圈子成员计数队列（用于 PG+Redis 更新）
 	CircleMemberCountQueue = "circle_member_count_queue"
+
+	// CircleMemberCountESQueue 圈子成员计数队列（用于 ES 更新）
+	CircleMemberCountESQueue = "circle_member_count_es_queue"
 
 	// CircleMemberCountRoutingKey 圈子成员计数路由键
 	CircleMemberCountRoutingKey = "circle.member.count"

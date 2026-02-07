@@ -143,6 +143,35 @@ func InitRabbitMQ() error {
 		return fmt.Errorf("failed to bind member count queue: %w", err)
 	}
 
+	// 声明成员计数 ES 队列
+	memberESQ, err := channel.QueueDeclare(
+		CircleMemberCountESQueue,
+		true,  // durable
+		false, // delete when unused
+		false, // exclusive
+		false, // no-wait
+		nil,   // arguments
+	)
+	if err != nil {
+		channel.Close()
+		conn.Close()
+		return fmt.Errorf("failed to declare member count ES queue: %w", err)
+	}
+
+	// 绑定成员计数 ES 队列到交换机（使用相同的 routing key）
+	err = channel.QueueBind(
+		memberESQ.Name,
+		CircleMemberCountRoutingKey,
+		CircleMemberCountExchange,
+		false,
+		nil,
+	)
+	if err != nil {
+		channel.Close()
+		conn.Close()
+		return fmt.Errorf("failed to bind member count ES queue: %w", err)
+	}
+
 	logger.Log.Info("RabbitMQ initialized successfully")
 	return nil
 }
