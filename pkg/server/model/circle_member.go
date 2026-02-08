@@ -61,6 +61,17 @@ func GetCirclesByUserID(db *gorm.DB, userID int64) ([]CircleMember, error) {
 	return members, err
 }
 
+// GetJoinedCircleIDsByUserID 获取用户加入的圈子ID列表（按加入时间倒序）
+// 用于缓存恢复，仅返回 circle_id 数组
+func GetJoinedCircleIDsByUserID(db *gorm.DB, userID int64) ([]int64, error) {
+	var circleIDs []int64
+	err := db.Model(&CircleMember{}).
+		Where("user_id = ? AND status = ?", userID, MemberStatusNormal).
+		Order("create_time DESC").
+		Pluck("circle_id", &circleIDs).Error
+	return circleIDs, err
+}
+
 // GetMembersByCircleID 获取圈子成员列表
 func GetMembersByCircleID(db *gorm.DB, circleID int64, role int16, page, pageSize int) ([]CircleMember, int64, error) {
 	var members []CircleMember

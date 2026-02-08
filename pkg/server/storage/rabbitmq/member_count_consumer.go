@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/storage/db/pgsql"
-	redispkg "interestBar/pkg/server/storage/redis"
 	"sync"
 	"time"
 
@@ -138,7 +137,8 @@ func (a *MemberCountAggregator) flush() {
 	}
 }
 
-// batchUpdateMemberCount 批量更新圈子成员计数（一个事务完成所有更新）
+// batchUpdateMemberCount 批量更新圈子成员计数到数据库（持久化）
+// Redis缓存已在加入/退出时通过INCR/DECR实时更新，此处仅持久化到数据库
 func (a *MemberCountAggregator) batchUpdateMemberCount(deltas map[int64]int64) error {
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
 
@@ -159,7 +159,7 @@ func (a *MemberCountAggregator) batchUpdateMemberCount(deltas map[int64]int64) e
 			return nil
 		}
 
-		// 2. 批量更新 member_count
+		// 2. 批量更新 member_count（数据库作为持久化层）
 		sql := `
 		UPDATE circle c
 		SET member_count = GREATEST(c.member_count + v.delta, 0),
@@ -180,49 +180,9 @@ func (a *MemberCountAggregator) batchUpdateMemberCount(deltas map[int64]int64) e
 			return err
 		}
 
-		// 3. 批量查询最新 member_count
-		var results []struct {
-			ID          int64
-			MemberCount int64
-		}
-
-		if err := tx.Raw(`
-			SELECT id, member_count
-			FROM circle
-			WHERE id IN ?
-		`, keys(deltas)).Scan(&results).Error; err != nil {
-			return err
-		}
-
-		redisUpdates := make(map[string]any, len(results))
-		for _, r := range results {
-			key := redispkg.GetCircleMemberCountKey(r.ID)
-			redisUpdates[key] = r.MemberCount
-		}
-
-		if len(redisUpdates) == 0 {
-			return nil
-		}
-
-		if len(redisUpdates) < redisPipelineThreshold {
-			// 小批量：逐条 SET，便于定位单条失败
-			for key, value := range redisUpdates {
-				if err := redispkg.Set(key, value, 24*time.Hour); err != nil {
-					logger.Log.Warn(
-						fmt.Sprintf("Redis update failed: key=%s err=%v", key, err),
-					)
-				}
-			}
-		} else {
-			// 中大批量：Pipeline
-			if err := redispkg.BatchSet(redisUpdates, 24*time.Hour); err != nil {
-				logger.Log.Error("Failed to batch update Redis cache: " + err.Error())
-			} else {
-				logger.Log.Info(
-					fmt.Sprintf("Successfully updated %d circle member counts in Redis", len(redisUpdates)),
-				)
-			}
-		}
+		logger.Log.Info(
+			fmt.Sprintf("Successfully persisted %d circle member count updates to database", len(rows)),
+		)
 
 		return nil
 	})

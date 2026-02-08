@@ -234,6 +234,8 @@ CREATE TABLE circle_member (
     -- 成员状态 (控制访问权)
     -- 0=待审核(申请中), 1=正常, 2=禁言(Muted), 3=拉黑/踢出(Banned) 4=暂时退出
     status SMALLINT NOT NULL DEFAULT 1,
+    -- 成员声望 帖子/评论被点赞+1 帖子被收藏+5 帖子/评论被别人回复+10
+    reputation INT NOT NULL DEFAULT 0,
 
     -- 禁言控制 (结合 status=2 使用)
     mute_end_time TIMESTAMPTZ, -- 禁言结束时间，NULL或过去时间代表无禁言

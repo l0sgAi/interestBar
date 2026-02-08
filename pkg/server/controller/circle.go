@@ -9,6 +9,7 @@ import (
 	"interestBar/pkg/server/storage/db/pgsql"
 	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
 	rabbitmq "interestBar/pkg/server/storage/rabbitmq"
+	redispkg "interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
 	"strings"
 	"time"
@@ -371,19 +372,45 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 		return
 	}
 
-	// 1. 查询circle基本信息
-	circle, err := model.GetCircleByID(pgsql.DB, circleID)
+	var circle *model.Circle
+
+	// 1. 尝试从 Redis 获取圈子基础信息缓存（使用 Zstd 压缩）
+	redisKey := redispkg.GetCircleInfoKey(circleID)
+	circle = &model.Circle{}
+
+	err := redispkg.GetJSONCompressed(redisKey, circle)
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			response.NotFound(c, "Circle not found")
+		// 缓存不存在或出错，从数据库查询
+		circle, err = model.GetCircleByID(pgsql.DB, circleID)
+		if err != nil {
+			if err == gorm.ErrRecordNotFound {
+				response.NotFound(c, "Circle not found")
+				return
+			}
+			logger.Log.Error("Failed to get circle: " + err.Error())
+			response.InternalError(c, "Failed to get circle")
 			return
 		}
-		logger.Log.Error("Failed to get circle: " + err.Error())
-		response.InternalError(c, "Failed to get circle")
-		return
+
+		// 写入缓存（使用 Zstd 压缩，24小时过期）
+		if err := redispkg.SetJSONCompressed(redisKey, circle, 24*time.Hour); err != nil {
+			logger.Log.Error("Failed to cache circle info: " + err.Error())
+		}
 	}
 
-	// 2. 查询用户在圈子的成员信息
+	// 2. 从 Redis 获取实时的成员计数
+	memberCountStr, err := redispkg.Get(redispkg.GetCircleMemberCountKey(circleID))
+	if err == nil && memberCountStr != "" {
+		// Redis 中有计数，解析并使用
+		var memberCount int64
+		if _, err := fmt.Sscanf(memberCountStr, "%d", &memberCount); err == nil {
+			circle.MemberCount = int(memberCount)
+		}
+		// 如果解析失败，使用从缓存/DB中获取的 circle.MemberCount
+	}
+	// 如果 Redis 中没有计数（缓存过期），使用从缓存/DB中获取的 circle.MemberCount
+
+	// 3. 查询用户在圈子的成员信息
 	member, err := model.GetMember(pgsql.DB, circleID, int64(userID))
 	if err != nil && err != gorm.ErrRecordNotFound {
 		logger.Log.Error("Failed to get member info: " + err.Error())
@@ -391,7 +418,7 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 		return
 	}
 
-	// 3. 组装VO
+	// 4. 组装VO
 	vo := CircleDetailVO{
 		ID:          circle.ID,
 		Name:        circle.Name,
@@ -482,11 +509,24 @@ func (ctrl *CircleController) JoinCircle(c *gin.Context) {
 		return
 	}
 
-	// 4. 如果直接加入成功（不需要审核），发送MQ消息更新成员计数
+	// 4. 如果直接加入成功（不需要审核），立即更新Redis缓存并发送MQ消息持久化
 	if member.Status == model.MemberStatusNormal {
+		// 4.1 立即更新Redis缓存（实时计数，含缓存恢复逻辑）
+		if err := incrementCircleMemberCount(req.CircleID); err != nil {
+			// Redis更新失败记录日志，但不影响主流程
+			logger.Log.Error("Failed to update Redis member count: " + err.Error())
+		}
+
+		// 4.2 发送MQ消息用于持久化到数据库
 		if err := rabbitmq.PublishJoinMsg(req.CircleID, 1); err != nil {
 			// 仅记录日志，不影响主流程
 			logger.Log.Error("Failed to publish join message: " + err.Error())
+		}
+
+		// 4.3 删除用户已加入圈子缓存（旁路缓存）
+		userJoinedKey := redispkg.GetUserJoinedCirclesKey(int64(userID))
+		if err := redispkg.Del(userJoinedKey); err != nil {
+			logger.Log.Error("Failed to delete user joined circles cache: " + err.Error())
 		}
 	}
 
@@ -501,6 +541,72 @@ func (ctrl *CircleController) JoinCircle(c *gin.Context) {
 // LeaveCircleRequest 退出圈子的请求结构
 type LeaveCircleRequest struct {
 	CircleID int64 `json:"circle_id" binding:"required,min=1"`
+}
+
+// incrementCircleMemberCount 递增圈子成员计数（含缓存恢复逻辑）
+func incrementCircleMemberCount(circleID int64) error {
+	redisKey := redispkg.GetCircleMemberCountKey(circleID)
+
+	// 先检查键是否存在
+	exists, err := redispkg.Exists(redisKey)
+	if err != nil {
+		logger.Log.Error("Failed to check Redis key existence: " + err.Error())
+		// 即使检查失败，也尝试递增（让Redis自己处理）
+	}
+
+	// 如果键不存在，从数据库恢复缓存
+	if exists == 0 {
+		circle, err := model.GetCircleByID(pgsql.DB, circleID)
+		if err != nil {
+			// 数据库查询失败，记录日志但仍尝试递增（Redis会从0开始）
+			logger.Log.Error(fmt.Sprintf("Failed to load circle %d from DB for cache recovery: %s", circleID, err.Error()))
+		} else {
+			// 将数据库的 member_count 设置到 Redis
+			if err := redispkg.Set(redisKey, circle.MemberCount, 24*time.Hour); err != nil {
+				logger.Log.Error("Failed to restore Redis cache from DB: " + err.Error())
+			}
+		}
+	}
+
+	// 执行递增操作
+	if _, err := redispkg.Incr(redisKey, 24*time.Hour); err != nil {
+		return fmt.Errorf("failed to increment member count: %w", err)
+	}
+
+	return nil
+}
+
+// decrementCircleMemberCount 递减圈子成员计数（含缓存恢复逻辑）
+func decrementCircleMemberCount(circleID int64) error {
+	redisKey := redispkg.GetCircleMemberCountKey(circleID)
+
+	// 先检查键是否存在
+	exists, err := redispkg.Exists(redisKey)
+	if err != nil {
+		logger.Log.Error("Failed to check Redis key existence: " + err.Error())
+		// 即使检查失败，也尝试递减（让Redis自己处理）
+	}
+
+	// 如果键不存在，从数据库恢复缓存
+	if exists == 0 {
+		circle, err := model.GetCircleByID(pgsql.DB, circleID)
+		if err != nil {
+			// 数据库查询失败，记录日志但仍尝试递减（Redis会从0开始变成-1然后重置为0）
+			logger.Log.Error(fmt.Sprintf("Failed to load circle %d from DB for cache recovery: %s", circleID, err.Error()))
+		} else {
+			// 将数据库的 member_count 设置到 Redis
+			if err := redispkg.Set(redisKey, circle.MemberCount, 24*time.Hour); err != nil {
+				logger.Log.Error("Failed to restore Redis cache from DB: " + err.Error())
+			}
+		}
+	}
+
+	// 执行递减操作
+	if _, err := redispkg.Decr(redisKey, 24*time.Hour); err != nil {
+		return fmt.Errorf("failed to decrement member count: %w", err)
+	}
+
+	return nil
 }
 
 // LeaveCircle 退出兴趣圈
@@ -554,13 +660,140 @@ func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
 		return
 	}
 
-	// 4. 发送MQ消息更新成员计数（仅当成员状态为正常时）
+	// 4. 如果成员状态为正常，立即更新Redis缓存并发送MQ消息持久化
 	if member.Status == model.MemberStatusNormal {
+		// 4.1 立即更新Redis缓存（实时计数，含缓存恢复逻辑）
+		if err := decrementCircleMemberCount(req.CircleID); err != nil {
+			// Redis更新失败记录日志，但不影响主流程
+			logger.Log.Error("Failed to update Redis member count: " + err.Error())
+		}
+
+		// 4.2 发送MQ消息用于持久化到数据库
 		if err := rabbitmq.PublishJoinMsg(req.CircleID, -1); err != nil {
 			// 仅记录日志，不影响主流程
 			logger.Log.Error("Failed to publish leave message: " + err.Error())
 		}
+
+		// 4.3 删除用户已加入圈子缓存（旁路缓存）
+		userJoinedKey := redispkg.GetUserJoinedCirclesKey(int64(userID))
+		if err := redispkg.Del(userJoinedKey); err != nil {
+			logger.Log.Error("Failed to delete user joined circles cache: " + err.Error())
+		}
 	}
 
 	response.SuccessWithMessage(c, "Successfully left the circle", nil)
+}
+
+// MyCircleVO 我加入的圈子VO（简化版，只包含基本信息）
+type MyCircleVO struct {
+	ID          int64  `json:"id"`
+	Name        string `json:"name"`
+	AvatarURL   string `json:"avatar_url,omitempty"`
+	MemberCount int    `json:"member_count"`
+}
+
+// GetMyCirclesRequest 获取我加入圈子列表的请求结构
+type GetMyCirclesRequest struct {
+	Keyword     string `form:"keyword"`      // 搜索关键字
+	Size        int    `form:"size"`         // 每页数量，默认20
+	SearchAfter string `form:"search_after"` // 上一页返回的search_after值（JSON字符串）
+}
+
+// GetMyCircles 获取我加入的圈子列表
+// GET /circle/my
+func (ctrl *CircleController) GetMyCircles(c *gin.Context) {
+	// 获取当前登录用户ID
+	userID, ok := utils.GetUserIDFromRequest(c)
+	if !ok {
+		return
+	}
+
+	// 解析请求参数
+	var req GetMyCirclesRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		response.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	// 设置默认每页数量
+	size := req.Size
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	// 解析 search_after 参数
+	var searchAfter []interface{}
+	if req.SearchAfter != "" {
+		if err := json.Unmarshal([]byte(req.SearchAfter), &searchAfter); err != nil {
+			response.BadRequest(c, "Invalid search_after parameter")
+			return
+		}
+	}
+
+	var circleIDs []int64
+	redisKey := redispkg.GetUserJoinedCirclesKey(int64(userID))
+
+	// 1. 尝试从Redis获取已加入圈子ID列表缓存
+	err := redispkg.GetJSON(redisKey, &circleIDs)
+	if err != nil {
+		// 缓存不存在或出错，从数据库查询（缓存恢复）
+		circleIDs, err = model.GetJoinedCircleIDsByUserID(pgsql.DB, int64(userID))
+		if err != nil {
+			logger.Log.Error("Failed to get joined circles: " + err.Error())
+			response.InternalError(c, "Failed to get joined circles")
+			return
+		}
+
+		// 写入缓存（24小时过期）
+		if err := redispkg.SetJSON(redisKey, circleIDs, 24*time.Hour); err != nil {
+			logger.Log.Error("Failed to cache joined circle IDs: " + err.Error())
+		}
+	}
+
+	// 如果没有加入任何圈子，直接返回空结果
+	if len(circleIDs) == 0 {
+		response.Success(c, map[string]interface{}{
+			"circles":      []MyCircleVO{},
+			"total":        0,
+			"size":         size,
+			"search_after": nil,
+		})
+		return
+	}
+
+	// 2. 调用 Elasticsearch 搜索已加入的圈子
+	result, err := elasticsearch.SearchMyCircles(circleIDs, req.Keyword, size, searchAfter)
+	if err != nil {
+		logger.Log.Error("Failed to search my circles: " + err.Error())
+		response.InternalError(c, "Failed to search my circles")
+		return
+	}
+
+	// 3. 将 ES 结果转换为 MyCircleVO
+	circles := make([]MyCircleVO, 0, len(result.Circles))
+	for _, doc := range result.Circles {
+		circles = append(circles, MyCircleVO{
+			ID:          doc.ID,
+			Name:        doc.Name,
+			AvatarURL:   doc.AvatarURL,
+			MemberCount: doc.MemberCount,
+		})
+	}
+
+	// 4. 将 search_after 转换为 JSON 字符串返回
+	var searchAfterJSON string
+	if result.SearchAfter != nil {
+		if bytes, err := json.Marshal(result.SearchAfter); err == nil {
+			searchAfterJSON = string(bytes)
+		}
+	}
+
+	// 构建响应数据
+	response.Success(c, map[string]interface{}{
+		"circles":      circles,
+		"total":        result.Total,
+		"size":         result.Size,
+		"search_after": searchAfterJSON,
+	})
 }
