@@ -300,6 +300,7 @@ CREATE TABLE post (
     comment_count INT NOT NULL DEFAULT 0, -- 评论数
     like_count INT NOT NULL DEFAULT 0,    -- 点赞数
     collect_count INT NOT NULL DEFAULT 0, -- 收藏数
+    hot INT NOT NULL DEFAULT 0,   -- 热度分
 
     -- 5. 运营与状态标记
     is_pinned SMALLINT NOT NULL DEFAULT 0,  -- 是否置顶：0=否, 1=是 (圈内置顶)

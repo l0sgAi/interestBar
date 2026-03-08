@@ -44,8 +44,6 @@ func RegisterRoutes(r *gin.RouterGroup) {
 	{
 		// 创建兴趣圈接口 - 需要登录
 		circle.POST("/create", sagin.CheckLogin(), circleCtrl.CreateCircle)
-		// 发帖接口 - 需要登录
-		circle.POST("/post/create", sagin.CheckLogin(), circleCtrl.CreatePost)
 		// 获取圈子列表
 		circle.GET("/list", sagin.CheckLogin(), circleCtrl.GetCircles)
 		// 获取圈子详情
@@ -56,6 +54,16 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		circle.POST("/join", sagin.CheckLogin(), circleCtrl.JoinCircle)
 		// 退出兴趣圈
 		circle.POST("/leave", sagin.CheckLogin(), circleCtrl.LeaveCircle)
+	}
+
+	// Post routes (需要登录鉴权)
+	postCtrl := controller.NewPostController()
+	post := r.Group("post")
+	{
+		// 发帖接口 - 需要登录
+		post.POST("/create", sagin.CheckLogin(), postCtrl.CreatePost)
+		// 获取帖子详情 - 需要登录
+		post.GET("/detail/:id", sagin.CheckLogin(), postCtrl.GetPostDetail)
 	}
 
 	// Category routes
