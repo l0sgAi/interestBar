@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"interestBar/pkg/logger"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 )
@@ -34,116 +33,6 @@ type CircleListResponse struct {
 	Total       int64            `json:"total"`
 	Size        int              `json:"size"`
 	SearchAfter []interface{}    `json:"search_after,omitempty"` // 用于获取下一页
-}
-
-// IndexCircleDoc 同步圈子文档到 ES
-func IndexCircleDoc(circleID int64, name string, avatarURL string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
-	doc := CircleDocument{
-		ID:          circleID,
-		Name:        name,
-		Slug:        "", // 暂时为空，需要时可以从数据库获取
-		AvatarURL:   avatarURL,
-		Description: description,
-		Hot:         hot,
-		CategoryID:  categoryID,
-		MemberCount: memberCount,
-		PostCount:   postCount,
-		CreateTime:  createTime,
-		Status:      status,
-		Deleted:     deleted,
-		JoinType:    joinType,
-	}
-
-	docJSON, err := json.Marshal(doc)
-	if err != nil {
-		return fmt.Errorf("failed to marshal document: %w", err)
-	}
-
-	req := bytes.NewReader(docJSON)
-
-	// 使用 _create API 创建文档（如果已存在会失败）
-	res, err := Client.Index(
-		GetCircleIndexName(),
-		req,
-		Client.Index.WithDocumentID(fmt.Sprintf("%d", circleID)),
-		Client.Index.WithRefresh("false"),
-		Client.Index.WithOpType("index"),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to index document: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		return fmt.Errorf("elasticsearch error when indexing document: %s", res.String())
-	}
-
-	logger.Log.Info(fmt.Sprintf("Circle %d indexed successfully", circleID))
-	return nil
-}
-
-// UpdateCircle 更新圈子文档
-func UpdateCircle(circleID int64, name string, avatarURL string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
-	doc := CircleDocument{
-		ID:          circleID,
-		Name:        name,
-		Slug:        "", // 暂时为空，需要时可以从数据库获取
-		AvatarURL:   avatarURL,
-		Description: description,
-		Hot:         hot,
-		CategoryID:  categoryID,
-		MemberCount: memberCount,
-		PostCount:   postCount,
-		CreateTime:  createTime,
-		Status:      status,
-		Deleted:     deleted,
-		JoinType:    joinType,
-	}
-
-	docJSON, err := json.Marshal(doc)
-	if err != nil {
-		return fmt.Errorf("failed to marshal document: %w", err)
-	}
-
-	req := bytes.NewReader(docJSON)
-
-	res, err := Client.Update(
-		GetCircleIndexName(),
-		fmt.Sprintf("%d", circleID),
-		req,
-		Client.Update.WithRefresh("false"),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update document: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		return fmt.Errorf("elasticsearch error when updating document: %s", res.String())
-	}
-
-	logger.Log.Info(fmt.Sprintf("Circle %d updated successfully", circleID))
-	return nil
-}
-
-// DeleteCircle 删除圈子文档
-func DeleteCircle(circleID int64) error {
-	res, err := Client.Delete(
-		GetCircleIndexName(),
-		fmt.Sprintf("%d", circleID),
-		Client.Delete.WithRefresh("false"),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to delete document: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.IsError() && res.StatusCode != 404 {
-		return fmt.Errorf("elasticsearch error when deleting document: %s", res.String())
-	}
-
-	logger.Log.Info(fmt.Sprintf("Circle %d deleted successfully", circleID))
-	return nil
 }
 
 // SearchCircles 搜索圈子
