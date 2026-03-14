@@ -227,3 +227,106 @@ func GetJSONCompressed(key string, value interface{}) error {
 
 	return nil
 }
+
+// UpdateCircleStatistics 更新圈子统计信息缓存
+// 直接更新3个计数器，不使用聚合缓存
+func UpdateCircleStatistics(circleID int64, statistics *CircleStatistics) error {
+	// 使用Pipeline批量设置3个计数器
+	pipe := Client.Pipeline()
+	pipe.Set(ctx, GetCircleMemberCountKey(circleID), statistics.MemberCount, 24*time.Hour)
+	pipe.Set(ctx, GetCirclePostCountKey(circleID), statistics.PostCount, 24*time.Hour)
+	pipe.Set(ctx, GetCircleHotKey(circleID), statistics.Hot, 24*time.Hour)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update circle statistics: %w", err)
+	}
+
+	return nil
+}
+
+// IncrementCirclePostCount 增加圈子帖子数量（原子操作）
+func IncrementCirclePostCount(circleID int64) error {
+	key := GetCirclePostCountKey(circleID)
+	_, err := Incr(key, 24*time.Hour)
+	return err
+}
+
+// DecrementCirclePostCount 减少圈子帖子数量（原子操作）
+func DecrementCirclePostCount(circleID int64) error {
+	key := GetCirclePostCountKey(circleID)
+	_, err := Decr(key, 24*time.Hour)
+	return err
+}
+
+// IncrementCircleHot 增加圈子热度（原子操作）
+func IncrementCircleHot(circleID int64, increment int64) error {
+	key := GetCircleHotKey(circleID)
+	pipe := Client.Pipeline()
+	incrCmd := pipe.IncrBy(ctx, key, increment)
+	pipe.Expire(ctx, key, 24*time.Hour)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to increment hot: %w", err)
+	}
+
+	// 记录结果
+	newHot := incrCmd.Val()
+	logger.Log.Debug(fmt.Sprintf("Circle hot incremented: circleID=%d, increment=%d, newHot=%d", circleID, increment, newHot))
+
+	return nil
+}
+
+// DecrementCircleHot 减少圈子热度（原子操作）
+func DecrementCircleHot(circleID int64, decrement int64) error {
+	key := GetCircleHotKey(circleID)
+	pipe := Client.Pipeline()
+	decrCmd := pipe.DecrBy(ctx, key, decrement)
+	pipe.Expire(ctx, key, 24*time.Hour)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to decrement hot: %w", err)
+	}
+
+	// 检查结果，确保不会小于0
+	newHot := decrCmd.Val()
+	if newHot < 0 {
+		// 如果小于0，重置为0
+		err = Client.Set(ctx, key, 0, 24*time.Hour).Err()
+		if err != nil {
+			return fmt.Errorf("failed to reset negative hot: %w", err)
+		}
+		newHot = 0
+	}
+
+	logger.Log.Debug(fmt.Sprintf("Circle hot decremented: circleID=%d, decrement=%d, newHot=%d", circleID, decrement, newHot))
+
+	return nil
+}
+
+// BatchUpdateCircleStatistics 批量更新圈子统计信息（用于MQ消费等场景）
+// 直接更新3个计数器，不使用聚合缓存
+func BatchUpdateCircleStatistics(updates map[int64]*CircleStatistics) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	// 使用Pipeline批量设置多个圈子的3个计数器
+	pipe := Client.Pipeline()
+	for circleID, stats := range updates {
+		pipe.Set(ctx, GetCircleMemberCountKey(circleID), stats.MemberCount, 24*time.Hour)
+		pipe.Set(ctx, GetCirclePostCountKey(circleID), stats.PostCount, 24*time.Hour)
+		pipe.Set(ctx, GetCircleHotKey(circleID), stats.Hot, 24*time.Hour)
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("Batch update circle statistics failed: count=%d, err=%v", len(updates), err))
+		return err
+	}
+
+	logger.Log.Debug(fmt.Sprintf("Batch update circle statistics success: count=%d", len(updates)))
+	return nil
+}

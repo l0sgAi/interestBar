@@ -1,6 +1,9 @@
 package redis
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Redis 相关键名常量定义
 
@@ -27,6 +30,32 @@ const (
 	// 存储内容：[]int64 圈子ID列表，按加入时间倒序排列
 	UserJoinedCirclesPrefix = "user_joined_circles:"
 )
+
+// CircleBaseInfo 圈子基础信息（不含统计信息）
+type CircleBaseInfo struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Slug        string    `json:"slug,omitempty"`
+	AvatarURL   string    `json:"avatar_url,omitempty"`
+	CoverURL    string    `json:"cover_url,omitempty"`
+	Description string    `json:"description"`
+	Rule        string    `json:"rule,omitempty"`
+	CreatorID   int64     `json:"creator_id"`
+	CategoryID  int       `json:"category_id"`
+	JoinType    int16     `json:"join_type"`
+	Status      int16     `json:"status"`
+	Deleted     int16     `json:"deleted"`
+	CreateTime  time.Time `json:"create_time"`
+	UpdateTime  time.Time `json:"update_time"`
+}
+
+// CircleStatistics 圈子统计信息（用于批量更新和MQ消费等场景）
+// 注意：实际读取时直接从3个独立计数器读取，不使用此结构体
+type CircleStatistics struct {
+	MemberCount int `json:"member_count"` // 成员数量
+	PostCount   int `json:"post_count"`   // 帖子数量
+	Hot         int `json:"hot"`          // 热度
+}
 
 // GetUserJoinedCirclesKey 获取用户已加入圈子ID列表缓存的完整key
 func GetUserJoinedCirclesKey(userID int64) string {

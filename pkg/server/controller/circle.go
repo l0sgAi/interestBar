@@ -11,6 +11,7 @@ import (
 	rabbitmq "interestBar/pkg/server/storage/rabbitmq"
 	redispkg "interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
+	"strconv"
 	"strings"
 	"time"
 
@@ -225,16 +226,14 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 		return
 	}
 
-	var circle *model.Circle
+	var circleBase redispkg.CircleBaseInfo
 
 	// 1. 尝试从 Redis 获取圈子基础信息缓存（使用 Zstd 压缩）
 	redisKey := redispkg.GetCircleInfoKey(circleID)
-	circle = &model.Circle{}
-
-	err := redispkg.GetJSONCompressed(redisKey, circle)
+	err := redispkg.GetJSONCompressed(redisKey, &circleBase)
 	if err != nil {
-		// 缓存不存在或出错，从数据库查询
-		circle, err = model.GetCircleByID(pgsql.DB, circleID)
+		// 缓存不存在或出错，从数据库查询完整信息
+		circle, err := model.GetCircleByID(pgsql.DB, circleID)
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
 				response.NotFound(c, "Circle not found")
@@ -245,23 +244,39 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 			return
 		}
 
-		// 写入缓存（使用 Zstd 压缩，24小时过期）
-		if err := redispkg.SetJSONCompressed(redisKey, circle, 24*time.Hour); err != nil {
-			logger.Log.Error("Failed to cache circle info: " + err.Error())
+		// 从数据库的完整信息构建基础信息结构
+		circleBase = redispkg.CircleBaseInfo{
+			ID:          circle.ID,
+			Name:        circle.Name,
+			Slug:        circle.Slug,
+			AvatarURL:   circle.AvatarURL,
+			CoverURL:    circle.CoverURL,
+			Description: circle.Description,
+			Rule:        circle.Rule,
+			CreatorID:   circle.CreatorID,
+			CategoryID:  circle.CategoryID,
+			JoinType:    circle.JoinType,
+			Status:      circle.Status,
+			Deleted:     circle.Deleted,
+			CreateTime:  circle.CreateTime,
+			UpdateTime:  circle.UpdateTime,
+		}
+
+		// 写入基础信息缓存（使用 Zstd 压缩，24小时过期）
+		if err := redispkg.SetJSONCompressed(redisKey, &circleBase, 24*time.Hour); err != nil {
+			logger.Log.Error("Failed to cache circle base info: " + err.Error())
 		}
 	}
 
-	// 2. 从 Redis 获取实时的成员计数
-	memberCountStr, err := redispkg.Get(redispkg.GetCircleMemberCountKey(circleID))
-	if err == nil && memberCountStr != "" {
-		// Redis 中有计数，解析并使用
-		var memberCount int64
-		if _, err := fmt.Sscanf(memberCountStr, "%d", &memberCount); err == nil {
-			circle.MemberCount = int(memberCount)
-		}
-		// 如果解析失败，使用从缓存/DB中获取的 circle.MemberCount
+	// 2. 从 Redis 获取统计信息（直接读取3个实时计数器）
+	memberCount, postCount, hot, err := getCircleStatistics(circleID)
+	if err != nil {
+		logger.Log.Error("Failed to get circle statistics: " + err.Error())
+		// 使用默认值
+		memberCount = 0
+		postCount = 0
+		hot = 0
 	}
-	// 如果 Redis 中没有计数（缓存过期），使用从缓存/DB中获取的 circle.MemberCount
 
 	// 3. 查询用户在圈子的成员信息
 	member, err := model.GetMember(pgsql.DB, circleID, int64(userID))
@@ -273,23 +288,23 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 
 	// 4. 组装VO
 	vo := CircleDetailVO{
-		ID:          circle.ID,
-		Name:        circle.Name,
-		Slug:        circle.Slug,
-		AvatarURL:   circle.AvatarURL,
-		CoverURL:    circle.CoverURL,
-		Description: circle.Description,
-		Rule:        circle.Rule,
-		CreatorID:   circle.CreatorID,
-		CategoryID:  circle.CategoryID,
-		Hot:         circle.Hot,
-		MemberCount: circle.MemberCount,
-		PostCount:   circle.PostCount,
-		JoinType:    circle.JoinType,
-		Status:      circle.Status,
-		Deleted:     circle.Deleted,
-		CreateTime:  circle.CreateTime,
-		UpdateTime:  circle.UpdateTime,
+		ID:          circleBase.ID,
+		Name:        circleBase.Name,
+		Slug:        circleBase.Slug,
+		AvatarURL:   circleBase.AvatarURL,
+		CoverURL:    circleBase.CoverURL,
+		Description: circleBase.Description,
+		Rule:        circleBase.Rule,
+		CreatorID:   circleBase.CreatorID,
+		CategoryID:  circleBase.CategoryID,
+		Hot:         hot,
+		MemberCount: memberCount,
+		PostCount:   postCount,
+		JoinType:    circleBase.JoinType,
+		Status:      circleBase.Status,
+		Deleted:     circleBase.Deleted,
+		CreateTime:  circleBase.CreateTime,
+		UpdateTime:  circleBase.UpdateTime,
 	}
 
 	// 如果用户是圈子成员，添加成员信息
@@ -535,6 +550,51 @@ func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
 	}
 
 	response.SuccessWithMessage(c, "Successfully left the circle", nil)
+}
+
+// getCircleStatistics 从Redis获取圈子统计信息
+// 如果任一计数器不存在，则从数据库恢复所有计数器
+func getCircleStatistics(circleID int64) (memberCount, postCount, hot int, err error) {
+	// 读取3个独立计数器
+	memberCountStr, err1 := redispkg.Get(redispkg.GetCircleMemberCountKey(circleID))
+	postCountStr, err2 := redispkg.Get(redispkg.GetCirclePostCountKey(circleID))
+	hotStr, err3 := redispkg.Get(redispkg.GetCircleHotKey(circleID))
+
+	// 检查是否任一计数器不存在
+	if err1 != nil || err2 != nil || err3 != nil {
+		// 任一计数器缺失，从数据库恢复所有计数器
+		logger.Log.Debug(fmt.Sprintf("Circle statistics cache missing for circle %d, restoring from database", circleID))
+		return restoreAllCounters(circleID)
+	}
+
+	// 所有计数器都存在，解析并返回
+	memberCount, _ = strconv.Atoi(memberCountStr)
+	postCount, _ = strconv.Atoi(postCountStr)
+	hot, _ = strconv.Atoi(hotStr)
+
+	return memberCount, postCount, hot, nil
+}
+
+// restoreAllCounters 从数据库重新加载并重建所有计数器
+func restoreAllCounters(circleID int64) (memberCount, postCount, hot int, err error) {
+	// 从数据库查询完整circle记录
+	circle, err := model.GetCircleByID(pgsql.DB, circleID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return 0, 0, 0, fmt.Errorf("circle not found: %d", circleID)
+		}
+		return 0, 0, 0, fmt.Errorf("failed to get circle from database: %w", err)
+	}
+
+	// 批量设置3个计数器（提高性能）
+	redispkg.Set(redispkg.GetCircleMemberCountKey(circleID), circle.MemberCount, 24*time.Hour)
+	redispkg.Set(redispkg.GetCirclePostCountKey(circleID), circle.PostCount, 24*time.Hour)
+	redispkg.Set(redispkg.GetCircleHotKey(circleID), circle.Hot, 24*time.Hour)
+
+	logger.Log.Debug(fmt.Sprintf("Successfully restored circle statistics cache for circle %d: member_count=%d, post_count=%d, hot=%d",
+		circleID, circle.MemberCount, circle.PostCount, circle.Hot))
+
+	return circle.MemberCount, circle.PostCount, circle.Hot, nil
 }
 
 // MyCircleVO 我加入的圈子VO（简化版，只包含基本信息）

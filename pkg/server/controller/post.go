@@ -144,11 +144,10 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 		return
 	}
 
-	// 删除圈子信息缓存（因为圈子包含帖子数量统计）
-	circleCacheKey := redispkg.GetCircleInfoKey(post.CircleID)
-	if err := redispkg.Del(circleCacheKey); err != nil {
-		// 缓存删除失败记录日志，但不影响主流程
-		logger.Log.Error("Failed to delete circle cache: " + err.Error())
+	// 更新圈子帖子数量缓存（实时递增）
+	if err := redispkg.IncrementCirclePostCount(post.CircleID); err != nil {
+		// 缓存更新失败记录日志，但不影响主流程
+		logger.Log.Error("Failed to increment circle post count: " + err.Error())
 	}
 
 	// 返回创建成功消息和帖子ID
