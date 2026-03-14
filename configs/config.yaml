@@ -66,7 +66,7 @@ s3:
 # Elasticsearch 配置
 elasticsearch:
   url: "http://192.168.200.132:9200" # ES 地址
-  index: "pg.public.circle" # 圈子索引名
+  index_prefix: "pg.public" # ES 索引前缀（用于构建完整索引名）
   refresh_interval: "30s" # 索引刷新间隔，提升性能
 
 # RabbitMQ 配置

@@ -107,7 +107,7 @@ type S3 struct {
 // Elasticsearch Elasticsearch 配置
 type Elasticsearch struct {
 	URL             string `mapstructure:"url" json:"url" yaml:"url"`
-	Index           string `mapstructure:"index" json:"index" yaml:"index"`
+	IndexPrefix     string `mapstructure:"index_prefix" json:"index_prefix" yaml:"index_prefix"`
 	RefreshInterval string `mapstructure:"refresh_interval" json:"refresh_interval" yaml:"refresh_interval"`
 }
 

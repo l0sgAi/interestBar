@@ -62,6 +62,8 @@ func RegisterRoutes(r *gin.RouterGroup) {
 	{
 		// 发帖接口 - 需要登录
 		post.POST("/create", sagin.CheckLogin(), postCtrl.CreatePost)
+		// 获取帖子列表 - 需要登录
+		post.GET("/list", sagin.CheckLogin(), postCtrl.GetPosts)
 		// 获取帖子详情 - 需要登录
 		post.GET("/detail/:id", sagin.CheckLogin(), postCtrl.GetPostDetail)
 	}

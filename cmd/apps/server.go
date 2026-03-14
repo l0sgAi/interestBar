@@ -54,12 +54,8 @@ func Run(configPath string) {
 		logger.Log.Warn("Failed to initialize RabbitMQ: " + err.Error())
 		logger.Log.Info("Running without RabbitMQ message queue functionality")
 	} else {
-		// 启动消费者处理圈子同步消息
-		go rabbitmq.StartConsumerWithRetry()
 		// 启动消费者处理成员计数聚合（PG+Redis）
 		go rabbitmq.StartMemberCountConsumerWithRetry()
-		// 启动消费者处理成员计数聚合（ES）
-		go rabbitmq.StartESMemberCountConsumerWithRetry()
 	}
 
 	// 9. Init Router

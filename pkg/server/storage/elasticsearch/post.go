@@ -1,0 +1,406 @@
+package elasticsearch
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"interestBar/pkg/logger"
+
+	"github.com/elastic/go-elasticsearch/v8/esapi"
+)
+
+// PostDocument 帖子文档结构
+type PostDocument struct {
+	ID            int64  `json:"id"`
+	CircleID      int64  `json:"circle_id"`
+	UserID        int64  `json:"user_id"`
+	Type          int16  `json:"type"`
+	Title         string `json:"title"`
+	Summary       string `json:"summary"`
+	Content       string `json:"content"`
+	ViewCount     int    `json:"view_count"`
+	CommentCount  int    `json:"comment_count"`
+	LikeCount     int    `json:"like_count"`
+	CollectCount  int    `json:"collect_count"`
+	IsPinned      int16  `json:"is_pinned"`
+	IsEssence     int16  `json:"is_essence"`
+	IsLock        int16  `json:"is_lock"`
+	Status        int16  `json:"status"`
+	Deleted       int16  `json:"deleted"`
+	Hot           int    `json:"hot"`
+	CreateTime    string `json:"create_time"`
+	UpdateTime    string `json:"update_time"`
+	LastReplyTime string `json:"last_reply_time,omitempty"`
+	// 排序值（用于 search_after 分页）
+	SortValues []interface{} `json:"sort_values,omitempty"`
+}
+
+// PostListResponse 帖子列表响应
+type PostListResponse struct {
+	Posts       []PostDocument `json:"posts"`
+	Total       int64          `json:"total"`
+	Size        int            `json:"size"`
+	SearchAfter []interface{}  `json:"search_after,omitempty"` // 用于获取下一页
+}
+
+// SearchPosts 搜索帖子
+// keyword: 搜索关键字，为空时返回所有符合条件的帖子，优先使用 title 字段检索，其次使用 summary 字段检索
+// circleID: 圈子ID，为0时搜索所有圈子
+// size: 每页数量，默认 20
+// searchAfter: 上一页返回的 search_after 值，用于获取下一页
+// 返回：帖子列表响应（包含帖子列表、总数、分页信息）
+func SearchPosts(keyword string, circleID int64, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	// 默认每页 20 条
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	// 构建搜索查询
+	var searchQuery map[string]interface{}
+
+	// 定义排序规则：按hot、create_time倒序
+	sortRules := []map[string]interface{}{
+		{
+			"hot": map[string]interface{}{
+				"order": "desc",
+			},
+		},
+		{
+			"create_time": map[string]interface{}{
+				"order": "desc",
+			},
+		},
+	}
+
+	// 构建基础查询条件（过滤已删除、状态正常、指定圈子）
+	mustConditions := []map[string]interface{}{
+		{
+			"term": map[string]interface{}{
+				"deleted": 0, // 过滤掉已删除的帖子
+			},
+		},
+		{
+			"term": map[string]interface{}{
+				"status": 1, // 只返回已发布的帖子
+			},
+		},
+	}
+
+	// 如果指定了圈子ID，添加圈子过滤
+	if circleID > 0 {
+		mustConditions = append(mustConditions, map[string]interface{}{
+			"term": map[string]interface{}{
+				"circle_id": circleID,
+			},
+		})
+	}
+
+	if keyword == "" {
+		// 无关键字时，返回所有符合条件的帖子，按热度排序
+		searchQuery = map[string]interface{}{
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": mustConditions,
+				},
+			},
+			"size": size,
+			"sort": sortRules,
+		}
+	} else {
+		// 有关键字时，使用 multi_match 进行加权搜索
+		// title 权重是 summary 的 3 倍
+		sortWithScore := []map[string]interface{}{
+			{
+				"_score": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+		}
+		sortWithScore = append(sortWithScore, sortRules...)
+
+		// 添加关键字搜索条件
+		searchConditions := []map[string]interface{}{
+			{
+				"multi_match": map[string]interface{}{
+					"query":    keyword,
+					"fields":   []string{"title^3", "summary^1"},
+					"type":     "best_fields",
+					"operator": "or",
+				},
+			},
+		}
+		searchConditions = append(searchConditions, mustConditions...)
+
+		searchQuery = map[string]interface{}{
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": searchConditions,
+				},
+			},
+			"size": size,
+			"sort": sortWithScore,
+		}
+	}
+
+	// 添加 search_after 参数（如果提供）
+	if len(searchAfter) > 0 {
+		searchQuery["search_after"] = searchAfter
+	}
+
+	queryJSON, err := json.Marshal(searchQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query: %w", err)
+	}
+
+	// 使用帖子索引名称
+	postIndex := GetPostIndexName()
+
+	res, err := Client.Search(
+		Client.Search.WithContext(nil),
+		Client.Search.WithIndex(postIndex),
+		Client.Search.WithBody(bytes.NewReader(queryJSON)),
+		Client.Search.WithTrackTotalHits(true),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+	}
+
+	return parsePostSearchResponse(res, size)
+}
+
+// parsePostSearchResponse 解析帖子搜索响应
+func parsePostSearchResponse(res *esapi.Response, size int) (*PostListResponse, error) {
+	var searchResult map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&searchResult); err != nil {
+		return nil, fmt.Errorf("failed to parse search response: %w", err)
+	}
+
+	hits := searchResult["hits"].(map[string]interface{})
+	total := int64(hits["total"].(map[string]interface{})["value"].(float64))
+	hitsList := hits["hits"].([]interface{})
+
+	documents := make([]PostDocument, 0, len(hitsList))
+	var nextSearchAfter []interface{}
+
+	for _, hit := range hitsList {
+		hitMap := hit.(map[string]interface{})
+		source := hitMap["_source"]
+		sourceMap := source.(map[string]interface{})
+
+		// 获取排序值（用于下一页）
+		if sortArr, ok := hitMap["sort"].([]interface{}); ok {
+			if len(sortArr) > 0 {
+				// 记录最后一个文档的排序值
+				nextSearchAfter = sortArr
+			}
+		}
+
+		// 辅助函数：安全地从map中获取字符串值
+		getString := func(key string) string {
+			if val, ok := sourceMap[key]; ok && val != nil {
+				if str, ok := val.(string); ok {
+					return str
+				}
+			}
+			return ""
+		}
+
+		// 辅助函数：安全地从map中获取整数值
+		getInt := func(key string) int {
+			if val, ok := sourceMap[key]; ok && val != nil {
+				if num, ok := val.(float64); ok {
+					return int(num)
+				}
+			}
+			return 0
+		}
+
+		// 辅助函数：安全地从map中获取int16值
+		getInt16 := func(key string) int16 {
+			if val, ok := sourceMap[key]; ok && val != nil {
+				if num, ok := val.(float64); ok {
+					return int16(num)
+				}
+			}
+			return 0
+		}
+
+		// 辅助函数：安全地从map中获取int64值
+		getInt64 := func(key string) int64 {
+			if val, ok := sourceMap[key]; ok && val != nil {
+				if num, ok := val.(float64); ok {
+					return int64(num)
+				}
+			}
+			return 0
+		}
+
+		doc := PostDocument{
+			ID:            getInt64("id"),
+			CircleID:      getInt64("circle_id"),
+			UserID:        getInt64("user_id"),
+			Type:          getInt16("type"),
+			Title:         getString("title"),
+			Summary:       getString("summary"),
+			Content:       getString("content"),
+			ViewCount:     getInt("view_count"),
+			CommentCount:  getInt("comment_count"),
+			LikeCount:     getInt("like_count"),
+			CollectCount:  getInt("collect_count"),
+			IsPinned:      getInt16("is_pinned"),
+			IsEssence:     getInt16("is_essence"),
+			IsLock:        getInt16("is_lock"),
+			Status:        getInt16("status"),
+			Deleted:       getInt16("deleted"),
+			Hot:           getInt("hot"),
+			CreateTime:    getString("create_time"),
+			UpdateTime:    getString("update_time"),
+			LastReplyTime: getString("last_reply_time"),
+		}
+		documents = append(documents, doc)
+	}
+
+	// 如果有更多结果，返回 search_after 用于下一页
+	response := &PostListResponse{
+		Posts: documents,
+		Total: total,
+		Size:  size,
+	}
+	if len(nextSearchAfter) > 0 && len(documents) == size {
+		response.SearchAfter = nextSearchAfter
+	}
+
+	return response, nil
+}
+
+// IndexPostDoc 同步帖子文档到 ES
+func IndexPostDoc(postID int64, circleID int64, userID int64, postType int16, title string, summary string, content string, viewCount int, commentCount int, likeCount int, collectCount int, isPinned int16, isEssence int16, isLock int16, status int16, deleted int16, hot int, createTime string, updateTime string, lastReplyTime string) error {
+	doc := PostDocument{
+		ID:            postID,
+		CircleID:      circleID,
+		UserID:        userID,
+		Type:          postType,
+		Title:         title,
+		Summary:       summary,
+		Content:       content,
+		ViewCount:     viewCount,
+		CommentCount:  commentCount,
+		LikeCount:     likeCount,
+		CollectCount:  collectCount,
+		IsPinned:      isPinned,
+		IsEssence:     isEssence,
+		IsLock:        isLock,
+		Status:        status,
+		Deleted:       deleted,
+		Hot:           hot,
+		CreateTime:    createTime,
+		UpdateTime:    updateTime,
+		LastReplyTime: lastReplyTime,
+	}
+
+	docJSON, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal document: %w", err)
+	}
+
+	req := bytes.NewReader(docJSON)
+
+	// 使用 _create API 创建文档（如果已存在会失败）
+	postIndex := GetPostIndexName()
+	res, err := Client.Index(
+		postIndex,
+		req,
+		Client.Index.WithDocumentID(fmt.Sprintf("%d", postID)),
+		Client.Index.WithRefresh("false"),
+		Client.Index.WithOpType("index"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to index document: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return fmt.Errorf("elasticsearch error when indexing document: %s", res.String())
+	}
+
+	logger.Log.Info(fmt.Sprintf("Post %d indexed successfully", postID))
+	return nil
+}
+
+// UpdatePost 更新帖子文档
+func UpdatePost(postID int64, circleID int64, userID int64, postType int16, title string, summary string, content string, viewCount int, commentCount int, likeCount int, collectCount int, isPinned int16, isEssence int16, isLock int16, status int16, deleted int16, hot int, createTime string, updateTime string, lastReplyTime string) error {
+	doc := PostDocument{
+		ID:            postID,
+		CircleID:      circleID,
+		UserID:        userID,
+		Type:          postType,
+		Title:         title,
+		Summary:       summary,
+		Content:       content,
+		ViewCount:     viewCount,
+		CommentCount:  commentCount,
+		LikeCount:     likeCount,
+		CollectCount:  collectCount,
+		IsPinned:      isPinned,
+		IsEssence:     isEssence,
+		IsLock:        isLock,
+		Status:        status,
+		Deleted:       deleted,
+		Hot:           hot,
+		CreateTime:    createTime,
+		UpdateTime:    updateTime,
+		LastReplyTime: lastReplyTime,
+	}
+
+	docJSON, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("failed to marshal document: %w", err)
+	}
+
+	req := bytes.NewReader(docJSON)
+
+	postIndex := GetPostIndexName()
+	res, err := Client.Update(
+		postIndex,
+		fmt.Sprintf("%d", postID),
+		req,
+		Client.Update.WithRefresh("false"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update document: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return fmt.Errorf("elasticsearch error when updating document: %s", res.String())
+	}
+
+	logger.Log.Info(fmt.Sprintf("Post %d updated successfully", postID))
+	return nil
+}
+
+// DeletePost 删除帖子文档
+func DeletePost(postID int64) error {
+	postIndex := GetPostIndexName()
+	res, err := Client.Delete(
+		postIndex,
+		fmt.Sprintf("%d", postID),
+		Client.Delete.WithRefresh("false"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to delete document: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() && res.StatusCode != 404 {
+		return fmt.Errorf("elasticsearch error when deleting document: %s", res.String())
+	}
+
+	logger.Log.Info(fmt.Sprintf("Post %d deleted successfully", postID))
+	return nil
+}

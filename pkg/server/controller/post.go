@@ -1,11 +1,13 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
+	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
 	redispkg "interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
 	"strings"
@@ -268,4 +270,128 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 	}
 
 	response.Success(c, vo)
+}
+
+// GetPostsRequest 获取帖子列表的请求结构
+type GetPostsRequest struct {
+	Keyword     string `form:"keyword"`      // 搜索关键字
+	CircleID    int64  `form:"circle_id"`    // 圈子ID，为0时搜索所有圈子
+	Size        int    `form:"size"`         // 每页数量，默认20
+	SearchAfter string `form:"search_after"` // 上一页返回的search_after值（JSON字符串）
+}
+
+// GetPosts 获取帖子列表
+// GET /post/list
+func (ctrl *PostController) GetPosts(c *gin.Context) {
+	// 解析请求参数
+	var req GetPostsRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		response.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	// 设置默认每页数量
+	size := req.Size
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	// 解析 search_after 参数
+	var searchAfter []interface{}
+	if req.SearchAfter != "" {
+		if err := json.Unmarshal([]byte(req.SearchAfter), &searchAfter); err != nil {
+			response.BadRequest(c, "Invalid search_after parameter")
+			return
+		}
+	}
+
+	// 调用 Elasticsearch 搜索
+	result, err := elasticsearch.SearchPosts(req.Keyword, req.CircleID, size, searchAfter)
+	if err != nil {
+		logger.Log.Error("Failed to search posts: " + err.Error())
+		response.InternalError(c, "Failed to search posts")
+		return
+	}
+
+	// 构建帖子列表VO，包含发帖人信息
+	posts := make([]PostListVO, 0, len(result.Posts))
+	for _, doc := range result.Posts {
+		// 查询发帖人信息
+		var authorName string
+		var authorAvatar string
+
+		author, err := model.GetUserByID(pgsql.DB, doc.UserID)
+		if err == nil && author != nil {
+			authorName = author.Username
+			authorAvatar = author.AvatarURL
+		}
+
+		// 解析时间字符串为 time.Time
+		createTime, _ := time.Parse(time.RFC3339Nano, doc.CreateTime)
+
+		post := PostListVO{
+			ID:            doc.ID,
+			CircleID:      doc.CircleID,
+			UserID:        doc.UserID,
+			Type:          doc.Type,
+			Title:         doc.Title,
+			Summary:       doc.Summary,
+			Content:       doc.Content,
+			ViewCount:     doc.ViewCount,
+			CommentCount:  doc.CommentCount,
+			LikeCount:     doc.LikeCount,
+			CollectCount:  doc.CollectCount,
+			IsPinned:      doc.IsPinned,
+			IsEssence:     doc.IsEssence,
+			IsLock:        doc.IsLock,
+			Status:        doc.Status,
+			CreateTime:    createTime,
+			AuthorName:    authorName,
+			AuthorAvatar:  authorAvatar,
+		}
+		posts = append(posts, post)
+	}
+
+	// 将 search_after 转换为 JSON 字符串返回
+	var searchAfterJSON string
+	if result.SearchAfter != nil {
+		if bytes, err := json.Marshal(result.SearchAfter); err == nil {
+			searchAfterJSON = string(bytes)
+		}
+	}
+
+	// 构建响应数据
+	responseData := map[string]interface{}{
+		"posts":        posts,
+		"total":        result.Total,
+		"size":         result.Size,
+		"search_after": searchAfterJSON,
+	}
+
+	response.Success(c, responseData)
+}
+
+// PostListVO 帖子列表VO（包含Post所有字段 + 发帖人信息）
+type PostListVO struct {
+	ID           int64     `json:"id"`
+	CircleID     int64     `json:"circle_id"`
+	UserID       int64     `json:"user_id"`
+	Type         int16     `json:"type"`
+	Title        string    `json:"title"`
+	Summary      string    `json:"summary"`
+	Content      string    `json:"content"`
+	ViewCount    int       `json:"view_count"`
+	CommentCount int       `json:"comment_count"`
+	LikeCount    int       `json:"like_count"`
+	CollectCount int       `json:"collect_count"`
+	IsPinned     int16     `json:"is_pinned"`
+	IsEssence    int16     `json:"is_essence"`
+	IsLock       int16     `json:"is_lock"`
+	Status       int16     `json:"status"`
+	CreateTime   time.Time `json:"create_time"`
+
+	// 发帖人信息
+	AuthorName   string `json:"author_name"`   // 发帖人用户昵称
+	AuthorAvatar string `json:"author_avatar"` // 发帖人头像URL
 }

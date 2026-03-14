@@ -37,7 +37,7 @@ func InitElasticsearch() error {
 
 	logger.Log.Info("Elasticsearch connected successfully")
 
-	// 创建索引
+	// 创建圈子索引
 	if err := createCircleIndex(); err != nil {
 		return fmt.Errorf("failed to create circle index: %w", err)
 	}
@@ -47,7 +47,7 @@ func InitElasticsearch() error {
 
 // createCircleIndex 创建圈子索引（如果不存在）
 func createCircleIndex() error {
-	indexName := conf.Config.Elasticsearch.Index
+	indexName := GetCircleIndexName()
 
 	// 检查索引是否已存在
 	res, err := Client.Indices.Exists([]string{indexName})

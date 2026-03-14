@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
@@ -37,8 +36,8 @@ type CircleListResponse struct {
 	SearchAfter []interface{}    `json:"search_after,omitempty"` // 用于获取下一页
 }
 
-// IndexCircle 同步圈子文档到 ES
-func IndexCircle(circleID int64, name string, avatarURL string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
+// IndexCircleDoc 同步圈子文档到 ES
+func IndexCircleDoc(circleID int64, name string, avatarURL string, description string, hot int, categoryID int, memberCount int, postCount int, createTime string, status int16, deleted int16, joinType int16) error {
 	doc := CircleDocument{
 		ID:          circleID,
 		Name:        name,
@@ -64,7 +63,7 @@ func IndexCircle(circleID int64, name string, avatarURL string, description stri
 
 	// 使用 _create API 创建文档（如果已存在会失败）
 	res, err := Client.Index(
-		conf.Config.Elasticsearch.Index,
+		GetCircleIndexName(),
 		req,
 		Client.Index.WithDocumentID(fmt.Sprintf("%d", circleID)),
 		Client.Index.WithRefresh("false"),
@@ -109,7 +108,7 @@ func UpdateCircle(circleID int64, name string, avatarURL string, description str
 	req := bytes.NewReader(docJSON)
 
 	res, err := Client.Update(
-		conf.Config.Elasticsearch.Index,
+		GetCircleIndexName(),
 		fmt.Sprintf("%d", circleID),
 		req,
 		Client.Update.WithRefresh("false"),
@@ -130,7 +129,7 @@ func UpdateCircle(circleID int64, name string, avatarURL string, description str
 // DeleteCircle 删除圈子文档
 func DeleteCircle(circleID int64) error {
 	res, err := Client.Delete(
-		conf.Config.Elasticsearch.Index,
+		GetCircleIndexName(),
 		fmt.Sprintf("%d", circleID),
 		Client.Delete.WithRefresh("false"),
 	)
@@ -275,7 +274,7 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 
 	res, err := Client.Search(
 		Client.Search.WithContext(nil),
-		Client.Search.WithIndex(conf.Config.Elasticsearch.Index),
+		Client.Search.WithIndex(GetCircleIndexName()),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 		Client.Search.WithTrackTotalHits(true),
 	)
@@ -416,7 +415,7 @@ func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []
 
 	res, err := Client.Search(
 		Client.Search.WithContext(nil),
-		Client.Search.WithIndex(conf.Config.Elasticsearch.Index),
+		Client.Search.WithIndex(GetCircleIndexName()),
 		Client.Search.WithBody(bytes.NewReader(queryJSON)),
 		Client.Search.WithTrackTotalHits(true),
 	)

@@ -2,24 +2,6 @@ package rabbitmq
 
 // RabbitMQ 相关常量定义
 
-const (
-	// CircleSyncExchange 圈子同步交换机
-	CircleSyncExchange = "circle_sync_exchange"
-
-	// CircleSyncQueue 圈子同步队列
-	CircleSyncQueue = "circle_sync_queue"
-
-	// CircleSyncRoutingKey 圈子同步路由键
-	CircleSyncRoutingKey = "circle.sync"
-)
-
-// CircleSyncAction 圈子同步操作类型
-const (
-	CircleSyncActionCreate = "create"
-	CircleSyncActionUpdate = "update"
-	CircleSyncActionDelete = "delete"
-)
-
 // 成员计数相关常量
 const (
 	// CircleMemberCountExchange 圈子成员计数交换机
@@ -27,9 +9,6 @@ const (
 
 	// CircleMemberCountQueue 圈子成员计数队列（用于 PG+Redis 更新）
 	CircleMemberCountQueue = "circle_member_count_queue"
-
-	// CircleMemberCountESQueue 圈子成员计数队列（用于 ES 更新）
-	CircleMemberCountESQueue = "circle_member_count_es_queue"
 
 	// CircleMemberCountRoutingKey 圈子成员计数路由键
 	CircleMemberCountRoutingKey = "circle.member.count"
