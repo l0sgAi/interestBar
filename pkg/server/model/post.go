@@ -15,7 +15,7 @@ type Post struct {
 	UserID        int64          `json:"user_id" gorm:"column:user_id;not null"`                          // 发帖人ID
 	Type          int16          `json:"type" gorm:"column:type;type:smallint;default:1"`                 // 帖子类型
 	Title         string         `json:"title" gorm:"column:title;type:varchar(200);default:''"`          // 标题
-	Summary       string         `json:"summary" gorm:"column:summary;type:varchar(500);default:''"`      // 摘要
+	Summary       string         `json:"summary" gorm:"column:summary;type:varchar(2000);default:''"`      // 摘要
 	Content       string         `json:"content" gorm:"column:content;type:text;default:''"`              // 正文
 	MediaExtra    MediaExtraJSON `json:"media_extra" gorm:"column:media_extra;type:jsonb;default:'{}'::jsonb"` // 媒体扩展信息
 	ViewCount     int            `json:"view_count" gorm:"column:view_count;default:0"`                   // 浏览量
@@ -81,6 +81,16 @@ func (m MediaExtraJSON) Value() (driver.Value, error) {
 func GetPostByID(db *gorm.DB, postID int64) (*Post, error) {
 	var post Post
 	err := db.Where("id = ? AND deleted = ?", postID, 0).First(&post).Error
+	if err != nil {
+		return nil, err
+	}
+	return &post, nil
+}
+
+// GetPublishedPostByID 根据ID获取已发布的帖子（status=1）
+func GetPublishedPostByID(db *gorm.DB, postID int64) (*Post, error) {
+	var post Post
+	err := db.Where("id = ? AND status = ? AND deleted = ?", postID, PostStatusPublished, 0).First(&post).Error
 	if err != nil {
 		return nil, err
 	}

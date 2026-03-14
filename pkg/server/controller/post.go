@@ -28,7 +28,7 @@ func NewPostController() *PostController {
 type CreatePostRequest struct {
 	CircleID   int64                  `json:"circle_id" binding:"required,min=1"`
 	Title      string                 `json:"title" binding:"required,min=1,max=200"`
-	Content    string                 `json:"content" binding:"omitempty,max=10000"`
+	Content    string                 `json:"content" binding:"omitempty,max=50000"`
 	Summary    string                 `json:"summary" binding:"omitempty,max=500"`
 	Type       int16                  `json:"type" binding:"omitempty,min=1,max=3"`
 	MediaExtra map[string]interface{} `json:"media_extra" binding:"omitempty"`
@@ -122,13 +122,26 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 		return
 	}
 
+	// 生成摘要：使用专门的工具从 Markdown 内容生成纯文本摘要
+	// 如果用户提供了 summary，则使用用户的；否则从 content 自动生成
+	summary := req.Summary
+	if summary == "" && req.Content != "" {
+		summary = utils.GenerateSummary(req.Content)
+	}
+	summary = strings.TrimSpace(summary)
+
+	// 限制 summary 最大长度为 2000 字符（数据库字段限制）
+	if len(summary) > 2001 {
+		summary = string([]rune(summary)[:2001])
+	}
+
 	// 构建帖子数据模型
 	post := model.Post{
 		CircleID:   req.CircleID,
 		UserID:     int64(userID),
 		Type:       postType,
 		Title:      strings.TrimSpace(req.Title),
-		Summary:    strings.TrimSpace(req.Summary),
+		Summary:    summary,
 		Content:    req.Content,
 		MediaExtra: req.MediaExtra,
 		Status:     postStatus,
@@ -181,9 +194,9 @@ type PostDetailVO struct {
 	LastReplyTime *time.Time           `json:"last_reply_time,omitempty"`
 
 	// 发帖人信息
-	AuthorID     int64  `json:"author_id"`      // 发帖人ID
-	AuthorName   string `json:"author_name"`    // 发帖人用户昵称
-	AuthorAvatar string `json:"author_avatar"`  // 发帖人头像URL
+	AuthorID     int64  `json:"author_id"`     // 发帖人ID
+	AuthorName   string `json:"author_name"`   // 发帖人用户昵称
+	AuthorAvatar string `json:"author_avatar"` // 发帖人头像URL
 
 	// 用户交互状态
 	IsLiked bool `json:"is_liked"` // 当前用户是否点赞了该帖子
@@ -206,7 +219,7 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 		return
 	}
 
-	// 1. 获取帖子信息
+	// 1. 获取帖子信息（不限制status，先查出来再判断权限）
 	post, err := model.GetPostByID(pgsql.DB, postID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
@@ -214,6 +227,12 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 			return
 		}
 		response.InternalError(c, "Failed to get post")
+		return
+	}
+
+	// 2. 权限检查：如果是作者本人，可以查看所有状态的帖子；如果是其他用户，只能查看已发布的帖子（status=1）
+	if int64(userID) != post.UserID && post.Status != model.PostStatusPublished {
+		response.NotFound(c, "Post not found")
 		return
 	}
 
@@ -314,41 +333,74 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 		return
 	}
 
-	// 构建帖子列表VO，包含发帖人信息
+	// 构建帖子列表VO，包含发帖人信息和圈子信息
 	posts := make([]PostListVO, 0, len(result.Posts))
+
+	// 批量收集所有的用户ID和圈子ID
+	userIDs := make([]int64, 0, len(result.Posts))
+	circleIDs := make([]int64, 0, len(result.Posts))
+	userIDSet := make(map[int64]struct{})
+	circleIDSet := make(map[int64]struct{})
+
 	for _, doc := range result.Posts {
-		// 查询发帖人信息
+		if _, exists := userIDSet[doc.UserID]; !exists {
+			userIDSet[doc.UserID] = struct{}{}
+			userIDs = append(userIDs, doc.UserID)
+		}
+		if _, exists := circleIDSet[doc.CircleID]; !exists {
+			circleIDSet[doc.CircleID] = struct{}{}
+			circleIDs = append(circleIDs, doc.CircleID)
+		}
+	}
+
+	// 批量查询用户信息和圈子信息
+	userMap, _ := model.GetUsersByIDs(pgsql.DB, userIDs)
+	circleMap, _ := model.GetCirclesByIDs(pgsql.DB, circleIDs)
+
+	// 构建返回数据
+	for _, doc := range result.Posts {
+		// 从map中获取发帖人信息
 		var authorName string
 		var authorAvatar string
 
-		author, err := model.GetUserByID(pgsql.DB, doc.UserID)
-		if err == nil && author != nil {
+		if author, exists := userMap[doc.UserID]; exists {
 			authorName = author.Username
 			authorAvatar = author.AvatarURL
+		}
+
+		// 从map中获取圈子信息
+		var circleName string
+		var circleAvatar string
+
+		if circle, exists := circleMap[doc.CircleID]; exists {
+			circleName = circle.Name
+			circleAvatar = circle.AvatarURL
 		}
 
 		// 解析时间字符串为 time.Time
 		createTime, _ := time.Parse(time.RFC3339Nano, doc.CreateTime)
 
 		post := PostListVO{
-			ID:            doc.ID,
-			CircleID:      doc.CircleID,
-			UserID:        doc.UserID,
-			Type:          doc.Type,
-			Title:         doc.Title,
-			Summary:       doc.Summary,
-			Content:       doc.Content,
-			ViewCount:     doc.ViewCount,
-			CommentCount:  doc.CommentCount,
-			LikeCount:     doc.LikeCount,
-			CollectCount:  doc.CollectCount,
-			IsPinned:      doc.IsPinned,
-			IsEssence:     doc.IsEssence,
-			IsLock:        doc.IsLock,
-			Status:        doc.Status,
-			CreateTime:    createTime,
-			AuthorName:    authorName,
-			AuthorAvatar:  authorAvatar,
+			ID:           doc.ID,
+			CircleID:     doc.CircleID,
+			UserID:       doc.UserID,
+			Type:         doc.Type,
+			Title:        doc.Title,
+			Summary:      doc.Summary,
+			Content:      doc.Content,
+			ViewCount:    doc.ViewCount,
+			CommentCount: doc.CommentCount,
+			LikeCount:    doc.LikeCount,
+			CollectCount: doc.CollectCount,
+			IsPinned:     doc.IsPinned,
+			IsEssence:    doc.IsEssence,
+			IsLock:       doc.IsLock,
+			Status:       doc.Status,
+			CreateTime:   createTime,
+			AuthorName:   authorName,
+			AuthorAvatar: authorAvatar,
+			CircleName:   circleName,
+			CircleAvatar: circleAvatar,
 		}
 		posts = append(posts, post)
 	}
@@ -394,4 +446,8 @@ type PostListVO struct {
 	// 发帖人信息
 	AuthorName   string `json:"author_name"`   // 发帖人用户昵称
 	AuthorAvatar string `json:"author_avatar"` // 发帖人头像URL
+
+	// 圈子信息
+	CircleName   string `json:"circle_name"`   // 圈子名称
+	CircleAvatar string `json:"circle_avatar"` // 圈子头像URL
 }

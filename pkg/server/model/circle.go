@@ -56,6 +56,27 @@ func GetCircleByID(db *gorm.DB, circleID int64) (*Circle, error) {
 	return &circle, nil
 }
 
+// GetCirclesByIDs 根据圈子ID列表批量获取圈子信息
+func GetCirclesByIDs(db *gorm.DB, circleIDs []int64) (map[int64]*Circle, error) {
+	if len(circleIDs) == 0 {
+		return make(map[int64]*Circle), nil
+	}
+
+	var circles []Circle
+	err := db.Where("id IN ? AND deleted = ?", circleIDs, 0).Find(&circles).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// 将圈子切片转换为以ID为key的map，方便快速查找
+	circleMap := make(map[int64]*Circle, len(circles))
+	for i := range circles {
+		circleMap[circles[i].ID] = &circles[i]
+	}
+
+	return circleMap, nil
+}
+
 // GetCircleBySlug 根据Slug获取圈子信息
 func GetCircleBySlug(db *gorm.DB, slug string) (*Circle, error) {
 	var circle Circle

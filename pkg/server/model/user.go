@@ -41,3 +41,24 @@ func GetUserByID(db *gorm.DB, userID int64) (*SysUser, error) {
 	}
 	return &user, nil
 }
+
+// GetUsersByIDs 根据用户ID列表批量获取用户信息
+func GetUsersByIDs(db *gorm.DB, userIDs []int64) (map[int64]*SysUser, error) {
+	if len(userIDs) == 0 {
+		return make(map[int64]*SysUser), nil
+	}
+
+	var users []SysUser
+	err := db.Where("id IN ? AND deleted = ?", userIDs, 0).Find(&users).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// 将用户切片转换为以ID为key的map，方便快速查找
+	userMap := make(map[int64]*SysUser, len(users))
+	for i := range users {
+		userMap[users[i].ID] = &users[i]
+	}
+
+	return userMap, nil
+}
