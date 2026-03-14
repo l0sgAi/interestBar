@@ -315,7 +315,7 @@ CREATE TABLE post (
     -- 7. 时间字段
     create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    last_reply_time TIMESTAMPTZ -- 最后回复时间 (用于"按最新回复排序"的传统论坛模式，可选)
+    last_reply_time TIMESTAMPTZ -- 最后回复时间
 );
 
 -- --- 注释 ---

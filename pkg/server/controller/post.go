@@ -154,7 +154,7 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 	response.SuccessWithMessage(c, "发帖成功", post.ID)
 }
 
-// PostDetailVO 帖子详情VO（包含Post所有字段 + 用户点赞状态）
+// PostDetailVO 帖子详情VO（包含Post所有字段 + 用户点赞状态 + 发帖人信息）
 type PostDetailVO struct {
 	// Post 所有字段
 	ID            int64                `json:"id"`
@@ -177,6 +177,11 @@ type PostDetailVO struct {
 	CreateTime    time.Time            `json:"create_time"`
 	UpdateTime    time.Time            `json:"update_time"`
 	LastReplyTime *time.Time           `json:"last_reply_time,omitempty"`
+
+	// 发帖人信息
+	AuthorID     int64  `json:"author_id"`      // 发帖人ID
+	AuthorName   string `json:"author_name"`    // 发帖人用户昵称
+	AuthorAvatar string `json:"author_avatar"`  // 发帖人头像URL
 
 	// 用户交互状态
 	IsLiked bool `json:"is_liked"` // 当前用户是否点赞了该帖子
@@ -222,7 +227,19 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 	// 	_ = model.IncrementViewCount(pgsql.DB, postID)
 	// }()
 
-	// 4. 组装VO
+	// 4. 查询发帖人信息
+	var authorID int64 = post.UserID
+	var authorName string
+	var authorAvatar string
+
+	author, err := model.GetUserByID(pgsql.DB, post.UserID)
+	if err == nil && author != nil {
+		authorID = author.ID
+		authorName = author.Username
+		authorAvatar = author.AvatarURL
+	}
+
+	// 5. 组装VO
 	vo := PostDetailVO{
 		ID:            post.ID,
 		CircleID:      post.CircleID,
@@ -244,6 +261,9 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 		CreateTime:    post.CreateTime,
 		UpdateTime:    post.UpdateTime,
 		LastReplyTime: post.LastReplyTime,
+		AuthorID:      authorID,
+		AuthorName:    authorName,
+		AuthorAvatar:  authorAvatar,
 		IsLiked:       isLiked,
 	}
 
