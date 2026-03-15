@@ -17,7 +17,7 @@ type Post struct {
 	Title         string         `json:"title" gorm:"column:title;type:varchar(200);default:''"`          // 标题
 	Summary       string         `json:"summary" gorm:"column:summary;type:varchar(2000);default:''"`      // 摘要
 	Content       string         `json:"content" gorm:"column:content;type:text;default:''"`              // 正文
-	MediaExtra    MediaExtraJSON `json:"media_extra" gorm:"column:media_extra;type:jsonb;default:'{}'::jsonb"` // 媒体扩展信息
+	MediaExtra    MediaExtraJSON `json:"media_extra" gorm:"column:media_extra;type:jsonb;default:'[]'::jsonb"` // 媒体扩展信息
 	ViewCount     int            `json:"view_count" gorm:"column:view_count;default:0"`                   // 浏览量
 	CommentCount  int            `json:"comment_count" gorm:"column:comment_count;default:0"`             // 评论数
 	LikeCount     int            `json:"like_count" gorm:"column:like_count;default:0"`                   // 点赞数
@@ -66,6 +66,13 @@ func (m *MediaExtraJSON) Scan(value interface{}) error {
 	if !ok {
 		return nil
 	}
+
+	// 兼容老数据：如果是空对象 {}，转换为空数组
+	if string(bytes) == "{}" {
+		*m = make(MediaExtraJSON, 0)
+		return nil
+	}
+
 	return json.Unmarshal(bytes, m)
 }
 

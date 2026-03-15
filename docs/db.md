@@ -292,8 +292,8 @@ CREATE TABLE post (
 
     -- 3. 多媒体与扩展
     -- 存储图片URL列表、视频封面/地址、链接卡片信息等
-    -- 结构示例: { "images": ["url1", "url2"], "video": {"url": "...", "cover": "..."}, "vote_id": 123 }
-    media_extra JSONB NOT NULL DEFAULT '{}'::JSONB,
+    -- 结构示例: ["url1", "url2", "url3"]
+    media_extra JSONB NOT NULL DEFAULT '[]'::JSONB,
 
     -- 4. 统计数据
     view_count INT NOT NULL DEFAULT 0,    -- 浏览量
