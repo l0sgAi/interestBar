@@ -53,13 +53,13 @@ const (
 	PostStatusBlocked    = 4 // 被屏蔽(软删/违规)
 )
 
-// MediaExtraJSON 媒体扩展信息JSON类型
-type MediaExtraJSON map[string]interface{}
+// MediaExtraJSON 媒体扩展信息JSON类型（存储图片URL数组）
+type MediaExtraJSON []string
 
 // Scan 实现 sql.Scanner 接口
 func (m *MediaExtraJSON) Scan(value interface{}) error {
 	if value == nil {
-		*m = make(MediaExtraJSON)
+		*m = make(MediaExtraJSON, 0)
 		return nil
 	}
 	bytes, ok := value.([]byte)
@@ -72,7 +72,7 @@ func (m *MediaExtraJSON) Scan(value interface{}) error {
 // Value 实现 driver.Valuer 接口
 func (m MediaExtraJSON) Value() (driver.Value, error) {
 	if len(m) == 0 {
-		return []byte("{}"), nil
+		return []byte("[]"), nil
 	}
 	return json.Marshal(m)
 }

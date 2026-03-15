@@ -31,7 +31,7 @@ type CreatePostRequest struct {
 	Content    string                 `json:"content" binding:"omitempty,max=50000"`
 	Summary    string                 `json:"summary" binding:"omitempty,max=500"`
 	Type       int16                  `json:"type" binding:"omitempty,min=1,max=3"`
-	MediaExtra map[string]interface{} `json:"media_extra" binding:"omitempty"`
+	MediaExtra []string `json:"media_extra" binding:"omitempty"`
 	Status     int16                  `json:"status" binding:"omitempty,min=0,max=4"`
 }
 
@@ -148,9 +148,9 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 		Deleted:    0,
 	}
 
-	// 如果没有提供 MediaExtra，设置为空 map
+	// 如果没有提供 MediaExtra，设置为空数组
 	if post.MediaExtra == nil {
-		post.MediaExtra = make(model.MediaExtraJSON)
+		post.MediaExtra = make(model.MediaExtraJSON, 0)
 	}
 
 	// 创建帖子（会更新圈子的帖子计数）
