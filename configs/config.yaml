@@ -79,3 +79,12 @@ rabbitmq:
   retry:
     max_attempts: 3 # 最大重试次数
 
+# Redpanda 配置 (Kafka兼容)
+redpanda:
+  brokers:
+    - "192.168.200.132:9092"
+  topic: "circle_statistics" # 统计数据topic
+  consumer_group: "circle_statistics_consumer_group" # 消费者组
+  flush_interval: 27 # 消费者刷新间隔(分钟)
+  flush_messages: 1000 # 消费者批量刷新消息数量阈值
+

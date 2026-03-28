@@ -9,7 +9,7 @@ import (
 	s3storage "interestBar/pkg/server/storage/s3"
 	"interestBar/pkg/server/storage/db/pgsql"
 	"interestBar/pkg/server/storage/elasticsearch"
-	rabbitmq "interestBar/pkg/server/storage/rabbitmq"
+	redpanda "interestBar/pkg/server/storage/redpanda"
 	"interestBar/pkg/server/storage/redis"
 	"os"
 	"os/signal"
@@ -49,13 +49,13 @@ func Run(configPath string) {
 		logger.Log.Info("Running without Elasticsearch search functionality")
 	}
 
-	// 8. Init RabbitMQ for async message processing
-	if err := rabbitmq.InitRabbitMQ(); err != nil {
-		logger.Log.Warn("Failed to initialize RabbitMQ: " + err.Error())
-		logger.Log.Info("Running without RabbitMQ message queue functionality")
+	// 8. Init Redpanda for async statistics persistence
+	if err := redpanda.InitRedpandaProducer(); err != nil {
+		logger.Log.Warn("Failed to initialize Redpanda producer: " + err.Error())
+		logger.Log.Info("Running without Redpanda message queue functionality")
 	} else {
-		// 启动消费者处理成员计数聚合（PG+Redis）
-		go rabbitmq.StartMemberCountConsumerWithRetry()
+		// 启动消费者处理统计信息聚合（PostgreSQL持久化）
+		go redpanda.StartStatisticsConsumerWithRetry()
 	}
 
 	// 9. Init Router
@@ -80,5 +80,6 @@ func Run(configPath string) {
 	// Close resources
 	redis.CloseRedis()
 	auth.CloseSaToken()
+	redpanda.CloseRedpandaProducer()
 	logger.Log.Info("Server shutdown complete")
 }

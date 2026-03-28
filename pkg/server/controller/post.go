@@ -8,6 +8,7 @@ import (
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
 	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
+	redpanda "interestBar/pkg/server/storage/redpanda"
 	redispkg "interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
 	"strings"
@@ -163,6 +164,12 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 	if err := redispkg.IncrementCirclePostCount(post.CircleID); err != nil {
 		// 缓存更新失败记录日志，但不影响主流程
 		logger.Log.Error("Failed to increment circle post count: " + err.Error())
+	}
+
+	// 发送Redpanda消息用于持久化到数据库
+	if err := redpanda.PublishCirclePostCount(post.CircleID); err != nil {
+		// 仅记录日志，不影响主流程
+		logger.Log.Error("Failed to publish post count message: " + err.Error())
 	}
 
 	// 返回创建成功消息和帖子ID

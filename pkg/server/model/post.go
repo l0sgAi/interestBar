@@ -218,20 +218,8 @@ func DecrementLikeCount(db *gorm.DB, postID int64) error {
 		UpdateColumn("like_count", gorm.Expr("like_count - ?", 1)).Error
 }
 
-// CreatePost 创建帖子（包含权限校验）
+// CreatePost 创建帖子
+// 注意：帖子计数的持久化由Redpanda异步处理，Redis缓存由controller层实时更新
 func CreatePost(db *gorm.DB, post *Post) error {
-	return db.Transaction(func(tx *gorm.DB) error {
-		// 1. 插入帖子
-		if err := tx.Create(post).Error; err != nil {
-			return err
-		}
-
-		// 2. 更新圈子的帖子计数
-		if err := tx.Model(&Circle{}).Where("id = ?", post.CircleID).
-			UpdateColumn("post_count", gorm.Expr("post_count + ?", 1)).Error; err != nil {
-			return err
-		}
-
-		return nil
-	})
+	return db.Create(post).Error
 }

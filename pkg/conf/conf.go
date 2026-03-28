@@ -21,6 +21,7 @@ type AppConfig struct {
 	S3           S3           `mapstructure:"s3" json:"s3" yaml:"s3"`
 	Elasticsearch Elasticsearch `mapstructure:"elasticsearch" json:"elasticsearch" yaml:"elasticsearch"`
 	RabbitMQ     RabbitMQ     `mapstructure:"rabbitmq" json:"rabbitmq" yaml:"rabbitmq"`
+	Redpanda     Redpanda     `mapstructure:"redpanda" json:"redpanda" yaml:"redpanda"`
 }
 
 type Server struct {
@@ -127,6 +128,15 @@ type RabbitMQ struct {
 // RabbitMQRetry RabbitMQ 重试配置
 type RabbitMQRetry struct {
 	MaxAttempts int `mapstructure:"max_attempts" json:"max_attempts" yaml:"max_attempts"`
+}
+
+// Redpanda Redpanda配置
+type Redpanda struct {
+	Brokers         []string `mapstructure:"brokers" json:"brokers" yaml:"brokers"`
+	Topic           string   `mapstructure:"topic" json:"topic" yaml:"topic"`
+	ConsumerGroup   string   `mapstructure:"consumer_group" json:"consumer_group" yaml:"consumer_group"`
+	FlushInterval   int      `mapstructure:"flush_interval" json:"flush_interval" yaml:"flush_interval"`
+	FlushMessages   int      `mapstructure:"flush_messages" json:"flush_messages" yaml:"flush_messages"`
 }
 
 func InitConfig(path string) {

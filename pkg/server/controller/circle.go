@@ -8,7 +8,7 @@ import (
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
 	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
-	rabbitmq "interestBar/pkg/server/storage/rabbitmq"
+	redpanda "interestBar/pkg/server/storage/redpanda"
 	redispkg "interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
 	"strings"
@@ -376,7 +376,7 @@ func (ctrl *CircleController) JoinCircle(c *gin.Context) {
 		return
 	}
 
-	// 4. 如果直接加入成功（不需要审核），立即更新Redis缓存并发送MQ消息持久化
+	// 4. 如果直接加入成功（不需要审核），立即更新Redis缓存并发送Redpanda消息持久化
 	if member.Status == model.MemberStatusNormal {
 		// 4.1 立即更新Redis缓存（实时计数，含缓存恢复逻辑）
 		if err := incrementCircleMemberCount(req.CircleID); err != nil {
@@ -384,8 +384,8 @@ func (ctrl *CircleController) JoinCircle(c *gin.Context) {
 			logger.Log.Error("Failed to update Redis member count: " + err.Error())
 		}
 
-		// 4.2 发送MQ消息用于持久化到数据库
-		if err := rabbitmq.PublishJoinMsg(req.CircleID, 1); err != nil {
+		// 4.2 发送Redpanda消息用于持久化到数据库
+		if err := redpanda.PublishCircleMemberCount(req.CircleID, 1); err != nil {
 			// 仅记录日志，不影响主流程
 			logger.Log.Error("Failed to publish join message: " + err.Error())
 		}
@@ -533,7 +533,7 @@ func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
 		return
 	}
 
-	// 4. 如果成员状态为正常，立即更新Redis缓存并发送MQ消息持久化
+	// 4. 如果成员状态为正常，立即更新Redis缓存并发送Redpanda消息持久化
 	if member.Status == model.MemberStatusNormal {
 		// 4.1 立即更新Redis缓存（实时计数，含缓存恢复逻辑）
 		if err := decrementCircleMemberCount(req.CircleID); err != nil {
@@ -541,8 +541,8 @@ func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
 			logger.Log.Error("Failed to update Redis member count: " + err.Error())
 		}
 
-		// 4.2 发送MQ消息用于持久化到数据库
-		if err := rabbitmq.PublishJoinMsg(req.CircleID, -1); err != nil {
+		// 4.2 发送Redpanda消息用于持久化到数据库
+		if err := redpanda.PublishCircleMemberCount(req.CircleID, -1); err != nil {
 			// 仅记录日志，不影响主流程
 			logger.Log.Error("Failed to publish leave message: " + err.Error())
 		}
