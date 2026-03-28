@@ -13,6 +13,7 @@ import (
 	"interestBar/pkg/server/storage/redis"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 )
 
@@ -51,9 +52,14 @@ func Run(configPath string) {
 
 	// 8. Init Redpanda for async statistics persistence
 	if err := redpanda.InitRedpandaProducer(); err != nil {
-		logger.Log.Warn("Failed to initialize Redpanda producer: " + err.Error())
-		logger.Log.Info("Running without Redpanda message queue functionality")
+		logger.Log.Error(fmt.Sprintf("Failed to initialize Redpanda producer: %s", err.Error()))
+		logger.Log.Warn("Circle statistics persistence to database is disabled. Redis cache will still be updated in real-time.")
+		logger.Log.Info("To enable Redpanda:")
+		logger.Log.Info("  1. Check Redpanda is running at: " + strings.Join(conf.Config.Redpanda.Brokers, ","))
+		logger.Log.Info("  2. Verify network connectivity to Redpanda brokers")
+		logger.Log.Info("  3. Ensure topic 'circle_statistics' exists or set AllowAutoTopicCreation=true")
 	} else {
+		logger.Log.Info("Redpanda producer initialized successfully")
 		// 启动消费者处理统计信息聚合（PostgreSQL持久化）
 		go redpanda.StartStatisticsConsumerWithRetry()
 	}

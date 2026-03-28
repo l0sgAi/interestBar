@@ -7,6 +7,7 @@ import (
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/storage/db/pgsql"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,28 +17,49 @@ import (
 
 // StatisticsAggregator 统计聚合器
 type StatisticsAggregator struct {
-	mu              sync.Mutex
-	circleCounts    map[int64]int64 // circle_id -> 累计成员变化量
-	postCounts      map[int64]int64 // circle_id -> 累计帖子变化量
-	ticker          *time.Ticker
-	stopChan        chan struct{}
-	stopped         bool
+	mu           sync.Mutex
+	circleCounts map[int64]int64 // circle_id -> 累计成员变化量
+	postCounts   map[int64]int64 // circle_id -> 累计帖子变化量
+	ticker       *time.Ticker
+	stopChan     chan struct{}
+	stopped      bool
+}
+
+// containsIgnoreCase 不区分大小写检查字符串是否包含子串
+func containsIgnoreCase(s, substr string) bool {
+	return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
 // StartStatisticsConsumer 启动统计消费者
 func StartStatisticsConsumer() error {
+	// 记录配置信息
+	brokers := conf.Config.Redpanda.Brokers
+	logger.Log.Info(fmt.Sprintf("Initializing Redpanda consumer with brokers: %v (len=%d)", brokers, len(brokers)))
+	if len(brokers) > 0 {
+		logger.Log.Info(fmt.Sprintf("First broker address: %s", brokers[0]))
+	}
+
+	// 创建自定义Dialer（与Producer保持一致）
+	dialer := &kafka.Dialer{
+		Timeout:   10 * time.Second,
+		DualStack: true,
+		// 关键：禁用resolver缓存，避免使用advertised地址
+		Resolver: nil,
+	}
+
 	// 创建Kafka Reader
-	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:        conf.Config.Redpanda.Brokers,
+	r := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:        brokers,
 		Topic:          conf.Config.Redpanda.Topic,
 		GroupID:        conf.Config.Redpanda.ConsumerGroup,
-		MinBytes:       10e3,  // 10KB
-		MaxBytes:       10e6,  // 10MB
+		MinBytes:       10e3,        // 10KB
+		MaxBytes:       10e6,        // 10MB
 		CommitInterval: time.Second, // 自动提交间隔
+		Dialer:         dialer,      // 添加自定义Dialer
 	})
 
-	logger.Log.Info(fmt.Sprintf("Redpanda consumer started: brokers=%v, topic=%s, group=%s",
-		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.Topic, conf.Config.Redpanda.ConsumerGroup))
+	logger.Log.Info(fmt.Sprintf("Redpanda consumer created successfully: brokers=%v, topic=%s, group=%s",
+		brokers, conf.Config.Redpanda.Topic, conf.Config.Redpanda.ConsumerGroup))
 
 	// 创建聚合器
 	aggregator := &StatisticsAggregator{
@@ -52,11 +74,25 @@ func StartStatisticsConsumer() error {
 
 	// 启动消息接收协程
 	go func() {
-		defer reader.Close()
+		defer r.Close()
 		for {
-			msg, err := reader.ReadMessage(context.Background())
+			msg, err := r.ReadMessage(context.Background())
 			if err != nil {
-				logger.Log.Error("Failed to read message from redpanda: " + err.Error())
+				// 检查是否为"没有数据"的正常情况
+				errStr := err.Error()
+				if containsIgnoreCase(errStr, "no data") ||
+					containsIgnoreCase(errStr, "multiple Read calls return no data") ||
+					containsIgnoreCase(errStr, "context deadline exceeded") ||
+					containsIgnoreCase(errStr, "timeout") {
+					// 队列中没有数据，这是正常情况，使用DEBUG级别
+					logger.Log.Debug("No messages in redpanda queue in 30 minutes, waiting...")
+					// 短暂等待后继续轮询
+					time.Sleep(30 * time.Minute)
+					continue
+				}
+
+				// 其他错误才记录ERROR
+				logger.Log.Error("Failed to read message from redpanda: " + errStr)
 				// 短暂等待后重试
 				time.Sleep(5 * time.Second)
 				continue

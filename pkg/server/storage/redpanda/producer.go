@@ -11,23 +11,55 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-var writer *kafka.Writer
+var (
+	dialer *kafka.Dialer
+	writer *kafka.Writer
+)
 
 // InitRedpandaProducer 初始化Redpanda Producer
 func InitRedpandaProducer() error {
+	// 创建自定义Dialer，设置更长的超时时间
+	dialer = &kafka.Dialer{
+		Timeout:   10 * time.Second, // 连接超时
+		DualStack: true,             // 启用IPv4/IPv6双栈
+	}
+
 	writer = &kafka.Writer{
-		Addr:         kafka.TCP(conf.Config.Redpanda.Brokers...),
-		Topic:        conf.Config.Redpanda.Topic,
-		Balancer:     &kafka.LeastBytes{}, // 使用LeastBytes均衡器
-		BatchTimeout: 10 * time.Millisecond,
-		RequiredAcks: kafka.RequireOne, // 只需要leader确认
-		Compression:  kafka.Snappy,     // 使用Snappy压缩
-		Async:        true,             // 异步发送提升性能
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.Topic,
+		AllowAutoTopicCreation: true, // 自动创建topic
+		Balancer:               &kafka.LeastBytes{}, // 使用LeastBytes均衡器
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne, // 只需要leader确认
+		Compression:            kafka.Snappy,     // 使用Snappy压缩
+		Async:                  true,             // 异步发送提升性能
+		MaxAttempts:            5,                // 增加重试次数
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
 	}
 
 	logger.Log.Info(fmt.Sprintf("Redpanda producer initialized: brokers=%v, topic=%s",
 		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.Topic))
 
+	// 测试连接 - 尝试连接到Redpanda
+	conn, err := dialer.DialContext(context.Background(), "tcp", conf.Config.Redpanda.Brokers[0])
+	if err != nil {
+		return fmt.Errorf("failed to connect to redpanda: %w", err)
+	}
+	defer conn.Close()
+
+	// 设置连接超时
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		return fmt.Errorf("failed to set deadline: %w", err)
+	}
+
+	// 检查连接是否正常
+	_, err = conn.Controller()
+	if err != nil {
+		return fmt.Errorf("failed to get redpanda controller: %w", err)
+	}
+
+	logger.Log.Info("Redpanda connection test successful")
 	return nil
 }
 
