@@ -11,7 +11,6 @@ import (
 	rabbitmq "interestBar/pkg/server/storage/rabbitmq"
 	redispkg "interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
-	"strconv"
 	"strings"
 	"time"
 
@@ -413,31 +412,34 @@ type LeaveCircleRequest struct {
 
 // incrementCircleMemberCount 递增圈子成员计数（含缓存恢复逻辑）
 func incrementCircleMemberCount(circleID int64) error {
-	redisKey := redispkg.GetCircleMemberCountKey(circleID)
-
-	// 先检查键是否存在
-	exists, err := redispkg.Exists(redisKey)
+	// 先检查统计信息Hash是否存在
+	exists, err := redispkg.CircleStatisticsExists(circleID)
 	if err != nil {
-		logger.Log.Error("Failed to check Redis key existence: " + err.Error())
+		logger.Log.Error("Failed to check Redis statistics existence: " + err.Error())
 		// 即使检查失败，也尝试递增（让Redis自己处理）
 	}
 
-	// 如果键不存在，从数据库恢复缓存
-	if exists == 0 {
+	// 如果统计信息不存在，从数据库恢复缓存
+	if !exists {
 		circle, err := model.GetCircleByID(pgsql.DB, circleID)
 		if err != nil {
 			// 数据库查询失败，记录日志但仍尝试递增（Redis会从0开始）
 			logger.Log.Error(fmt.Sprintf("Failed to load circle %d from DB for cache recovery: %s", circleID, err.Error()))
 		} else {
-			// 将数据库的 member_count 设置到 Redis
-			if err := redispkg.Set(redisKey, circle.MemberCount, 24*time.Hour); err != nil {
+			// 将数据库的统计数据设置到 Redis Hash
+			statistics := &redispkg.CircleStatistics{
+				MemberCount: int(circle.MemberCount),
+				PostCount:   int(circle.PostCount),
+				Hot:         int(circle.Hot),
+			}
+			if err := redispkg.UpdateCircleStatistics(circleID, statistics); err != nil {
 				logger.Log.Error("Failed to restore Redis cache from DB: " + err.Error())
 			}
 		}
 	}
 
 	// 执行递增操作
-	if _, err := redispkg.Incr(redisKey, 24*time.Hour); err != nil {
+	if err := redispkg.IncrementCircleMemberCount(circleID); err != nil {
 		return fmt.Errorf("failed to increment member count: %w", err)
 	}
 
@@ -446,31 +448,34 @@ func incrementCircleMemberCount(circleID int64) error {
 
 // decrementCircleMemberCount 递减圈子成员计数（含缓存恢复逻辑）
 func decrementCircleMemberCount(circleID int64) error {
-	redisKey := redispkg.GetCircleMemberCountKey(circleID)
-
-	// 先检查键是否存在
-	exists, err := redispkg.Exists(redisKey)
+	// 先检查统计信息Hash是否存在
+	exists, err := redispkg.CircleStatisticsExists(circleID)
 	if err != nil {
-		logger.Log.Error("Failed to check Redis key existence: " + err.Error())
+		logger.Log.Error("Failed to check Redis statistics existence: " + err.Error())
 		// 即使检查失败，也尝试递减（让Redis自己处理）
 	}
 
-	// 如果键不存在，从数据库恢复缓存
-	if exists == 0 {
+	// 如果统计信息不存在，从数据库恢复缓存
+	if !exists {
 		circle, err := model.GetCircleByID(pgsql.DB, circleID)
 		if err != nil {
 			// 数据库查询失败，记录日志但仍尝试递减（Redis会从0开始变成-1然后重置为0）
 			logger.Log.Error(fmt.Sprintf("Failed to load circle %d from DB for cache recovery: %s", circleID, err.Error()))
 		} else {
-			// 将数据库的 member_count 设置到 Redis
-			if err := redispkg.Set(redisKey, circle.MemberCount, 24*time.Hour); err != nil {
+			// 将数据库的统计数据设置到 Redis Hash
+			statistics := &redispkg.CircleStatistics{
+				MemberCount: int(circle.MemberCount),
+				PostCount:   int(circle.PostCount),
+				Hot:         int(circle.Hot),
+			}
+			if err := redispkg.UpdateCircleStatistics(circleID, statistics); err != nil {
 				logger.Log.Error("Failed to restore Redis cache from DB: " + err.Error())
 			}
 		}
 	}
 
 	// 执行递减操作
-	if _, err := redispkg.Decr(redisKey, 24*time.Hour); err != nil {
+	if err := redispkg.DecrementCircleMemberCount(circleID); err != nil {
 		return fmt.Errorf("failed to decrement member count: %w", err)
 	}
 
@@ -555,27 +560,23 @@ func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
 // getCircleStatistics 从Redis获取圈子统计信息
 // 如果任一计数器不存在，则从数据库恢复所有计数器
 func getCircleStatistics(circleID int64) (memberCount, postCount, hot int, err error) {
-	// 读取3个独立计数器
-	memberCountStr, err1 := redispkg.Get(redispkg.GetCircleMemberCountKey(circleID))
-	postCountStr, err2 := redispkg.Get(redispkg.GetCirclePostCountKey(circleID))
-	hotStr, err3 := redispkg.Get(redispkg.GetCircleHotKey(circleID))
+	// 从Hash读取统计信息
+	stats, err := redispkg.GetCircleStatistics(circleID)
+	if err != nil {
+		logger.Log.Error("Failed to get circle statistics: " + err.Error())
+		return 0, 0, 0, err
+	}
 
-	// 检查是否任一计数器不存在
-	if err1 != nil || err2 != nil || err3 != nil {
-		// 任一计数器缺失，从数据库恢复所有计数器
+	// 如果统计信息不存在，从数据库恢复
+	if stats == nil {
 		logger.Log.Debug(fmt.Sprintf("Circle statistics cache missing for circle %d, restoring from database", circleID))
 		return restoreAllCounters(circleID)
 	}
 
-	// 所有计数器都存在，解析并返回
-	memberCount, _ = strconv.Atoi(memberCountStr)
-	postCount, _ = strconv.Atoi(postCountStr)
-	hot, _ = strconv.Atoi(hotStr)
-
-	return memberCount, postCount, hot, nil
+	return stats.MemberCount, stats.PostCount, stats.Hot, nil
 }
 
-// restoreAllCounters 从数据库重新加载并重建所有计数器
+// restoreAllCounters 从数据库重新加载并重建Hash中的所有统计字段
 func restoreAllCounters(circleID int64) (memberCount, postCount, hot int, err error) {
 	// 从数据库查询完整circle记录
 	circle, err := model.GetCircleByID(pgsql.DB, circleID)
@@ -586,15 +587,20 @@ func restoreAllCounters(circleID int64) (memberCount, postCount, hot int, err er
 		return 0, 0, 0, fmt.Errorf("failed to get circle from database: %w", err)
 	}
 
-	// 批量设置3个计数器（提高性能）
-	redispkg.Set(redispkg.GetCircleMemberCountKey(circleID), circle.MemberCount, 24*time.Hour)
-	redispkg.Set(redispkg.GetCirclePostCountKey(circleID), circle.PostCount, 24*time.Hour)
-	redispkg.Set(redispkg.GetCircleHotKey(circleID), circle.Hot, 24*time.Hour)
+	// 使用Hash批量设置所有统计字段
+	statistics := &redispkg.CircleStatistics{
+		MemberCount: int(circle.MemberCount),
+		PostCount:   int(circle.PostCount),
+		Hot:         int(circle.Hot),
+	}
+	if err := redispkg.UpdateCircleStatistics(circleID, statistics); err != nil {
+		logger.Log.Error("Failed to restore circle statistics cache: " + err.Error())
+	}
 
 	logger.Log.Debug(fmt.Sprintf("Successfully restored circle statistics cache for circle %d: member_count=%d, post_count=%d, hot=%d",
 		circleID, circle.MemberCount, circle.PostCount, circle.Hot))
 
-	return circle.MemberCount, circle.PostCount, circle.Hot, nil
+	return int(circle.MemberCount), int(circle.PostCount), int(circle.Hot), nil
 }
 
 // MyCircleVO 我加入的圈子VO（简化版，只包含基本信息）

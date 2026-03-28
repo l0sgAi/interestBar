@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 
 	"interestBar/pkg/logger"
@@ -228,14 +229,14 @@ func GetJSONCompressed(key string, value interface{}) error {
 	return nil
 }
 
-// UpdateCircleStatistics 更新圈子统计信息缓存
-// 直接更新3个计数器，不使用聚合缓存
+// UpdateCircleStatistics 更新圈子统计信息缓存到Hash
 func UpdateCircleStatistics(circleID int64, statistics *CircleStatistics) error {
-	// 使用Pipeline批量设置3个计数器
+	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
-	pipe.Set(ctx, GetCircleMemberCountKey(circleID), statistics.MemberCount, 24*time.Hour)
-	pipe.Set(ctx, GetCirclePostCountKey(circleID), statistics.PostCount, 24*time.Hour)
-	pipe.Set(ctx, GetCircleHotKey(circleID), statistics.Hot, 24*time.Hour)
+	pipe.HSet(ctx, key, "member_count", statistics.MemberCount)
+	pipe.HSet(ctx, key, "post_count", statistics.PostCount)
+	pipe.HSet(ctx, key, "hot", statistics.Hot)
+	pipe.Expire(ctx, key, 24*time.Hour)
 
 	_, err := pipe.Exec(ctx)
 	if err != nil {
@@ -245,25 +246,132 @@ func UpdateCircleStatistics(circleID int64, statistics *CircleStatistics) error 
 	return nil
 }
 
+// GetCircleStatistics 获取圈子统计信息（从Hash读取）
+func GetCircleStatistics(circleID int64) (*CircleStatistics, error) {
+	key := GetCircleStatsKey(circleID)
+	values, err := Client.HMGet(ctx, key, "member_count", "post_count", "hot").Result()
+	if err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("failed to get circle statistics: %w", err)
+	}
+
+	// 如果任一字段不存在，返回nil表示需要从数据库恢复
+	if values[0] == nil || values[1] == nil || values[2] == nil {
+		return nil, nil
+	}
+
+	stats := &CircleStatistics{}
+	if memberCount, ok := values[0].(string); ok {
+		if mc, err := strconv.Atoi(memberCount); err == nil {
+			stats.MemberCount = mc
+		}
+	}
+	if postCount, ok := values[1].(string); ok {
+		if pc, err := strconv.Atoi(postCount); err == nil {
+			stats.PostCount = pc
+		}
+	}
+	if hot, ok := values[2].(string); ok {
+		if h, err := strconv.Atoi(hot); err == nil {
+			stats.Hot = h
+		}
+	}
+
+	return stats, nil
+}
+
+// CircleStatisticsExists 检查圈子统计信息Hash是否存在（所有字段都存在才返回true）
+func CircleStatisticsExists(circleID int64) (bool, error) {
+	key := GetCircleStatsKey(circleID)
+	exists, err := Client.Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	return exists > 0, nil
+}
+
+// IncrementCircleMemberCount 增加圈子成员数量（原子操作）
+func IncrementCircleMemberCount(circleID int64) error {
+	key := GetCircleStatsKey(circleID)
+	pipe := Client.Pipeline()
+	pipe.HIncrBy(ctx, key, "member_count", 1)
+	pipe.Expire(ctx, key, 24*time.Hour)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to increment member count: %w", err)
+	}
+	return nil
+}
+
+// DecrementCircleMemberCount 减少圈子成员数量（原子操作）
+func DecrementCircleMemberCount(circleID int64) error {
+	key := GetCircleStatsKey(circleID)
+	pipe := Client.Pipeline()
+	decrCmd := pipe.HIncrBy(ctx, key, "member_count", -1)
+	pipe.Expire(ctx, key, 24*time.Hour)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to decrement member count: %w", err)
+	}
+
+	// 检查结果，确保不会小于0
+	newCount := decrCmd.Val()
+	if newCount < 0 {
+		// 如果小于0，重置为0
+		err = Client.HSet(ctx, key, "member_count", 0).Err()
+		if err != nil {
+			return fmt.Errorf("failed to reset negative member count: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // IncrementCirclePostCount 增加圈子帖子数量（原子操作）
 func IncrementCirclePostCount(circleID int64) error {
-	key := GetCirclePostCountKey(circleID)
-	_, err := Incr(key, 24*time.Hour)
-	return err
+	key := GetCircleStatsKey(circleID)
+	pipe := Client.Pipeline()
+	pipe.HIncrBy(ctx, key, "post_count", 1)
+	pipe.Expire(ctx, key, 24*time.Hour)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to increment post count: %w", err)
+	}
+	return nil
 }
 
 // DecrementCirclePostCount 减少圈子帖子数量（原子操作）
 func DecrementCirclePostCount(circleID int64) error {
-	key := GetCirclePostCountKey(circleID)
-	_, err := Decr(key, 24*time.Hour)
-	return err
+	key := GetCircleStatsKey(circleID)
+	pipe := Client.Pipeline()
+	decrCmd := pipe.HIncrBy(ctx, key, "post_count", -1)
+	pipe.Expire(ctx, key, 24*time.Hour)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to decrement post count: %w", err)
+	}
+
+	// 检查结果，确保不会小于0
+	newCount := decrCmd.Val()
+	if newCount < 0 {
+		// 如果小于0，重置为0
+		err = Client.HSet(ctx, key, "post_count", 0).Err()
+		if err != nil {
+			return fmt.Errorf("failed to reset negative post count: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // IncrementCircleHot 增加圈子热度（原子操作）
 func IncrementCircleHot(circleID int64, increment int64) error {
-	key := GetCircleHotKey(circleID)
+	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
-	incrCmd := pipe.IncrBy(ctx, key, increment)
+	incrCmd := pipe.HIncrBy(ctx, key, "hot", increment)
 	pipe.Expire(ctx, key, 24*time.Hour)
 
 	_, err := pipe.Exec(ctx)
@@ -280,9 +388,9 @@ func IncrementCircleHot(circleID int64, increment int64) error {
 
 // DecrementCircleHot 减少圈子热度（原子操作）
 func DecrementCircleHot(circleID int64, decrement int64) error {
-	key := GetCircleHotKey(circleID)
+	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
-	decrCmd := pipe.DecrBy(ctx, key, decrement)
+	decrCmd := pipe.HIncrBy(ctx, key, "hot", -decrement)
 	pipe.Expire(ctx, key, 24*time.Hour)
 
 	_, err := pipe.Exec(ctx)
@@ -294,7 +402,7 @@ func DecrementCircleHot(circleID int64, decrement int64) error {
 	newHot := decrCmd.Val()
 	if newHot < 0 {
 		// 如果小于0，重置为0
-		err = Client.Set(ctx, key, 0, 24*time.Hour).Err()
+		err = Client.HSet(ctx, key, "hot", 0).Err()
 		if err != nil {
 			return fmt.Errorf("failed to reset negative hot: %w", err)
 		}
@@ -307,18 +415,19 @@ func DecrementCircleHot(circleID int64, decrement int64) error {
 }
 
 // BatchUpdateCircleStatistics 批量更新圈子统计信息（用于MQ消费等场景）
-// 直接更新3个计数器，不使用聚合缓存
 func BatchUpdateCircleStatistics(updates map[int64]*CircleStatistics) error {
 	if len(updates) == 0 {
 		return nil
 	}
 
-	// 使用Pipeline批量设置多个圈子的3个计数器
+	// 使用Pipeline批量设置多个圈子的统计信息到Hash
 	pipe := Client.Pipeline()
 	for circleID, stats := range updates {
-		pipe.Set(ctx, GetCircleMemberCountKey(circleID), stats.MemberCount, 24*time.Hour)
-		pipe.Set(ctx, GetCirclePostCountKey(circleID), stats.PostCount, 24*time.Hour)
-		pipe.Set(ctx, GetCircleHotKey(circleID), stats.Hot, 24*time.Hour)
+		key := GetCircleStatsKey(circleID)
+		pipe.HSet(ctx, key, "member_count", stats.MemberCount)
+		pipe.HSet(ctx, key, "post_count", stats.PostCount)
+		pipe.HSet(ctx, key, "hot", stats.Hot)
+		pipe.Expire(ctx, key, 24*time.Hour)
 	}
 
 	_, err := pipe.Exec(ctx)
