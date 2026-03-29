@@ -1,12 +1,14 @@
 package controller
 
 import (
+	"encoding/json"
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/auth"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
+	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
 	"interestBar/pkg/server/utils"
 	"net/http"
 	"strconv"
@@ -393,4 +395,94 @@ func (ctrl *UserController) UpdateProfile(c *gin.Context) {
 		"gender":     user.Gender,
 		"birthdate":  user.Birthdate,
 	})
+}
+
+// SearchUsersRequest 搜索用户的请求结构
+type SearchUsersRequest struct {
+	Keyword     string `form:"keyword"`      // 搜索关键字
+	Size        int    `form:"size"`         // 每页数量，默认20
+	SearchAfter string `form:"search_after"` // 上一页返回的search_after值（JSON字符串）
+}
+
+// UserListItemVO 用户列表项VO
+type UserListItemVO struct {
+	ID         int64  `json:"id"`
+	Username   string `json:"username"`
+	Email      string `json:"email"`
+	AvatarURL  string `json:"avatar_url"`
+	Gender     int8   `json:"gender"`
+	Role       int8   `json:"role"`
+	CreateTime string `json:"create_time"`
+}
+
+// SearchUsers 搜索用户
+// GET /user/search
+func (ctrl *UserController) SearchUsers(c *gin.Context) {
+	// 解析请求参数
+	var req SearchUsersRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		response.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	// 设置默认每页数量
+	size := req.Size
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	// 解析 search_after 参数
+	var searchAfter []interface{}
+	if req.SearchAfter != "" {
+		if err := c.ShouldBindQuery(&req); err != nil {
+			response.BadRequest(c, "Invalid search_after parameter")
+			return
+		}
+		if err := json.Unmarshal([]byte(req.SearchAfter), &searchAfter); err != nil {
+			response.BadRequest(c, "Invalid search_after parameter")
+			return
+		}
+	}
+
+	// 调用 Elasticsearch 搜索
+	result, err := elasticsearch.SearchUsers(req.Keyword, size, searchAfter)
+	if err != nil {
+		logger.Log.Error("Failed to search users: " + err.Error())
+		response.InternalError(c, "Failed to search users")
+		return
+	}
+
+	// 构建用户列表VO
+	users := make([]UserListItemVO, 0, len(result.Users))
+	for _, doc := range result.Users {
+		user := UserListItemVO{
+			ID:         doc.ID,
+			Username:   doc.Username,
+			Email:      doc.Email,
+			AvatarURL:  doc.AvatarURL,
+			Gender:     doc.Gender,
+			Role:       doc.Role,
+			CreateTime: doc.CreateTime,
+		}
+		users = append(users, user)
+	}
+
+	// 将 search_after 转换为 JSON 字符串返回
+	var searchAfterJSON string
+	if result.SearchAfter != nil {
+		if bytes, err := json.Marshal(result.SearchAfter); err == nil {
+			searchAfterJSON = string(bytes)
+		}
+	}
+
+	// 构建响应数据
+	responseData := map[string]interface{}{
+		"users":        users,
+		"total":        result.Total,
+		"size":         result.Size,
+		"search_after": searchAfterJSON,
+	}
+
+	response.Success(c, responseData)
 }
