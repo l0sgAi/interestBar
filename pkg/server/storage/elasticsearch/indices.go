@@ -12,7 +12,7 @@ const (
 	// IndexPost 帖子索引名称
 	IndexPost = "post"
 	// IndexUser 用户索引名称（预留）
-	IndexUser = "user"
+	IndexUser = "users"
 	// IndexComment 评论索引名称（预留）
 	IndexComment = "comment"
 )

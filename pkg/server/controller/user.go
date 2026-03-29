@@ -478,10 +478,10 @@ func (ctrl *UserController) SearchUsers(c *gin.Context) {
 
 	// 构建响应数据
 	responseData := map[string]interface{}{
-		"users":        users,
 		"total":        result.Total,
 		"size":         result.Size,
 		"search_after": searchAfterJSON,
+		"data":         users,
 	}
 
 	response.Success(c, responseData)
