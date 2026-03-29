@@ -2,6 +2,7 @@ package controller
 
 import (
 	"encoding/json"
+	"fmt"
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/auth"
@@ -9,6 +10,7 @@ import (
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
 	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
+	redispkg "interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
 	"net/http"
 	"strconv"
@@ -485,4 +487,61 @@ func (ctrl *UserController) SearchUsers(c *gin.Context) {
 	}
 
 	response.Success(c, responseData)
+}
+
+// GetUserDetail 获取用户详情
+// GET /user/detail/:id
+func (ctrl *UserController) GetUserDetail(c *gin.Context) {
+	// 获取用户ID参数
+	userIDStr := c.Param("id")
+	var userID int64
+	if _, err := fmt.Sscanf(userIDStr, "%d", &userID); err != nil || userID <= 0 {
+		response.BadRequest(c, "Invalid user id")
+		return
+	}
+
+	// 定义缓存key
+	redisKey := redispkg.GetUserInfoKey(userID)
+
+	// 1. 先尝试从缓存获取用户信息
+	var user model.SysUser
+	err := redispkg.GetJSONCompressed(redisKey, &user)
+
+	if err == nil {
+		// 缓存命中，验证用户状态
+		if user.Status != 1 || user.Deleted != 0 {
+			response.NotFound(c, "No such user")
+			return
+		}
+		// 直接返回缓存数据
+		response.Success(c, user)
+		return
+	}
+
+	// 2. 缓存未命中，从数据库查询
+	dbUser, err := model.GetUserByID(pgsql.DB, userID)
+	if err != nil {
+		response.InternalError(c, "Failed to get user info")
+		return
+	}
+
+	if dbUser == nil {
+		response.NotFound(c, "No such user")
+		return
+	}
+
+	// 3. 验证用户状态（只返回status=1且deleted=0的用户）
+	if dbUser.Status != 1 || dbUser.Deleted != 0 {
+		response.NotFound(c, "No such user")
+		return
+	}
+
+	// 4. 写入缓存（30分钟过期）
+	if err := redispkg.SetJSONCompressed(redisKey, dbUser, 30*time.Minute); err != nil {
+		// 缓存写入失败记录日志，但不影响主流程
+		logger.Log.Error("Failed to cache user info: " + err.Error())
+	}
+
+	// 5. 返回用户信息
+	response.Success(c, dbUser)
 }

@@ -18,6 +18,11 @@ const (
 	// 包含字段：member_count, post_count, hot
 	CircleStatsPrefix = "circle:stats:"
 
+	// UserInfoPrefix 用户基础信息缓存key前缀
+	// 完整key格式: user:info:{user_id}
+	// 包含字段：id, username, email, phone, google_id, github_id, avatar_url, gender, birthdate, status, role, deleted, create_time, update_time
+	UserInfoPrefix = "user:info:"
+
 	// UserJoinedCirclesPrefix 用户已加入圈子ID列表缓存key前缀
 	// 完整key格式: user_joined_circles:{user_id}
 	// 存储内容：[]int64 圈子ID列表，按加入时间倒序排列
@@ -53,6 +58,11 @@ type CircleStatistics struct {
 // GetUserJoinedCirclesKey 获取用户已加入圈子ID列表缓存的完整key
 func GetUserJoinedCirclesKey(userID int64) string {
 	return UserJoinedCirclesPrefix + fmt.Sprint(userID)
+}
+
+// GetUserInfoKey 获取用户基础信息缓存的完整key
+func GetUserInfoKey(userID int64) string {
+	return UserInfoPrefix + fmt.Sprint(userID)
 }
 
 // GetCircleInfoKey 获取圈子基础信息缓存的完整key
