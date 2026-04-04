@@ -34,6 +34,32 @@ const (
 	CommentStatusHidden   = 3 // 折叠/隐藏
 )
 
+// CreateComment 创建评论（事务内同时更新帖子评论计数）
+func CreateComment(db *gorm.DB, comment *Comment) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		// 1. 插入评论
+		if err := tx.Create(comment).Error; err != nil {
+			return err
+		}
+
+		// 2. 如果是回复（root_id > 0），增加根评论的回复计数
+		if comment.RootID > 0 {
+			if err := tx.Model(&Comment{}).Where("id = ?", comment.RootID).
+				UpdateColumn("reply_count", gorm.Expr("reply_count + ?", 1)).Error; err != nil {
+				return err
+			}
+		}
+
+		// 3. 增加帖子的评论计数
+		if err := tx.Model(&Post{}).Where("id = ?", comment.PostID).
+			UpdateColumn("comment_count", gorm.Expr("comment_count + ?", 1)).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+}
+
 // GetCommentByID 根据ID获取评论
 func GetCommentByID(db *gorm.DB, commentID int64) (*Comment, error) {
 	var comment Comment

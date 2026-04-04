@@ -70,6 +70,18 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		post.GET("/detail/:id", sagin.CheckLogin(), postCtrl.GetPostDetail)
 	}
 
+	// Comment routes (需要登录鉴权)
+	commentCtrl := controller.NewCommentController()
+	comment := r.Group("comment")
+	{
+		// 发评论/回复 - 需要登录
+		comment.POST("/create", sagin.CheckLogin(), commentCtrl.CreateComment)
+		// 获取评论列表 - 需要登录
+		comment.GET("/list", sagin.CheckLogin(), commentCtrl.GetComments)
+		// 获取评论详情 - 需要登录
+		comment.GET("/detail/:id", sagin.CheckLogin(), commentCtrl.GetCommentDetail)
+	}
+
 	// Category routes
 	categoryCtrl := controller.NewCategoryController()
 	category := r.Group("category")
