@@ -78,6 +78,8 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		comment.POST("/create", sagin.CheckLogin(), commentCtrl.CreateComment)
 		// 获取评论列表 - 需要登录
 		comment.GET("/list", sagin.CheckLogin(), commentCtrl.GetComments)
+		// 获取评论的子回复列表 - 需要登录
+		comment.GET("/replies", sagin.CheckLogin(), commentCtrl.GetReplies)
 		// 获取评论详情 - 需要登录
 		comment.GET("/detail/:id", sagin.CheckLogin(), commentCtrl.GetCommentDetail)
 	}

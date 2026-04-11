@@ -87,4 +87,8 @@ redpanda:
   consumer_group: "circle_statistics_consumer_group" # 消费者组
   flush_interval: 27 # 消费者刷新间隔(分钟)
   flush_messages: 1000 # 消费者批量刷新消息数量阈值
+  post_topic: "post_statistics" # 帖子统计数据topic
+  post_consumer_group: "post_statistics_consumer_group" # 帖子统计消费者组
+  post_flush_interval: 15 # 帖子统计刷新间隔(分钟)
+  post_stats_ttl: 43 # 帖子统计Redis缓存TTL(分钟)
 

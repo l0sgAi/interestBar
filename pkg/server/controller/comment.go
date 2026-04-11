@@ -158,83 +158,100 @@ type CommentVO struct {
 	ReplyToName string `json:"reply_to_name,omitempty"`
 }
 
-// GetCommentsRequest 获取评论列表的请求结构
+// GetCommentsRequest 获取顶层评论列表的请求结构
 type GetCommentsRequest struct {
-	PostID   int64 `form:"post_id" binding:"required,min=1"`
-	RootID   int64 `form:"root_id" binding:"omitempty"`       // 0=获取顶层评论, >0=获取该根评论下的回复
-	Page     int   `form:"page" binding:"omitempty,min=1"`
-	PageSize int   `form:"page_size" binding:"omitempty,min=1,max=100"`
+	PostID int64  `form:"post_id" binding:"required,min=1"`
+	Sort   int    `form:"sort" binding:"omitempty,oneof=0 1"` // 0=点赞倒序(默认), 1=时间倒序
+	Cursor string `form:"cursor"`                             // 游标，首页不传
 }
 
-// GetComments 获取评论列表
+// GetComments 获取帖子的顶层评论列表（游标分页）
 // GET /comment/list
 func (ctrl *CommentController) GetComments(c *gin.Context) {
-	// 解析请求参数
 	var req GetCommentsRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
 		response.BadRequest(c, "Invalid request parameters")
 		return
 	}
 
-	// 默认分页
-	page := req.Page
-	if page <= 0 {
-		page = 1
-	}
-	pageSize := req.PageSize
-	if pageSize <= 0 {
-		pageSize = 20
-	}
-
-	var comments []model.Comment
-	var total int64
-	var err error
-
-	if req.RootID > 0 {
-		// 获取子回复
-		comments, total, err = model.GetSubCommentsByRoot(pgsql.DB, req.RootID, page, pageSize)
-	} else {
-		// 获取顶层评论
-		comments, total, err = model.GetRootCommentsByPost(pgsql.DB, req.PostID, page, pageSize)
-	}
-
+	comments, nextCursor, hasMore, err := model.GetRootCommentsByCursor(pgsql.DB, req.PostID, 20, req.Sort, req.Cursor)
 	if err != nil {
 		response.InternalError(c, "Failed to get comments")
 		return
 	}
 
-	// 批量查询评论者信息
-	userIDs := make([]int64, 0, len(comments))
+	vos := buildCommentVOs(comments)
+
+	response.Success(c, map[string]interface{}{
+		"items":       vos,
+		"has_more":    hasMore,
+		"next_cursor": nextCursor,
+	})
+}
+
+// GetRepliesRequest 获取回复列表的请求结构
+type GetRepliesRequest struct {
+	RootID int64  `form:"root_id" binding:"required,min=1"`
+	Sort   int    `form:"sort" binding:"omitempty,oneof=0 1"` // 0=时间倒序(默认), 1=点赞倒序
+	Cursor string `form:"cursor"`
+}
+
+// GetReplies 获取某条评论的子回复列表（游标分页）
+// GET /comment/replies
+func (ctrl *CommentController) GetReplies(c *gin.Context) {
+	var req GetRepliesRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	// 校验根评论存在且是顶层评论
+	rootComment, err := model.GetCommentByID(pgsql.DB, req.RootID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			response.NotFound(c, "Root comment not found")
+			return
+		}
+		response.InternalError(c, "Failed to check root comment")
+		return
+	}
+	if rootComment.RootID != 0 {
+		response.BadRequest(c, "Not a root comment")
+		return
+	}
+
+	comments, nextCursor, hasMore, err := model.GetRepliesByCursor(pgsql.DB, req.RootID, 5, req.Sort, req.Cursor)
+	if err != nil {
+		response.InternalError(c, "Failed to get replies")
+		return
+	}
+
+	vos := buildCommentVOs(comments)
+
+	response.Success(c, map[string]interface{}{
+		"items":       vos,
+		"has_more":    hasMore,
+		"next_cursor": nextCursor,
+	})
+}
+
+// buildCommentVOs 批量构建 CommentVO（包含评论者信息和被回复人信息）
+func buildCommentVOs(comments []model.Comment) []CommentVO {
+	// 收集所有需要查询的用户ID
 	userIDSet := make(map[int64]struct{})
 	for _, cm := range comments {
-		if _, exists := userIDSet[cm.UserID]; !exists {
-			userIDSet[cm.UserID] = struct{}{}
-			userIDs = append(userIDs, cm.UserID)
+		userIDSet[cm.UserID] = struct{}{}
+		if cm.ReplyToID > 0 {
+			userIDSet[cm.ReplyToID] = struct{}{}
 		}
+	}
+
+	userIDs := make([]int64, 0, len(userIDSet))
+	for id := range userIDSet {
+		userIDs = append(userIDs, id)
 	}
 	userMap, _ := model.GetUsersByIDs(pgsql.DB, userIDs)
 
-	// 收集 reply_to_id 对应的用户
-	replyUserIDs := make([]int64, 0)
-	replyUserIDSet := make(map[int64]struct{})
-	for _, cm := range comments {
-		if cm.ReplyToID > 0 {
-			if _, exists := replyUserIDSet[cm.ReplyToID]; !exists {
-				replyUserIDSet[cm.ReplyToID] = struct{}{}
-				replyUserIDs = append(replyUserIDs, cm.ReplyToID)
-			}
-		}
-	}
-
-	// 查询被回复评论的作者
-	var replyUserMap map[int64]*model.SysUser
-	if len(replyUserIDs) > 0 {
-		replyUserMap, _ = model.GetUsersByIDs(pgsql.DB, replyUserIDs)
-	} else {
-		replyUserMap = make(map[int64]*model.SysUser)
-	}
-
-	// 构建VO
 	vos := make([]CommentVO, 0, len(comments))
 	for _, cm := range comments {
 		vo := CommentVO{
@@ -250,15 +267,13 @@ func (ctrl *CommentController) GetComments(c *gin.Context) {
 			CreateTime: cm.CreateTime.Format("2006-01-02 15:04:05"),
 		}
 
-		// 填充评论者信息
 		if author, exists := userMap[cm.UserID]; exists {
 			vo.AuthorName = author.Username
 			vo.AuthorAvatar = author.AvatarURL
 		}
 
-		// 填充被回复人信息
 		if cm.ReplyToID > 0 {
-			if replyUser, exists := replyUserMap[cm.ReplyToID]; exists {
+			if replyUser, exists := userMap[cm.ReplyToID]; exists {
 				vo.ReplyToName = replyUser.Username
 			}
 		}
@@ -266,7 +281,7 @@ func (ctrl *CommentController) GetComments(c *gin.Context) {
 		vos = append(vos, vo)
 	}
 
-	response.Pagination(c, vos, total, page, pageSize)
+	return vos
 }
 
 // GetCommentDetail 获取单条评论详情

@@ -1,6 +1,8 @@
 package model
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"time"
 
 	"gorm.io/gorm"
@@ -144,4 +146,151 @@ func IncrementReplyCount(db *gorm.DB, rootID int64) error {
 func DecrementReplyCount(db *gorm.DB, rootID int64) error {
 	return db.Model(&Comment{}).Where("id = ?", rootID).
 		UpdateColumn("reply_count", gorm.Expr("reply_count - ?", 1)).Error
+}
+
+// --- 游标分页 ---
+
+// encodeCursor 将 map 编码为 base64 游标字符串
+func encodeCursor(values map[string]interface{}) string {
+	data, _ := json.Marshal(values)
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// decodeCursor 将 base64 游标字符串解码为 map
+func decodeCursor(cursor string) (map[string]interface{}, error) {
+	data, err := base64.StdEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, err
+	}
+	var values map[string]interface{}
+	if err := json.Unmarshal(data, &values); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+// buildNextCursor 根据评论和排序方式构建下一页游标
+func buildNextCursor(comment *Comment, sort int) string {
+	switch sort {
+	case 0: // 按点赞
+		return encodeCursor(map[string]interface{}{
+			"like_count": float64(comment.LikeCount),
+			"id":         float64(comment.ID),
+		})
+	case 1: // 按时间
+		return encodeCursor(map[string]interface{}{
+			"id": float64(comment.ID),
+		})
+	}
+	return ""
+}
+
+// applyCursorCondition 根据游标和排序方式添加 WHERE 条件
+func applyCursorCondition(query *gorm.DB, cursor string, sort int) (*gorm.DB, error) {
+	if cursor == "" {
+		return query, nil
+	}
+
+	values, err := decodeCursor(cursor)
+	if err != nil {
+		return nil, err
+	}
+
+	switch sort {
+	case 0: // 按点赞倒序：keyset (like_count, id)
+		likeCount := int64(values["like_count"].(float64))
+		id := int64(values["id"].(float64))
+		query = query.Where(
+			"(like_count < ?) OR (like_count = ? AND id < ?)",
+			likeCount, likeCount, id,
+		)
+	case 1: // 按时间倒序：id DESC
+		id := int64(values["id"].(float64))
+		query = query.Where("id < ?", id)
+	}
+
+	return query, nil
+}
+
+// applyOrderBy 根据排序方式添加 ORDER BY
+func applyOrderBy(query *gorm.DB, sort int) *gorm.DB {
+	switch sort {
+	case 0: // 按点赞倒序
+		return query.Order("like_count DESC, id DESC")
+	case 1: // 按时间倒序
+		return query.Order("id DESC")
+	}
+	return query.Order("id DESC")
+}
+
+// GetRootCommentsByCursor 游标分页获取帖子的顶层评论
+// sort: 0=按点赞倒序, 1=按时间倒序
+// 返回评论列表、下一页游标、是否有更多、错误
+func GetRootCommentsByCursor(db *gorm.DB, postID int64, size, sort int, cursor string) ([]Comment, string, bool, error) {
+	query := db.Model(&Comment{}).Where("post_id = ? AND root_id = 0 AND deleted = 0", postID)
+
+	// 应用游标条件
+	var err error
+	query, err = applyCursorCondition(query, cursor, sort)
+	if err != nil {
+		return nil, "", false, err
+	}
+
+	// 排序
+	query = applyOrderBy(query, sort)
+
+	// 多查一条判断 has_more
+	var comments []Comment
+	if err := query.Limit(size + 1).Find(&comments).Error; err != nil {
+		return nil, "", false, err
+	}
+
+	hasMore := len(comments) > size
+	if hasMore {
+		comments = comments[:size]
+	}
+
+	// 构建下一页游标
+	var nextCursor string
+	if hasMore && len(comments) > 0 {
+		nextCursor = buildNextCursor(&comments[len(comments)-1], sort)
+	}
+
+	return comments, nextCursor, hasMore, nil
+}
+
+// GetRepliesByCursor 游标分页获取某条评论的子回复
+// sort: 0=按时间倒序, 1=按点赞倒序
+// 返回评论列表、下一页游标、是否有更多、错误
+func GetRepliesByCursor(db *gorm.DB, rootID int64, size, sort int, cursor string) ([]Comment, string, bool, error) {
+	query := db.Model(&Comment{}).Where("root_id = ? AND deleted = 0", rootID)
+
+	// 应用游标条件
+	var err error
+	query, err = applyCursorCondition(query, cursor, sort)
+	if err != nil {
+		return nil, "", false, err
+	}
+
+	// 排序
+	query = applyOrderBy(query, sort)
+
+	// 多查一条判断 has_more
+	var comments []Comment
+	if err := query.Limit(size + 1).Find(&comments).Error; err != nil {
+		return nil, "", false, err
+	}
+
+	hasMore := len(comments) > size
+	if hasMore {
+		comments = comments[:size]
+	}
+
+	// 构建下一页游标
+	var nextCursor string
+	if hasMore && len(comments) > 0 {
+		nextCursor = buildNextCursor(&comments[len(comments)-1], sort)
+	}
+
+	return comments, nextCursor, hasMore, nil
 }
