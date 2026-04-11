@@ -313,3 +313,238 @@ func StartStatisticsConsumerWithRetry() {
 		}
 	}
 }
+
+// ==================== 帖子统计消费者 ====================
+
+// postStatDelta 帖子统计增量（内部聚合使用）
+type postStatDelta struct {
+	ViewCount    int64
+	CommentCount int64
+	LikeCount    int64
+	CollectCount int64
+}
+
+// PostStatisticsAggregator 帖子统计聚合器
+type PostStatisticsAggregator struct {
+	mu       sync.Mutex
+	deltas   map[int64]*postStatDelta // post_id -> 累计变化量
+	ticker   *time.Ticker
+	stopChan chan struct{}
+	stopped  bool
+}
+
+// StartPostStatisticsConsumer 启动帖子统计消费者
+func StartPostStatisticsConsumer() error {
+	brokers := conf.Config.Redpanda.Brokers
+	logger.Log.Info(fmt.Sprintf("Initializing post statistics consumer with brokers: %v", brokers))
+
+	dialer := &kafka.Dialer{
+		Timeout:   10 * time.Second,
+		DualStack: true,
+		Resolver:  nil,
+	}
+
+	r := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:        brokers,
+		Topic:          conf.Config.Redpanda.PostTopic,
+		GroupID:        conf.Config.Redpanda.PostConsumerGroup,
+		MinBytes:       10e3,
+		MaxBytes:       10e6,
+		CommitInterval: time.Second,
+		Dialer:         dialer,
+	})
+
+	logger.Log.Info(fmt.Sprintf("Post statistics consumer created: topic=%s, group=%s",
+		conf.Config.Redpanda.PostTopic, conf.Config.Redpanda.PostConsumerGroup))
+
+	aggregator := &PostStatisticsAggregator{
+		deltas:   make(map[int64]*postStatDelta),
+		ticker:   time.NewTicker(time.Duration(conf.Config.Redpanda.PostFlushInterval) * time.Minute),
+		stopChan: make(chan struct{}),
+	}
+
+	go aggregator.run()
+
+	go func() {
+		defer r.Close()
+		for {
+			msg, err := r.ReadMessage(context.Background())
+			if err != nil {
+				errStr := err.Error()
+				if containsIgnoreCase(errStr, "no data") ||
+					containsIgnoreCase(errStr, "multiple Read calls return no data") ||
+					containsIgnoreCase(errStr, "context deadline exceeded") ||
+					containsIgnoreCase(errStr, "timeout") {
+					logger.Log.Debug("No messages in post statistics queue, waiting...")
+					time.Sleep(30 * time.Minute)
+					continue
+				}
+				logger.Log.Error("Failed to read post stats message: " + errStr)
+				time.Sleep(5 * time.Second)
+				continue
+			}
+
+			var statsMsg PostStatisticsMessage
+			if err := json.Unmarshal(msg.Value, &statsMsg); err != nil {
+				logger.Log.Error("Failed to unmarshal post stats message: " + err.Error())
+				continue
+			}
+
+			aggregator.addMessage(statsMsg)
+		}
+	}()
+
+	return nil
+}
+
+// addMessage 添加帖子统计消息到聚合器
+func (a *PostStatisticsAggregator) addMessage(msg PostStatisticsMessage) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.stopped {
+		return
+	}
+
+	delta, exists := a.deltas[msg.PostID]
+	if !exists {
+		delta = &postStatDelta{}
+		a.deltas[msg.PostID] = delta
+	}
+
+	switch msg.Type {
+	case StatisticsTypePostView:
+		delta.ViewCount += msg.Value
+	case StatisticsTypePostComment:
+		delta.CommentCount += msg.Value
+	case StatisticsTypePostLike:
+		delta.LikeCount += msg.Value
+	case StatisticsTypePostCollect:
+		delta.CollectCount += msg.Value
+	default:
+		logger.Log.Warn(fmt.Sprintf("Unknown post statistics type: %s", msg.Type))
+	}
+}
+
+// run 运行聚合器，定期批量处理
+func (a *PostStatisticsAggregator) run() {
+	for {
+		select {
+		case <-a.ticker.C:
+			a.flush()
+		case <-a.stopChan:
+			a.ticker.Stop()
+			a.flush()
+			return
+		}
+	}
+}
+
+// flush 刷新待处理的帖子统计消息到数据库
+func (a *PostStatisticsAggregator) flush() {
+	a.mu.Lock()
+	if len(a.deltas) == 0 {
+		a.mu.Unlock()
+		return
+	}
+
+	deltas := a.deltas
+	a.deltas = make(map[int64]*postStatDelta)
+	a.mu.Unlock()
+
+	logger.Log.Info(fmt.Sprintf("Flushing %d post statistics updates", len(deltas)))
+
+	if err := a.batchUpdatePostStats(deltas); err != nil {
+		logger.Log.Error("Failed to batch update post statistics: " + err.Error())
+	}
+}
+
+// batchUpdatePostStats 批量更新帖子统计计数到数据库
+func (a *PostStatisticsAggregator) batchUpdatePostStats(deltas map[int64]*postStatDelta) error {
+	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
+		type updateRow struct {
+			PostID       int64 `json:"post_id"`
+			ViewDelta    int64 `json:"view_delta"`
+			CommentDelta int64 `json:"comment_delta"`
+			LikeDelta    int64 `json:"like_delta"`
+			CollectDelta int64 `json:"collect_delta"`
+		}
+
+		rows := make([]updateRow, 0, len(deltas))
+		for postID, delta := range deltas {
+			if delta.ViewCount != 0 || delta.CommentCount != 0 || delta.LikeCount != 0 || delta.CollectCount != 0 {
+				rows = append(rows, updateRow{
+					PostID:       postID,
+					ViewDelta:    delta.ViewCount,
+					CommentDelta: delta.CommentCount,
+					LikeDelta:    delta.LikeCount,
+					CollectDelta: delta.CollectCount,
+				})
+			}
+		}
+
+		if len(rows) == 0 {
+			return nil
+		}
+
+		// 使用JSON批量更新所有统计字段
+		sql := `
+		UPDATE post p
+		SET view_count = GREATEST(p.view_count + v.view_delta, 0),
+		    comment_count = GREATEST(p.comment_count + v.comment_delta, 0),
+		    like_count = GREATEST(p.like_count + v.like_delta, 0),
+		    collect_count = GREATEST(p.collect_count + v.collect_delta, 0),
+		    update_time = CURRENT_TIMESTAMP
+		FROM (
+		    SELECT * FROM jsonb_to_recordset(?::jsonb)
+		    AS v(post_id BIGINT, view_delta BIGINT, comment_delta BIGINT, like_delta BIGINT, collect_delta BIGINT)
+		) v
+		WHERE p.id = v.post_id AND p.deleted = 0
+		`
+
+		jsonBytes, err := json.Marshal(rows)
+		if err != nil {
+			return fmt.Errorf("failed to marshal post stats update rows: %w", err)
+		}
+
+		if err := tx.Exec(sql, string(jsonBytes)).Error; err != nil {
+			return fmt.Errorf("failed to execute post stats batch update: %w", err)
+		}
+
+		logger.Log.Info(fmt.Sprintf("Successfully updated %d post statistics", len(rows)))
+		return nil
+	})
+}
+
+// StopPostAggregator 停止帖子统计聚合器
+func StopPostAggregator() {
+	// 目前 post aggregator 在消费者内部管理，无需单独停止
+	// 如需优雅停止可扩展此方法
+}
+
+// StartPostStatisticsConsumerWithRetry 启动帖子统计消费者，带重试机制
+func StartPostStatisticsConsumerWithRetry() {
+	maxAttempts := 10
+	attempt := 0
+
+	for {
+		attempt++
+		err := StartPostStatisticsConsumer()
+		if err != nil {
+			logger.Log.Error(fmt.Sprintf("Failed to start post statistics consumer (attempt %d/%d): %s",
+				attempt, maxAttempts, err.Error()))
+
+			if attempt >= maxAttempts {
+				logger.Log.Error("Max retry attempts reached for post statistics consumer, giving up")
+				return
+			}
+
+			waitTime := time.Duration(attempt) * 5 * time.Second
+			logger.Log.Info(fmt.Sprintf("Retrying post statistics consumer in %v...", waitTime))
+			time.Sleep(waitTime)
+		} else {
+			logger.Log.Info("Post statistics consumer started successfully")
+			return
+		}
+	}
+}

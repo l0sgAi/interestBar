@@ -34,7 +34,8 @@ const (
 	CommentStatusHidden   = 3 // 折叠/隐藏
 )
 
-// CreateComment 创建评论（事务内同时更新帖子评论计数）
+// CreateComment 创建评论（事务内更新根评论回复计数）
+// 注意：帖子评论计数由Redis+Kafka异步处理，不再在事务内直接更新数据库
 func CreateComment(db *gorm.DB, comment *Comment) error {
 	return db.Transaction(func(tx *gorm.DB) error {
 		// 1. 插入评论
@@ -48,12 +49,6 @@ func CreateComment(db *gorm.DB, comment *Comment) error {
 				UpdateColumn("reply_count", gorm.Expr("reply_count + ?", 1)).Error; err != nil {
 				return err
 			}
-		}
-
-		// 3. 增加帖子的评论计数
-		if err := tx.Model(&Post{}).Where("id = ?", comment.PostID).
-			UpdateColumn("comment_count", gorm.Expr("comment_count + ?", 1)).Error; err != nil {
-			return err
 		}
 
 		return nil

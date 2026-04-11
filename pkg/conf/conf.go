@@ -132,11 +132,15 @@ type RabbitMQRetry struct {
 
 // Redpanda Redpanda配置
 type Redpanda struct {
-	Brokers         []string `mapstructure:"brokers" json:"brokers" yaml:"brokers"`
-	Topic           string   `mapstructure:"topic" json:"topic" yaml:"topic"`
-	ConsumerGroup   string   `mapstructure:"consumer_group" json:"consumer_group" yaml:"consumer_group"`
-	FlushInterval   int      `mapstructure:"flush_interval" json:"flush_interval" yaml:"flush_interval"`
-	FlushMessages   int      `mapstructure:"flush_messages" json:"flush_messages" yaml:"flush_messages"`
+	Brokers            []string `mapstructure:"brokers" json:"brokers" yaml:"brokers"`
+	Topic              string   `mapstructure:"topic" json:"topic" yaml:"topic"`
+	ConsumerGroup      string   `mapstructure:"consumer_group" json:"consumer_group" yaml:"consumer_group"`
+	FlushInterval      int      `mapstructure:"flush_interval" json:"flush_interval" yaml:"flush_interval"`
+	FlushMessages      int      `mapstructure:"flush_messages" json:"flush_messages" yaml:"flush_messages"`
+	PostTopic          string   `mapstructure:"post_topic" json:"post_topic" yaml:"post_topic"`
+	PostConsumerGroup  string   `mapstructure:"post_consumer_group" json:"post_consumer_group" yaml:"post_consumer_group"`
+	PostFlushInterval  int      `mapstructure:"post_flush_interval" json:"post_flush_interval" yaml:"post_flush_interval"`
+	PostStatsTTL       int      `mapstructure:"post_stats_ttl" json:"post_stats_ttl" yaml:"post_stats_ttl"`
 }
 
 func InitConfig(path string) {

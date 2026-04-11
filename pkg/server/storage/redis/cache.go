@@ -439,3 +439,220 @@ func BatchUpdateCircleStatistics(updates map[int64]*CircleStatistics) error {
 	logger.Log.Debug(fmt.Sprintf("Batch update circle statistics success: count=%d", len(updates)))
 	return nil
 }
+
+// ==================== 帖子统计信息操作 ====================
+
+const postStatsTTL = 43 * time.Minute
+
+// PostStatisticsExists 检查帖子统计信息Hash是否存在
+func PostStatisticsExists(postID int64) (bool, error) {
+	key := GetPostStatsKey(postID)
+	exists, err := Client.Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	return exists > 0, nil
+}
+
+// UpdatePostStatistics 更新帖子统计信息缓存到Hash
+func UpdatePostStatistics(postID int64, statistics *PostStatistics) error {
+	key := GetPostStatsKey(postID)
+	pipe := Client.Pipeline()
+	pipe.HSet(ctx, key, "view_count", statistics.ViewCount)
+	pipe.HSet(ctx, key, "comment_count", statistics.CommentCount)
+	pipe.HSet(ctx, key, "like_count", statistics.LikeCount)
+	pipe.HSet(ctx, key, "collect_count", statistics.CollectCount)
+	pipe.Expire(ctx, key, postStatsTTL)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update post statistics: %w", err)
+	}
+	return nil
+}
+
+// GetPostStatistics 获取帖子统计信息（从Hash读取）
+func GetPostStatistics(postID int64) (*PostStatistics, error) {
+	key := GetPostStatsKey(postID)
+	values, err := Client.HMGet(ctx, key, "view_count", "comment_count", "like_count", "collect_count").Result()
+	if err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("failed to get post statistics: %w", err)
+	}
+
+	// 如果任一字段不存在，返回nil表示需要从数据库恢复
+	if values[0] == nil || values[1] == nil || values[2] == nil || values[3] == nil {
+		return nil, nil
+	}
+
+	stats := &PostStatistics{}
+	if vc, ok := values[0].(string); ok {
+		if v, err := strconv.Atoi(vc); err == nil {
+			stats.ViewCount = v
+		}
+	}
+	if cc, ok := values[1].(string); ok {
+		if v, err := strconv.Atoi(cc); err == nil {
+			stats.CommentCount = v
+		}
+	}
+	if lc, ok := values[2].(string); ok {
+		if v, err := strconv.Atoi(lc); err == nil {
+			stats.LikeCount = v
+		}
+	}
+	if colc, ok := values[3].(string); ok {
+		if v, err := strconv.Atoi(colc); err == nil {
+			stats.CollectCount = v
+		}
+	}
+
+	return stats, nil
+}
+
+// IncrementPostViewCount 增加帖子浏览量（原子操作）
+func IncrementPostViewCount(postID int64) error {
+	key := GetPostStatsKey(postID)
+	pipe := Client.Pipeline()
+	pipe.HIncrBy(ctx, key, "view_count", 1)
+	pipe.Expire(ctx, key, postStatsTTL)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to increment post view count: %w", err)
+	}
+	return nil
+}
+
+// IncrementPostCommentCount 增加帖子评论数（原子操作）
+func IncrementPostCommentCount(postID int64) error {
+	key := GetPostStatsKey(postID)
+	pipe := Client.Pipeline()
+	pipe.HIncrBy(ctx, key, "comment_count", 1)
+	pipe.Expire(ctx, key, postStatsTTL)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to increment post comment count: %w", err)
+	}
+	return nil
+}
+
+// DecrementPostCommentCount 减少帖子评论数（原子操作）
+func DecrementPostCommentCount(postID int64) error {
+	key := GetPostStatsKey(postID)
+	pipe := Client.Pipeline()
+	decrCmd := pipe.HIncrBy(ctx, key, "comment_count", -1)
+	pipe.Expire(ctx, key, postStatsTTL)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to decrement post comment count: %w", err)
+	}
+
+	newCount := decrCmd.Val()
+	if newCount < 0 {
+		err = Client.HSet(ctx, key, "comment_count", 0).Err()
+		if err != nil {
+			return fmt.Errorf("failed to reset negative comment count: %w", err)
+		}
+	}
+	return nil
+}
+
+// IncrementPostLikeCount 增加帖子点赞数（原子操作）
+func IncrementPostLikeCount(postID int64) error {
+	key := GetPostStatsKey(postID)
+	pipe := Client.Pipeline()
+	pipe.HIncrBy(ctx, key, "like_count", 1)
+	pipe.Expire(ctx, key, postStatsTTL)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to increment post like count: %w", err)
+	}
+	return nil
+}
+
+// DecrementPostLikeCount 减少帖子点赞数（原子操作）
+func DecrementPostLikeCount(postID int64) error {
+	key := GetPostStatsKey(postID)
+	pipe := Client.Pipeline()
+	decrCmd := pipe.HIncrBy(ctx, key, "like_count", -1)
+	pipe.Expire(ctx, key, postStatsTTL)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to decrement post like count: %w", err)
+	}
+
+	newCount := decrCmd.Val()
+	if newCount < 0 {
+		err = Client.HSet(ctx, key, "like_count", 0).Err()
+		if err != nil {
+			return fmt.Errorf("failed to reset negative like count: %w", err)
+		}
+	}
+	return nil
+}
+
+// IncrementPostCollectCount 增加帖子收藏数（原子操作）
+func IncrementPostCollectCount(postID int64) error {
+	key := GetPostStatsKey(postID)
+	pipe := Client.Pipeline()
+	pipe.HIncrBy(ctx, key, "collect_count", 1)
+	pipe.Expire(ctx, key, postStatsTTL)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to increment post collect count: %w", err)
+	}
+	return nil
+}
+
+// DecrementPostCollectCount 减少帖子收藏数（原子操作）
+func DecrementPostCollectCount(postID int64) error {
+	key := GetPostStatsKey(postID)
+	pipe := Client.Pipeline()
+	decrCmd := pipe.HIncrBy(ctx, key, "collect_count", -1)
+	pipe.Expire(ctx, key, postStatsTTL)
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to decrement post collect count: %w", err)
+	}
+
+	newCount := decrCmd.Val()
+	if newCount < 0 {
+		err = Client.HSet(ctx, key, "collect_count", 0).Err()
+		if err != nil {
+			return fmt.Errorf("failed to reset negative collect count: %w", err)
+		}
+	}
+	return nil
+}
+
+// BatchUpdatePostStatistics 批量更新帖子统计信息（用于MQ消费等场景）
+func BatchUpdatePostStatistics(updates map[int64]*PostStatistics) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	pipe := Client.Pipeline()
+	for postID, stats := range updates {
+		key := GetPostStatsKey(postID)
+		pipe.HSet(ctx, key, "view_count", stats.ViewCount)
+		pipe.HSet(ctx, key, "comment_count", stats.CommentCount)
+		pipe.HSet(ctx, key, "like_count", stats.LikeCount)
+		pipe.HSet(ctx, key, "collect_count", stats.CollectCount)
+		pipe.Expire(ctx, key, postStatsTTL)
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		logger.Log.Error(fmt.Sprintf("Batch update post statistics failed: count=%d, err=%v", len(updates), err))
+		return err
+	}
+
+	logger.Log.Debug(fmt.Sprintf("Batch update post statistics success: count=%d", len(updates)))
+	return nil
+}

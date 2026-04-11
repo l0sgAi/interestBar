@@ -64,6 +64,15 @@ func Run(configPath string) {
 		go redpanda.StartStatisticsConsumerWithRetry()
 	}
 
+	// 8.5 Init Post Stats Redpanda producer for async post statistics persistence
+	if err := redpanda.InitPostStatsProducer(); err != nil {
+		logger.Log.Error("Failed to initialize post stats producer: " + err.Error())
+		logger.Log.Warn("Post statistics persistence to database is disabled. Redis cache will still be updated in real-time.")
+	} else {
+		logger.Log.Info("Post stats producer initialized successfully")
+		go redpanda.StartPostStatisticsConsumerWithRetry()
+	}
+
 	// 9. Init Router
 	r := router.InitRouter()
 
@@ -87,5 +96,6 @@ func Run(configPath string) {
 	redis.CloseRedis()
 	auth.CloseSaToken()
 	redpanda.CloseRedpandaProducer()
+	redpanda.ClosePostStatsProducer()
 	logger.Log.Info("Server shutdown complete")
 }

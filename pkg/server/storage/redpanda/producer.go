@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	dialer *kafka.Dialer
-	writer *kafka.Writer
+	dialer     *kafka.Dialer
+	writer     *kafka.Writer
+	postWriter *kafka.Writer
 )
 
 // InitRedpandaProducer 初始化Redpanda Producer
@@ -129,6 +130,113 @@ func CloseRedpandaProducer() error {
 			return err
 		}
 		logger.Log.Info("Redpanda producer closed")
+	}
+	return nil
+}
+
+// ==================== 帖子统计消息 ====================
+
+// InitPostStatsProducer 初始化帖子统计Producer
+func InitPostStatsProducer() error {
+	postWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.PostTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("Post stats producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.PostTopic))
+
+	return nil
+}
+
+// PublishPostViewCount 发布帖子浏览量变化消息
+func PublishPostViewCount(postID int64) error {
+	if postWriter == nil {
+		return fmt.Errorf("post stats writer is not initialized")
+	}
+	return publishPostMessage(PostStatisticsMessage{
+		Type:   StatisticsTypePostView,
+		PostID: postID,
+		Value:  1,
+	})
+}
+
+// PublishPostCommentCount 发布帖子评论数变化消息
+func PublishPostCommentCount(postID int64, value int64) error {
+	if postWriter == nil {
+		return fmt.Errorf("post stats writer is not initialized")
+	}
+	return publishPostMessage(PostStatisticsMessage{
+		Type:   StatisticsTypePostComment,
+		PostID: postID,
+		Value:  value,
+	})
+}
+
+// PublishPostLikeCount 发布帖子点赞数变化消息
+func PublishPostLikeCount(postID int64, value int64) error {
+	if postWriter == nil {
+		return fmt.Errorf("post stats writer is not initialized")
+	}
+	return publishPostMessage(PostStatisticsMessage{
+		Type:   StatisticsTypePostLike,
+		PostID: postID,
+		Value:  value,
+	})
+}
+
+// PublishPostCollectCount 发布帖子收藏数变化消息
+func PublishPostCollectCount(postID int64, value int64) error {
+	if postWriter == nil {
+		return fmt.Errorf("post stats writer is not initialized")
+	}
+	return publishPostMessage(PostStatisticsMessage{
+		Type:   StatisticsTypePostCollect,
+		PostID: postID,
+		Value:  value,
+	})
+}
+
+// publishPostMessage 发送帖子统计消息到Redpanda
+func publishPostMessage(message PostStatisticsMessage) error {
+	value, err := json.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("failed to marshal post stats message: %w", err)
+	}
+
+	kafkaMsg := kafka.Message{
+		Key:   []byte(fmt.Sprintf("%d", message.PostID)),
+		Value: value,
+	}
+
+	err = postWriter.WriteMessages(context.Background(), kafkaMsg)
+	if err != nil {
+		return fmt.Errorf("failed to write post stats message: %w", err)
+	}
+
+	logger.Log.Debug(fmt.Sprintf("Published post stats message: type=%s, post_id=%d, value=%d",
+		message.Type, message.PostID, message.Value))
+
+	return nil
+}
+
+// ClosePostStatsProducer 关闭帖子统计Producer
+func ClosePostStatsProducer() error {
+	if postWriter != nil {
+		if err := postWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close post stats writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("Post stats producer closed")
 	}
 	return nil
 }

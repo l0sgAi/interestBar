@@ -55,6 +55,19 @@ type CircleStatistics struct {
 	Hot         int `json:"hot"`          // 热度
 }
 
+// PostStatsPrefix 帖子统计信息Hash key前缀
+// 完整key格式: post:stats:{post_id}
+// 包含字段：view_count, comment_count, like_count, collect_count
+const PostStatsPrefix = "post:stats:"
+
+// PostStatistics 帖子统计信息
+type PostStatistics struct {
+	ViewCount    int `json:"view_count"`    // 浏览量
+	CommentCount int `json:"comment_count"` // 评论数
+	LikeCount    int `json:"like_count"`    // 点赞数
+	CollectCount int `json:"collect_count"` // 收藏数
+}
+
 // GetUserJoinedCirclesKey 获取用户已加入圈子ID列表缓存的完整key
 func GetUserJoinedCirclesKey(userID int64) string {
 	return UserJoinedCirclesPrefix + fmt.Sprint(userID)
@@ -73,4 +86,9 @@ func GetCircleInfoKey(circleID int64) string {
 // GetCircleStatsKey 获取圈子统计信息Hash缓存的完整key
 func GetCircleStatsKey(circleID int64) string {
 	return CircleStatsPrefix + fmt.Sprint(circleID)
+}
+
+// GetPostStatsKey 获取帖子统计信息Hash缓存的完整key
+func GetPostStatsKey(postID int64) string {
+	return PostStatsPrefix + fmt.Sprint(postID)
 }

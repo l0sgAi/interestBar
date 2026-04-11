@@ -2,9 +2,12 @@ package controller
 
 import (
 	"fmt"
+	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
+	redpanda "interestBar/pkg/server/storage/redpanda"
+	redispkg "interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
 
 	"github.com/gin-gonic/gin"
@@ -112,10 +115,23 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 		Deleted:   0,
 	}
 
-	// 4. 创建评论（事务：插入评论 + 更新帖子评论计数 + 更新根评论回复计数）
+	// 4. 创建评论（事务：插入评论 + 更新根评论回复计数）
 	if err := model.CreateComment(pgsql.DB, &comment); err != nil {
 		response.InternalError(c, "Failed to create comment")
 		return
+	}
+
+	// 5. 实时更新帖子评论计数（Redis Hash）
+	if err := restorePostStatsIfNeed(req.PostID); err != nil {
+		logger.Log.Error("Failed to restore post stats cache: " + err.Error())
+	}
+	if err := redispkg.IncrementPostCommentCount(req.PostID); err != nil {
+		logger.Log.Error("Failed to increment post comment count in Redis: " + err.Error())
+	}
+
+	// 6. 发送Kafka消息用于持久化到数据库
+	if err := redpanda.PublishPostCommentCount(req.PostID, 1); err != nil {
+		logger.Log.Error("Failed to publish post comment count message: " + err.Error())
 	}
 
 	response.SuccessWithMessage(c, "评论成功", comment.ID)
@@ -293,4 +309,24 @@ func (ctrl *CommentController) GetCommentDetail(c *gin.Context) {
 	}
 
 	response.Success(c, vo)
+}
+
+// restorePostStatsIfNeed 恢复帖子统计信息到Redis缓存（如果缓存不存在）
+func restorePostStatsIfNeed(postID int64) error {
+	exists, err := redispkg.PostStatisticsExists(postID)
+	if err != nil || exists {
+		return err
+	}
+
+	post, err := model.GetPostByID(pgsql.DB, postID)
+	if err != nil {
+		return err
+	}
+
+	return redispkg.UpdatePostStatistics(postID, &redispkg.PostStatistics{
+		ViewCount:    post.ViewCount,
+		CommentCount: post.CommentCount,
+		LikeCount:    post.LikeCount,
+		CollectCount: post.CollectCount,
+	})
 }
