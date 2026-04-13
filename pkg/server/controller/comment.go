@@ -155,7 +155,8 @@ type CommentVO struct {
 	AuthorAvatar string `json:"author_avatar"`
 
 	// 被回复人信息（仅回复时有值）
-	ReplyToName string `json:"reply_to_name,omitempty"`
+	ReplyToUserID int64  `json:"reply_to_user_id,omitempty"`
+	ReplyToName   string `json:"reply_to_name,omitempty"`
 }
 
 // GetCommentsRequest 获取顶层评论列表的请求结构
@@ -237,15 +238,32 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 
 // buildCommentVOs 批量构建 CommentVO（包含评论者信息和被回复人信息）
 func buildCommentVOs(comments []model.Comment) []CommentVO {
-	// 收集所有需要查询的用户ID
+	// 收集所有评论者的用户ID
 	userIDSet := make(map[int64]struct{})
 	for _, cm := range comments {
 		userIDSet[cm.UserID] = struct{}{}
+	}
+
+	// 收集所有被回复评论的ID
+	replyToCommentIDs := make([]int64, 0)
+	for _, cm := range comments {
 		if cm.ReplyToID > 0 {
-			userIDSet[cm.ReplyToID] = struct{}{}
+			replyToCommentIDs = append(replyToCommentIDs, cm.ReplyToID)
 		}
 	}
 
+	// 批量查询被回复的评论，获取它们的 user_id
+	commentIDToUserID := make(map[int64]int64) // 评论ID -> 用户ID
+	if len(replyToCommentIDs) > 0 {
+		var replyToComments []model.Comment
+		pgsql.DB.Where("id IN ?", replyToCommentIDs).Find(&replyToComments)
+		for _, rc := range replyToComments {
+			commentIDToUserID[rc.ID] = rc.UserID
+			userIDSet[rc.UserID] = struct{}{}
+		}
+	}
+
+	// 批量查询所有用户信息
 	userIDs := make([]int64, 0, len(userIDSet))
 	for id := range userIDSet {
 		userIDs = append(userIDs, id)
@@ -272,9 +290,13 @@ func buildCommentVOs(comments []model.Comment) []CommentVO {
 			vo.AuthorAvatar = author.AvatarURL
 		}
 
+		// 填充被回复人信息（通过评论ID找到被回复用户ID）
 		if cm.ReplyToID > 0 {
-			if replyUser, exists := userMap[cm.ReplyToID]; exists {
-				vo.ReplyToName = replyUser.Username
+			if replyToUserID, ok := commentIDToUserID[cm.ReplyToID]; ok {
+				vo.ReplyToUserID = replyToUserID
+				if replyUser, exists := userMap[replyToUserID]; exists {
+					vo.ReplyToName = replyUser.Username
+				}
 			}
 		}
 
