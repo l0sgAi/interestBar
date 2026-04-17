@@ -68,7 +68,8 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 		return
 	}
 
-	// 2. 如果是回复，校验 root_id 和 reply_to_id
+	// 2. 如果是回复，校验 root_id 和 reply_to_id，并获取被回复用户ID
+	var replyToUserID int64 = 0
 	if req.RootID > 0 {
 		// 校验根评论存在且属于同一帖子
 		rootComment, err := model.GetCommentByID(pgsql.DB, req.RootID)
@@ -85,7 +86,7 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 			return
 		}
 
-		// 如果指定了 reply_to_id，校验被回复的评论存在
+		// 如果指定了 reply_to_id，校验被回复的评论存在并获取被回复用户ID
 		if req.ReplyToID > 0 {
 			replyToComment, err := model.GetCommentByID(pgsql.DB, req.ReplyToID)
 			if err != nil {
@@ -101,18 +102,21 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 				response.BadRequest(c, "Reply target does not belong to the same thread")
 				return
 			}
+			// 获取被回复用户ID
+			replyToUserID = replyToComment.UserID
 		}
 	}
 
 	// 3. 构建评论数据
 	comment := model.Comment{
-		PostID:    req.PostID,
-		UserID:    int64(userID),
-		RootID:    req.RootID,
-		ReplyToID: req.ReplyToID,
-		Content:   req.Content,
-		Status:    model.CommentStatusNormal,
-		Deleted:   0,
+		PostID:        req.PostID,
+		UserID:        int64(userID),
+		RootID:        req.RootID,
+		ReplyToID:     req.ReplyToID,
+		ReplyToUserID: replyToUserID,
+		Content:       req.Content,
+		Status:        model.CommentStatusNormal,
+		Deleted:       0,
 	}
 
 	// 4. 创建评论（事务：插入评论 + 更新根评论回复计数）
@@ -238,28 +242,13 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 
 // buildCommentVOs 批量构建 CommentVO（包含评论者信息和被回复人信息）
 func buildCommentVOs(comments []model.Comment) []CommentVO {
-	// 收集所有评论者的用户ID
+	// 收集所有需要查询用户信息的用户ID
 	userIDSet := make(map[int64]struct{})
 	for _, cm := range comments {
 		userIDSet[cm.UserID] = struct{}{}
-	}
-
-	// 收集所有被回复评论的ID
-	replyToCommentIDs := make([]int64, 0)
-	for _, cm := range comments {
-		if cm.ReplyToID > 0 {
-			replyToCommentIDs = append(replyToCommentIDs, cm.ReplyToID)
-		}
-	}
-
-	// 批量查询被回复的评论，获取它们的 user_id
-	commentIDToUserID := make(map[int64]int64) // 评论ID -> 用户ID
-	if len(replyToCommentIDs) > 0 {
-		var replyToComments []model.Comment
-		pgsql.DB.Where("id IN ?", replyToCommentIDs).Find(&replyToComments)
-		for _, rc := range replyToComments {
-			commentIDToUserID[rc.ID] = rc.UserID
-			userIDSet[rc.UserID] = struct{}{}
+		// 收集被回复用户ID（直接从模型中的 ReplyToUserID 获取）
+		if cm.ReplyToUserID > 0 {
+			userIDSet[cm.ReplyToUserID] = struct{}{}
 		}
 	}
 
@@ -285,18 +274,17 @@ func buildCommentVOs(comments []model.Comment) []CommentVO {
 			CreateTime: cm.CreateTime.Format("2006-01-02 15:04:05"),
 		}
 
+		// 填充评论者信息
 		if author, exists := userMap[cm.UserID]; exists {
 			vo.AuthorName = author.Username
 			vo.AuthorAvatar = author.AvatarURL
 		}
 
-		// 填充被回复人信息（通过评论ID找到被回复用户ID）
-		if cm.ReplyToID > 0 {
-			if replyToUserID, ok := commentIDToUserID[cm.ReplyToID]; ok {
-				vo.ReplyToUserID = replyToUserID
-				if replyUser, exists := userMap[replyToUserID]; exists {
-					vo.ReplyToName = replyUser.Username
-				}
+		// 填充被回复人信息（直接从模型中的 ReplyToUserID 获取）
+		if cm.ReplyToUserID > 0 {
+			vo.ReplyToUserID = cm.ReplyToUserID
+			if replyUser, exists := userMap[cm.ReplyToUserID]; exists {
+				vo.ReplyToName = replyUser.Username
 			}
 		}
 
@@ -343,6 +331,14 @@ func (ctrl *CommentController) GetCommentDetail(c *gin.Context) {
 	if author, err := model.GetUserByID(pgsql.DB, comment.UserID); err == nil {
 		vo.AuthorName = author.Username
 		vo.AuthorAvatar = author.AvatarURL
+	}
+
+	// 填充被回复人信息（直接从模型中的 ReplyToUserID 获取）
+	if comment.ReplyToUserID > 0 {
+		vo.ReplyToUserID = comment.ReplyToUserID
+		if replyUser, err := model.GetUserByID(pgsql.DB, comment.ReplyToUserID); err == nil {
+			vo.ReplyToName = replyUser.Username
+		}
 	}
 
 	response.Success(c, vo)

@@ -367,7 +367,8 @@ CREATE TABLE comment (
 
     -- 2. 结构关系 (二级扁平化)
     root_id BIGINT NOT NULL DEFAULT 0,          -- 根评论ID (0=顶层)
-    reply_to_id BIGINT NOT NULL DEFAULT 0,      -- 被回复ID
+    reply_to_id BIGINT NOT NULL DEFAULT 0,      -- 被回复评论ID
+    reply_to_user_id BIGINT NOT NULL DEFAULT 0, -- 被回复评论ID
 
     -- 3. 内容
     content TEXT NOT NULL,                       -- 评论文本内容
@@ -393,6 +394,7 @@ COMMENT ON COLUMN comment.post_id IS '所属帖子ID';
 COMMENT ON COLUMN comment.user_id IS '评论发布者ID';
 COMMENT ON COLUMN comment.root_id IS '根评论ID：0表示顶层评论，否则存放所属的顶层评论ID';
 COMMENT ON COLUMN comment.reply_to_id IS '被回复的评论ID：0表示非回复特定人，否则存放被回复的那条评论ID';
+COMMENT ON COLUMN comment.reply_to_user_id IS '被回复的用户id';
 COMMENT ON COLUMN comment.content IS '评论文本内容';
 COMMENT ON COLUMN comment.extra_data IS '扩展数据：JSON格式，用于存储富文本结构、图片列表、视频链接等附加信息';
 COMMENT ON COLUMN comment.like_count IS '点赞数：高频更新字段，建议配合 Redis Write-Behind 策略';

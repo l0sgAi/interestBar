@@ -10,18 +10,19 @@ import (
 
 // Comment 评论表
 type Comment struct {
-	ID          int64      `json:"id" gorm:"primarykey;column:id"`
-	PostID      int64      `json:"post_id" gorm:"column:post_id;not null"`                // 所属帖子ID
-	UserID      int64      `json:"user_id" gorm:"column:user_id;not null"`                // 评论发布者ID
-	RootID      int64      `json:"root_id" gorm:"column:root_id;default:0"`                // 根评论ID，0为根评论
-	ReplyToID   int64      `json:"reply_to_id" gorm:"column:reply_to_id;default:0"`        // 被回复的评论ID，0为非回复
-	Content     string     `json:"content" gorm:"column:content;type:text;not null"`       // 评论内容
-	LikeCount   int        `json:"like_count" gorm:"column:like_count;default:0"`          // 点赞数
-	ReplyCount  int        `json:"reply_count" gorm:"column:reply_count;default:0"`        // 子评论数
-	Status      int16      `json:"status" gorm:"column:status;type:smallint;default:1"`    // 状态
-	Deleted     int16      `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`  // 逻辑删除
-	CreateTime  time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime  time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	ID             int64      `json:"id" gorm:"primarykey;column:id"`
+	PostID         int64      `json:"post_id" gorm:"column:post_id;not null"`                      // 所属帖子ID
+	UserID         int64      `json:"user_id" gorm:"column:user_id;not null"`                      // 评论发布者ID
+	RootID         int64      `json:"root_id" gorm:"column:root_id;default:0"`                      // 根评论ID，0为根评论
+	ReplyToID      int64      `json:"reply_to_id" gorm:"column:reply_to_id;default:0"`              // 被回复的评论ID，0为非回复
+	ReplyToUserID  int64      `json:"reply_to_user_id" gorm:"column:reply_to_user_id;default:0"`     // 被回复用户ID，0为非回复
+	Content        string     `json:"content" gorm:"column:content;type:text;not null"`             // 评论内容
+	LikeCount      int        `json:"like_count" gorm:"column:like_count;default:0"`                // 点赞数
+	ReplyCount     int        `json:"reply_count" gorm:"column:reply_count;default:0"`              // 子评论数
+	Status         int16      `json:"status" gorm:"column:status;type:smallint;default:1"`          // 状态
+	Deleted        int16      `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`        // 逻辑删除
+	CreateTime     time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
+	UpdateTime     time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
 }
 
 // TableName 指定表名

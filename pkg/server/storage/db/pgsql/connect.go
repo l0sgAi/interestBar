@@ -46,6 +46,7 @@ func InitDB() {
 
 	// Auto Migrate
 	db.AutoMigrate(&model.SysUser{})
+	db.AutoMigrate(&model.Comment{})
 
 	DB = db
 	if logger.Log != nil {
