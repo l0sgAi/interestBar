@@ -57,15 +57,10 @@ func SearchPosts(keyword string, circleID int64, size int, searchAfter []interfa
 	// 构建搜索查询
 	var searchQuery map[string]interface{}
 
-	// 定义排序规则：按hot、create_time倒序
+	// 定义排序规则：按id倒序（最新的帖子id最大，在前），避免日期精度和范围问题
 	sortRules := []map[string]interface{}{
 		{
-			"hot": map[string]interface{}{
-				"order": "desc",
-			},
-		},
-		{
-			"create_time": map[string]interface{}{
+			"id": map[string]interface{}{
 				"order": "desc",
 			},
 		},
@@ -95,7 +90,7 @@ func SearchPosts(keyword string, circleID int64, size int, searchAfter []interfa
 	}
 
 	if keyword == "" {
-		// 无关键字时，返回所有符合条件的帖子，按热度排序
+		// 无关键字时，返回所有符合条件的帖子，按id倒序
 		searchQuery = map[string]interface{}{
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
@@ -107,15 +102,19 @@ func SearchPosts(keyword string, circleID int64, size int, searchAfter []interfa
 		}
 	} else {
 		// 有关键字时，使用 multi_match 进行加权搜索
-		// title 权重是 summary 的 3 倍
+		// title 权重是 summary 的 3 倍，按_score和id排序
 		sortWithScore := []map[string]interface{}{
 			{
 				"_score": map[string]interface{}{
 					"order": "desc",
 				},
 			},
+			{
+				"id": map[string]interface{}{
+					"order": "desc",
+				},
+			},
 		}
-		sortWithScore = append(sortWithScore, sortRules...)
 
 		// 添加关键字搜索条件
 		searchConditions := []map[string]interface{}{
@@ -194,7 +193,6 @@ func parsePostSearchResponse(res *esapi.Response, size int) (*PostListResponse, 
 		// 获取排序值（用于下一页）
 		if sortArr, ok := hitMap["sort"].([]interface{}); ok {
 			if len(sortArr) > 0 {
-				// 记录最后一个文档的排序值
 				nextSearchAfter = sortArr
 			}
 		}

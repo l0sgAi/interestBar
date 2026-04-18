@@ -24,7 +24,7 @@ type CircleDocument struct {
 	Deleted     int16  `json:"deleted"`
 	JoinType    int16  `json:"join_type"`
 	// 排序值（用于 search_after 分页）
-	SortValues []any `json:"sort_values,omitempty"`
+	SortValues []interface{} `json:"sort_values,omitempty"`
 }
 
 // CircleListResponse 圈子列表响应
@@ -49,32 +49,17 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 	// 构建搜索查询
 	var searchQuery map[string]interface{}
 
-	// 定义排序规则：按 hot、member_count、post_count、create_time 倒序
+	// 定义排序规则：按id倒序（最新的圈子id最大，在前），避免日期精度和范围问题
 	sortRules := []map[string]interface{}{
 		{
-			"hot": map[string]any{
-				"order": "desc",
-			},
-		},
-		{
-			"member_count": map[string]any{
-				"order": "desc",
-			},
-		},
-		{
-			"post_count": map[string]any{
-				"order": "desc",
-			},
-		},
-		{
-			"create_time": map[string]any{
+			"id": map[string]interface{}{
 				"order": "desc",
 			},
 		},
 	}
 
 	if keyword == "" {
-		// 无关键字时，返回所有符合条件的圈子，按热度排序
+		// 无关键字时，返回所有符合条件的圈子，按id倒序
 		searchQuery = map[string]interface{}{
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
@@ -104,22 +89,26 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 		}
 	} else {
 		// 有关键字时，使用 multi_match 进行加权搜索
-		// name 权重是 description 的 3 倍
-		sortWithScore := []map[string]any{
+		// name 权重是 description 的 3 倍，按_score和id排序
+		sortWithScore := []map[string]interface{}{
 			{
-				"_score": map[string]any{
+				"_score": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			{
+				"id": map[string]interface{}{
 					"order": "desc",
 				},
 			},
 		}
-		sortWithScore = append(sortWithScore, sortRules...)
 
-		searchQuery = map[string]any{
-			"query": map[string]any{
-				"bool": map[string]any{
-					"must": []map[string]any{
+		searchQuery = map[string]interface{}{
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
 						{
-							"multi_match": map[string]any{
+							"multi_match": map[string]interface{}{
 								"query":    keyword,
 								"fields":   []string{"name^3", "description^1"},
 								"type":     "best_fields",
@@ -127,35 +116,35 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 							},
 						},
 						{
-							"term": map[string]any{
+							"term": map[string]interface{}{
 								"status": 1, // 只返回正常状态的圈子
 							},
 						},
 						{
-							"term": map[string]any{
+							"term": map[string]interface{}{
 								"deleted": 0, // 过滤掉已删除的圈子
 							},
 						},
 					},
-					"must_not": []map[string]any{
+					"must_not": []map[string]interface{}{
 						{
-							"term": map[string]any{
+							"term": map[string]interface{}{
 								"join_type": 2, // 过滤掉私密圈子
 							},
 						},
 					},
-					"should": []map[string]any{
+					"should": []map[string]interface{}{
 						{
-							"match_phrase": map[string]any{
-								"name": map[string]any{
+							"match_phrase": map[string]interface{}{
+								"name": map[string]interface{}{
 									"query": keyword,
 									"boost": 10.0,
 								},
 							},
 						},
 						{
-							"term": map[string]any{
-								"name.keyword": map[string]any{
+							"term": map[string]interface{}{
+								"name.keyword": map[string]interface{}{
 									"value": keyword,
 									"boost": 20.0,
 								},
@@ -222,15 +211,10 @@ func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []
 	// 构建搜索查询
 	var searchQuery map[string]interface{}
 
-	// 定义排序规则：按 hot、create_time 倒序
+	// 定义排序规则：按id倒序（最新的圈子id最大，在前），避免日期精度和范围问题
 	sortRules := []map[string]interface{}{
 		{
-			"hot": map[string]interface{}{
-				"order": "desc",
-			},
-		},
-		{
-			"create_time": map[string]interface{}{
+			"id": map[string]interface{}{
 				"order": "desc",
 			},
 		},
@@ -271,15 +255,19 @@ func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []
 		}
 	} else {
 		// 有关键字时，使用 multi_match 进行加权搜索
-		// name 权重是 description 的 3 倍
+		// name 权重是 description 的 3 倍，按_score和id排序
 		sortWithScore := []map[string]interface{}{
 			{
 				"_score": map[string]interface{}{
 					"order": "desc",
 				},
 			},
+			{
+				"id": map[string]interface{}{
+					"order": "desc",
+				},
+			},
 		}
-		sortWithScore = append(sortWithScore, sortRules...)
 
 		searchQuery = map[string]interface{}{
 			"query": map[string]interface{}{
@@ -333,8 +321,7 @@ func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []
 			"size": size,
 			"sort": sortWithScore,
 		}
-
-}
+	}
 	// 添加 search_after 参数（如果提供）
 	if len(searchAfter) > 0 {
 		searchQuery["search_after"] = searchAfter
@@ -385,7 +372,6 @@ func parseCircleSearchResponse(res *esapi.Response, size int) (*CircleListRespon
 		// 获取排序值（用于下一页）
 		if sortArr, ok := hitMap["sort"].([]interface{}); ok {
 			if len(sortArr) > 0 {
-				// 记录最后一个文档的排序值
 				nextSearchAfter = sortArr
 			}
 		}
