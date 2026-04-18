@@ -437,10 +437,6 @@ func (ctrl *UserController) SearchUsers(c *gin.Context) {
 	// 解析 search_after 参数
 	var searchAfter []interface{}
 	if req.SearchAfter != "" {
-		if err := c.ShouldBindQuery(&req); err != nil {
-			response.BadRequest(c, "Invalid search_after parameter")
-			return
-		}
 		if err := json.Unmarshal([]byte(req.SearchAfter), &searchAfter); err != nil {
 			response.BadRequest(c, "Invalid search_after parameter")
 			return

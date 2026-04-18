@@ -44,10 +44,10 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserList
 	// 构建搜索查询
 	var searchQuery map[string]interface{}
 
-	// 定义排序规则：按create_time倒序（最新用户在前）
+	// 定义排序规则：按id倒序（最新的用户id最大，在前），避免日期精度和范围问题
 	sortRules := []map[string]interface{}{
 		{
-			"create_time": map[string]interface{}{
+			"id": map[string]interface{}{
 				"order": "desc",
 			},
 		},
@@ -78,41 +78,45 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserList
 			"size": size,
 			"sort": sortRules,
 		}
-	} else {
-		// 有关键字时，使用 multi_match 进行加权搜索
-		// username 权重是 email 的 3 倍
-		sortWithScore := []map[string]interface{}{
-			{
-				"_score": map[string]interface{}{
-					"order": "desc",
+		} else {
+			// 有关键字时，使用 multi_match 进行加权搜索
+			// username 权重是 email 的 3 倍，按_score和id排序
+			sortWithScore := []map[string]interface{}{
+				{
+					"_score": map[string]interface{}{
+						"order": "desc",
+					},
 				},
-			},
-		}
-		sortWithScore = append(sortWithScore, sortRules...)
+				{
+					"id": map[string]interface{}{
+						"order": "desc",
+					},
+				},
+			}
 
-		// 添加关键字搜索条件
-		searchConditions := []map[string]interface{}{
-			{
-				"multi_match": map[string]interface{}{
-					"query":    keyword,
-					"fields":   []string{"username^3", "email^1"},
-					"type":     "best_fields",
-					"operator": "or",
+			// 添加关键字搜索条件
+			searchConditions := []map[string]interface{}{
+				{
+					"multi_match": map[string]interface{}{
+						"query":    keyword,
+						"fields":   []string{"username^3", "email^1"},
+						"type":     "best_fields",
+						"operator": "or",
+					},
 				},
-			},
-		}
-		searchConditions = append(searchConditions, mustConditions...)
+			}
+			searchConditions = append(searchConditions, mustConditions...)
 
-		searchQuery = map[string]interface{}{
-			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"must": searchConditions,
+			searchQuery = map[string]interface{}{
+				"query": map[string]interface{}{
+					"bool": map[string]interface{}{
+						"must": searchConditions,
+					},
 				},
-			},
-			"size": size,
-			"sort": sortWithScore,
+				"size": size,
+				"sort": sortWithScore,
+			}
 		}
-	}
 
 	// 添加 search_after 参数（如果提供）
 	if len(searchAfter) > 0 {
@@ -164,13 +168,12 @@ func parseUserSearchResponse(res *esapi.Response, size int) (*UserListResponse, 
 		source := hitMap["_source"]
 		sourceMap := source.(map[string]interface{})
 
-		// 获取排序值（用于下一页）
-		if sortArr, ok := hitMap["sort"].([]interface{}); ok {
-			if len(sortArr) > 0 {
-				// 记录最后一个文档的排序值
-				nextSearchAfter = sortArr
+			// 获取排序值（用于下一页）
+			if sortArr, ok := hitMap["sort"].([]interface{}); ok {
+				if len(sortArr) > 0 {
+					nextSearchAfter = sortArr
+				}
 			}
-		}
 
 		// 辅助函数：安全地从map中获取字符串值
 		getString := func(key string) string {
