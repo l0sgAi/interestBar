@@ -8,8 +8,8 @@ import (
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
 	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
-	redpanda "interestBar/pkg/server/storage/redpanda"
 	redispkg "interestBar/pkg/server/storage/redis"
+	redpanda "interestBar/pkg/server/storage/redpanda"
 	"interestBar/pkg/server/utils"
 	"strings"
 	"time"
@@ -653,20 +653,29 @@ func (ctrl *CircleController) GetMyCircles(c *gin.Context) {
 	var circleIDs []int64
 	redisKey := redispkg.GetUserJoinedCirclesKey(int64(userID))
 
-	// 1. 尝试从Redis获取已加入圈子ID列表缓存
-	err := redispkg.GetJSON(redisKey, &circleIDs)
-	if err != nil {
-		// 缓存不存在或出错，从数据库查询（缓存恢复）
-		circleIDs, err = model.GetJoinedCircleIDsByUserID(pgsql.DB, int64(userID))
+	if req.Keyword == "" {
+		// 浏览模式：使用缓存，仅加载前500个最新加入的圈子
+		err := redispkg.GetJSON(redisKey, &circleIDs)
 		if err != nil {
-			logger.Log.Error("Failed to get joined circles: " + err.Error())
+			circleIDs, err = model.GetJoinedCircleIDsByUserID(pgsql.DB, int64(userID), 500)
+			if err != nil {
+				logger.Log.Error("Failed to get joined circles: " + err.Error())
+				response.InternalError(c, "Failed to get joined circles")
+				return
+			}
+
+			if err := redispkg.SetJSON(redisKey, circleIDs, 24*time.Hour); err != nil {
+				logger.Log.Error("Failed to cache joined circle IDs: " + err.Error())
+			}
+		}
+	} else {
+		// 搜索模式：绕过缓存，查询全量加入的圈子ID，确保搜索不遗漏
+		var err error
+		circleIDs, err = model.GetJoinedCircleIDsByUserID(pgsql.DB, int64(userID), 0)
+		if err != nil {
+			logger.Log.Error("Failed to get all joined circles for search: " + err.Error())
 			response.InternalError(c, "Failed to get joined circles")
 			return
-		}
-
-		// 写入缓存（24小时过期）
-		if err := redispkg.SetJSON(redisKey, circleIDs, 24*time.Hour); err != nil {
-			logger.Log.Error("Failed to cache joined circle IDs: " + err.Error())
 		}
 	}
 

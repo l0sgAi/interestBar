@@ -24,7 +24,7 @@ type CircleDocument struct {
 	Deleted     int16  `json:"deleted"`
 	JoinType    int16  `json:"join_type"`
 	// 排序值（用于 search_after 分页）
-	SortValues []interface{} `json:"sort_values,omitempty"`
+	SortValues []any `json:"sort_values,omitempty"`
 }
 
 // CircleListResponse 圈子列表响应
@@ -52,22 +52,22 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 	// 定义排序规则：按 hot、member_count、post_count、create_time 倒序
 	sortRules := []map[string]interface{}{
 		{
-			"hot": map[string]interface{}{
+			"hot": map[string]any{
 				"order": "desc",
 			},
 		},
 		{
-			"member_count": map[string]interface{}{
+			"member_count": map[string]any{
 				"order": "desc",
 			},
 		},
 		{
-			"post_count": map[string]interface{}{
+			"post_count": map[string]any{
 				"order": "desc",
 			},
 		},
 		{
-			"create_time": map[string]interface{}{
+			"create_time": map[string]any{
 				"order": "desc",
 			},
 		},
@@ -105,21 +105,21 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 	} else {
 		// 有关键字时，使用 multi_match 进行加权搜索
 		// name 权重是 description 的 3 倍
-		sortWithScore := []map[string]interface{}{
+		sortWithScore := []map[string]any{
 			{
-				"_score": map[string]interface{}{
+				"_score": map[string]any{
 					"order": "desc",
 				},
 			},
 		}
 		sortWithScore = append(sortWithScore, sortRules...)
 
-		searchQuery = map[string]interface{}{
-			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"must": []map[string]interface{}{
+		searchQuery = map[string]any{
+			"query": map[string]any{
+				"bool": map[string]any{
+					"must": []map[string]any{
 						{
-							"multi_match": map[string]interface{}{
+							"multi_match": map[string]any{
 								"query":    keyword,
 								"fields":   []string{"name^3", "description^1"},
 								"type":     "best_fields",
@@ -127,23 +127,42 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 							},
 						},
 						{
-							"term": map[string]interface{}{
+							"term": map[string]any{
 								"status": 1, // 只返回正常状态的圈子
 							},
 						},
 						{
-							"term": map[string]interface{}{
+							"term": map[string]any{
 								"deleted": 0, // 过滤掉已删除的圈子
 							},
 						},
 					},
-					"must_not": []map[string]interface{}{
+					"must_not": []map[string]any{
 						{
-							"term": map[string]interface{}{
+							"term": map[string]any{
 								"join_type": 2, // 过滤掉私密圈子
 							},
 						},
 					},
+					"should": []map[string]any{
+						{
+							"match_phrase": map[string]any{
+								"name": map[string]any{
+									"query": keyword,
+									"boost": 10.0,
+								},
+							},
+						},
+						{
+							"term": map[string]any{
+								"name.keyword": map[string]any{
+									"value": keyword,
+									"boost": 20.0,
+								},
+							},
+						},
+					},
+					"minimum_should_match": 0,
 				},
 			},
 			"size": size,
@@ -203,8 +222,13 @@ func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []
 	// 构建搜索查询
 	var searchQuery map[string]interface{}
 
-	// 定义排序规则：按 create_time 倒序
+	// 定义排序规则：按 hot、create_time 倒序
 	sortRules := []map[string]interface{}{
+		{
+			"hot": map[string]interface{}{
+				"order": "desc",
+			},
+		},
 		{
 			"create_time": map[string]interface{}{
 				"order": "desc",
@@ -285,13 +309,32 @@ func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []
 							},
 						},
 					},
+					"should": []map[string]interface{}{
+						{
+							"match_phrase": map[string]interface{}{
+								"name": map[string]interface{}{
+									"query": keyword,
+									"boost": 10.0,
+								},
+							},
+						},
+						{
+							"term": map[string]interface{}{
+								"name.keyword": map[string]interface{}{
+									"value": keyword,
+									"boost": 20.0,
+								},
+							},
+						},
+					},
+					"minimum_should_match": 0,
 				},
 			},
 			"size": size,
 			"sort": sortWithScore,
 		}
-	}
 
+}
 	// 添加 search_after 参数（如果提供）
 	if len(searchAfter) > 0 {
 		searchQuery["search_after"] = searchAfter
