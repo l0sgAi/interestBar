@@ -103,3 +103,21 @@ func ReactivateCommentLike(db *gorm.DB, userID, commentID int64) error {
 		Where("user_id = ? AND comment_id = ?", userID, commentID).
 		Update("deleted", CommentLikeActive).Error
 }
+
+// BatchCheckCommentLiked 批量检查用户是否点赞了多条评论
+func BatchCheckCommentLiked(db *gorm.DB, userID int64, commentIDs []int64) (map[int64]bool, error) {
+	if len(commentIDs) == 0 {
+		return make(map[int64]bool), nil
+	}
+	var likes []CommentLike
+	err := db.Where("user_id = ? AND comment_id IN ? AND deleted = ?", userID, commentIDs, CommentLikeActive).
+		Find(&likes).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int64]bool, len(likes))
+	for _, like := range likes {
+		result[like.CommentID] = true
+	}
+	return result, nil
+}

@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	dialer     *kafka.Dialer
-	writer     *kafka.Writer
-	postWriter *kafka.Writer
+	dialer          *kafka.Dialer
+	writer          *kafka.Writer
+	postWriter      *kafka.Writer
+	likeEventWriter *kafka.Writer
 )
 
 // InitRedpandaProducer 初始化Redpanda Producer
@@ -237,6 +238,85 @@ func ClosePostStatsProducer() error {
 			return err
 		}
 		logger.Log.Info("Post stats producer closed")
+	}
+	return nil
+}
+
+// ==================== 点赞事件消息 ====================
+
+// InitLikeEventProducer 初始化点赞事件Producer
+func InitLikeEventProducer() error {
+	likeEventWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.LikeEventTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("Like event producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.LikeEventTopic))
+	return nil
+}
+
+// PublishCommentLikeEvent 发布评论点赞事件消息
+func PublishCommentLikeEvent(userID, commentID, postID int64, amount int64) error {
+	if likeEventWriter == nil {
+		return fmt.Errorf("like event writer is not initialized")
+	}
+	return publishLikeEvent(LikeEventMessage{
+		Type:     "comment_like",
+		UserID:   userID,
+		TargetID: commentID,
+		PostID:   postID,
+		Amount:   amount,
+	})
+}
+
+// PublishPostLikeEvent 发布帖子点赞事件消息
+func PublishPostLikeEvent(userID, postID int64, amount int64) error {
+	if likeEventWriter == nil {
+		return fmt.Errorf("like event writer is not initialized")
+	}
+	return publishLikeEvent(LikeEventMessage{
+		Type:     "post_like",
+		UserID:   userID,
+		TargetID: postID,
+		Amount:   amount,
+	})
+}
+
+func publishLikeEvent(msg LikeEventMessage) error {
+	value, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal like event message: %w", err)
+	}
+	kafkaMsg := kafka.Message{
+		Key:   []byte(fmt.Sprintf("%d:%d", msg.UserID, msg.TargetID)),
+		Value: value,
+	}
+	if err := likeEventWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+		return fmt.Errorf("failed to write like event message: %w", err)
+	}
+	logger.Log.Debug(fmt.Sprintf("Published like event: type=%s, user=%d, target=%d, amount=%d",
+		msg.Type, msg.UserID, msg.TargetID, msg.Amount))
+	return nil
+}
+
+// CloseLikeEventProducer 关闭点赞事件Producer
+func CloseLikeEventProducer() error {
+	if likeEventWriter != nil {
+		if err := likeEventWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close like event writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("Like event producer closed")
 	}
 	return nil
 }

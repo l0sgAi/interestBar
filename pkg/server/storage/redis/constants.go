@@ -92,3 +92,33 @@ func GetCircleStatsKey(circleID int64) string {
 func GetPostStatsKey(postID int64) string {
 	return PostStatsPrefix + fmt.Sprint(postID)
 }
+
+// CommentStatsPrefix 评论统计信息Hash key前缀
+// 完整key格式: comment:stats:{comment_id}
+// 包含字段：like_count
+const CommentStatsPrefix = "comment:stats:"
+
+// UserCommentLikeListPrefix 用户评论点赞列表ZSET key前缀
+// 完整key格式: user:like:comments:{user_id}
+// Score: 最后访问时间戳(Unix毫秒), Member: commentId
+const UserCommentLikeListPrefix = "user:like:comments:"
+
+// UserPostLikeListPrefix 用户帖子点赞列表ZSET key前缀
+// 完整key格式: user:like:posts:{user_id}
+// Score: 最后访问时间戳(Unix毫秒), Member: postId
+const UserPostLikeListPrefix = "user:like:posts:"
+
+// GetCommentStatsKey 获取评论统计信息Hash缓存的完整key
+func GetCommentStatsKey(commentID int64) string {
+	return CommentStatsPrefix + fmt.Sprint(commentID)
+}
+
+// GetUserCommentLikeListKey 获取用户评论点赞列表ZSET的完整key
+func GetUserCommentLikeListKey(userID int64) string {
+	return UserCommentLikeListPrefix + fmt.Sprint(userID)
+}
+
+// GetUserPostLikeListKey 获取用户帖子点赞列表ZSET的完整key
+func GetUserPostLikeListKey(userID int64) string {
+	return UserPostLikeListPrefix + fmt.Sprint(userID)
+}

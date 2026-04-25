@@ -27,3 +27,12 @@ type PostStatisticsMessage struct {
 	PostID int64  `json:"post_id"` // 帖子ID
 	Value  int64  `json:"value"`   // 变化值: 1 或 -1
 }
+
+// LikeEventMessage 点赞事件消息
+type LikeEventMessage struct {
+	Type     string `json:"type"`      // "comment_like" 或 "post_like"
+	UserID   int64  `json:"user_id"`
+	TargetID int64  `json:"target_id"` // commentId 或 postId
+	PostID   int64  `json:"post_id"`   // 仅评论点赞时使用（冗余字段）
+	Amount   int64  `json:"amount"`    // 1=点赞, -1=取消点赞
+}

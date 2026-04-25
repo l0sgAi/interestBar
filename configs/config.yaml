@@ -91,4 +91,7 @@ redpanda:
   post_consumer_group: "post_statistics_consumer_group" # 帖子统计消费者组
   post_flush_interval: 15 # 帖子统计刷新间隔(分钟)
   post_stats_ttl: 43 # 帖子统计Redis缓存TTL(分钟)
+  like_event_topic: "like_events" # 点赞事件topic
+  like_event_consumer_group: "like_events_consumer_group" # 点赞事件消费者组
+  like_event_flush_interval: 10 # 点赞事件刷写间隔(秒)
 

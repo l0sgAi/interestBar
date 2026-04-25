@@ -73,6 +73,22 @@ func Run(configPath string) {
 		go redpanda.StartPostStatisticsConsumerWithRetry()
 	}
 
+	// 8.7 Init Like event Redpanda producer
+	if err := redpanda.InitLikeEventProducer(); err != nil {
+		logger.Log.Error("Failed to initialize like event producer: " + err.Error())
+		logger.Log.Warn("Like event persistence to database is disabled.")
+	} else {
+		logger.Log.Info("Like event producer initialized successfully")
+		go redpanda.StartLikeEventConsumerWithRetry()
+	}
+
+	// 8.8 Init Like Lua scripts in Redis
+	if err := redis.InitLikeLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load like Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("Like Lua scripts loaded successfully")
+	}
+
 	// 9. Init Router
 	r := router.InitRouter()
 
@@ -97,5 +113,6 @@ func Run(configPath string) {
 	auth.CloseSaToken()
 	redpanda.CloseRedpandaProducer()
 	redpanda.ClosePostStatsProducer()
+	redpanda.CloseLikeEventProducer()
 	logger.Log.Info("Server shutdown complete")
 }

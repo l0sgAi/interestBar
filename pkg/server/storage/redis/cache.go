@@ -656,3 +656,77 @@ func BatchUpdatePostStatistics(updates map[int64]*PostStatistics) error {
 	logger.Log.Debug(fmt.Sprintf("Batch update post statistics success: count=%d", len(updates)))
 	return nil
 }
+
+// ==================== 评论统计信息操作 ====================
+
+// CommentStatisticsExists 检查评论统计信息Hash是否存在
+func CommentStatisticsExists(commentID int64) (bool, error) {
+	key := GetCommentStatsKey(commentID)
+	exists, err := Client.Exists(ctx, key).Result()
+	if err != nil {
+		return false, err
+	}
+	return exists > 0, nil
+}
+
+// UpdateCommentStatistics 更新评论统计信息缓存到Hash
+func UpdateCommentStatistics(commentID int64, likeCount int) error {
+	key := GetCommentStatsKey(commentID)
+	pipe := Client.Pipeline()
+	pipe.HSet(ctx, key, "like_count", likeCount)
+	pipe.Expire(ctx, key, postStatsTTL)
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update comment statistics: %w", err)
+	}
+	return nil
+}
+
+// GetCommentLikeCount 获取评论点赞数（从Hash读取）
+func GetCommentLikeCount(commentID int64) (int, error) {
+	key := GetCommentStatsKey(commentID)
+	val, err := Client.HGet(ctx, key, "like_count").Result()
+	if err != nil {
+		if err == redis.Nil {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("failed to get comment like count: %w", err)
+	}
+	count, err := strconv.Atoi(val)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// IncrementCommentLikeCount 增加评论点赞数（原子操作）
+func IncrementCommentLikeCount(commentID int64) error {
+	key := GetCommentStatsKey(commentID)
+	pipe := Client.Pipeline()
+	pipe.HIncrBy(ctx, key, "like_count", 1)
+	pipe.Expire(ctx, key, postStatsTTL)
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to increment comment like count: %w", err)
+	}
+	return nil
+}
+
+// DecrementCommentLikeCount 减少评论点赞数（原子操作）
+func DecrementCommentLikeCount(commentID int64) error {
+	key := GetCommentStatsKey(commentID)
+	pipe := Client.Pipeline()
+	decrCmd := pipe.HIncrBy(ctx, key, "like_count", -1)
+	pipe.Expire(ctx, key, postStatsTTL)
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to decrement comment like count: %w", err)
+	}
+	newCount := decrCmd.Val()
+	if newCount < 0 {
+		if err := Client.HSet(ctx, key, "like_count", 0).Err(); err != nil {
+			return fmt.Errorf("failed to reset negative comment like count: %w", err)
+		}
+	}
+	return nil
+}

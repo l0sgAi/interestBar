@@ -7,8 +7,8 @@ import (
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
-	redpanda "interestBar/pkg/server/storage/redpanda"
 	redispkg "interestBar/pkg/server/storage/redis"
+	redpanda "interestBar/pkg/server/storage/redpanda"
 	"interestBar/pkg/server/utils"
 
 	"github.com/gin-gonic/gin"
@@ -24,11 +24,11 @@ func NewCommentController() *CommentController {
 
 // CreateCommentRequest 发评论/回复的请求结构
 type CreateCommentRequest struct {
-	PostID    int64  `json:"post_id" binding:"required,min=1"`
+	PostID    int64           `json:"post_id" binding:"required,min=1"`
 	Content   string          `json:"content" binding:"required,min=1,max=10000"`
 	ExtraData json.RawMessage `json:"extra_data" binding:"omitempty"`        // 扩展数据（JSON格式，如图片URL数组等）
 	RootID    int64           `json:"root_id" binding:"omitempty,min=1"`     // 根评论ID，0或不传=顶层评论
-	ReplyToID int64  `json:"reply_to_id" binding:"omitempty,min=1"` // 被回复的评论ID
+	ReplyToID int64           `json:"reply_to_id" binding:"omitempty,min=1"` // 被回复的评论ID
 }
 
 // CreateComment 发评论（支持顶层评论和回复）
@@ -167,6 +167,9 @@ type CommentVO struct {
 	// 被回复人信息（仅回复时有值）
 	ReplyToUserID int64  `json:"reply_to_user_id,omitempty"`
 	ReplyToName   string `json:"reply_to_name,omitempty"`
+
+	// 用户交互状态
+	Liked bool `json:"liked"` // 当前用户是否点赞了该评论
 }
 
 // GetCommentsRequest 获取顶层评论列表的请求结构
@@ -191,7 +194,14 @@ func (ctrl *CommentController) GetComments(c *gin.Context) {
 		return
 	}
 
-	vos := buildCommentVOs(comments)
+	// 获取当前用户点赞状态
+	userID, _ := utils.GetUserIDFromRequest(c)
+	var likedMap map[int64]bool
+	if userID > 0 && len(comments) > 0 {
+		likedMap = getCommentLikedStatus(int64(userID), comments)
+	}
+
+	vos := buildCommentVOs(comments, likedMap)
 
 	response.Success(c, map[string]interface{}{
 		"items":       vos,
@@ -243,7 +253,14 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 		return
 	}
 
-	vos := buildCommentVOs(comments)
+	// 获取当前用户点赞状态
+	userID, _ := utils.GetUserIDFromRequest(c)
+	var likedMap map[int64]bool
+	if userID > 0 && len(comments) > 0 {
+		likedMap = getCommentLikedStatus(int64(userID), comments)
+	}
+
+	vos := buildCommentVOs(comments, likedMap)
 
 	response.Success(c, map[string]interface{}{
 		"items":       vos,
@@ -253,7 +270,7 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 }
 
 // buildCommentVOs 批量构建 CommentVO（包含评论者信息和被回复人信息）
-func buildCommentVOs(comments []model.Comment) []CommentVO {
+func buildCommentVOs(comments []model.Comment, likedMap map[int64]bool) []CommentVO {
 	// 收集所有需要查询用户信息的用户ID
 	userIDSet := make(map[int64]struct{})
 	for _, cm := range comments {
@@ -285,6 +302,7 @@ func buildCommentVOs(comments []model.Comment) []CommentVO {
 			ReplyCount: cm.ReplyCount,
 			Status:     cm.Status,
 			CreateTime: cm.CreateTime.Format("2006-01-02 15:04:05"),
+			Liked:      likedMap[cm.ID],
 		}
 
 		// 填充评论者信息
@@ -341,6 +359,23 @@ func (ctrl *CommentController) GetCommentDetail(c *gin.Context) {
 		CreateTime: comment.CreateTime.Format("2006-01-02 15:04:05"),
 	}
 
+	// 获取当前用户点赞状态
+	curUserID, _ := utils.GetUserIDFromRequest(c)
+	if curUserID > 0 {
+		likedMap, cacheErr := redispkg.BatchCheckCommentLiked(int64(curUserID), []int64{commentID})
+		if cacheErr == nil && likedMap[commentID] {
+			vo.Liked = true
+		} else if cacheErr == nil && !likedMap[commentID] {
+			isLiked, dbErr := model.IsCommentLiked(pgsql.DB, int64(curUserID), commentID)
+			if dbErr == nil {
+				vo.Liked = isLiked
+				if isLiked {
+					redispkg.BackfillCommentLikes(int64(curUserID), []int64{commentID})
+				}
+			}
+		}
+	}
+
 	// 填充评论者信息
 	if author, err := model.GetUserByID(pgsql.DB, comment.UserID); err == nil {
 		vo.AuthorName = author.Username
@@ -356,6 +391,56 @@ func (ctrl *CommentController) GetCommentDetail(c *gin.Context) {
 	}
 
 	response.Success(c, vo)
+}
+
+// getCommentLikedStatus 批量获取评论点赞状态（先查Redis ZSET，miss时回源DB）
+func getCommentLikedStatus(userID int64, comments []model.Comment) map[int64]bool {
+	commentIDs := make([]int64, len(comments))
+	for i, cm := range comments {
+		commentIDs[i] = cm.ID
+	}
+
+	// 1. Batch check from Redis ZSET
+	likedMap, err := redispkg.BatchCheckCommentLiked(userID, commentIDs)
+	if err != nil {
+		logger.Log.Error("Failed to batch check comment liked from Redis: " + err.Error())
+		likedMap = make(map[int64]bool)
+	}
+
+	// 2. Find cache misses
+	var missIDs []int64
+	for _, id := range commentIDs {
+		if !likedMap[id] {
+			missIDs = append(missIDs, id)
+		}
+	}
+
+	// 3. Fallback to DB for cache misses
+	if len(missIDs) > 0 {
+		dbLiked, err := model.BatchCheckCommentLiked(pgsql.DB, userID, missIDs)
+		if err != nil {
+			logger.Log.Error("Failed to batch check comment liked from DB: " + err.Error())
+		} else {
+			// Merge DB results into likedMap
+			for id, liked := range dbLiked {
+				likedMap[id] = liked
+			}
+			// Backfill ZSET for DB-confirmed likes
+			var backfillIDs []int64
+			for _, id := range missIDs {
+				if dbLiked[id] {
+					backfillIDs = append(backfillIDs, id)
+				}
+			}
+			if len(backfillIDs) > 0 {
+				if err := redispkg.BackfillCommentLikes(userID, backfillIDs); err != nil {
+					logger.Log.Error("Failed to backfill comment likes to Redis: " + err.Error())
+				}
+			}
+		}
+	}
+
+	return likedMap
 }
 
 // restorePostStatsIfNeed 恢复帖子统计信息到Redis缓存（如果缓存不存在）

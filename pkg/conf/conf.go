@@ -140,7 +140,10 @@ type Redpanda struct {
 	PostTopic          string   `mapstructure:"post_topic" json:"post_topic" yaml:"post_topic"`
 	PostConsumerGroup  string   `mapstructure:"post_consumer_group" json:"post_consumer_group" yaml:"post_consumer_group"`
 	PostFlushInterval  int      `mapstructure:"post_flush_interval" json:"post_flush_interval" yaml:"post_flush_interval"`
-	PostStatsTTL       int      `mapstructure:"post_stats_ttl" json:"post_stats_ttl" yaml:"post_stats_ttl"`
+	PostStatsTTL            int      `mapstructure:"post_stats_ttl" json:"post_stats_ttl" yaml:"post_stats_ttl"`
+	LikeEventTopic          string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
+	LikeEventConsumerGroup  string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
+	LikeEventFlushInterval  int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
 }
 
 func InitConfig(path string) {

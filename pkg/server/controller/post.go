@@ -243,11 +243,27 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 		return
 	}
 
-	// 2. 检查用户是否点赞了该帖子
-	isLiked, err := model.IsPostLiked(pgsql.DB, int64(userID), postID)
-	if err != nil {
-		// 点赞状态查询失败不影响接口返回，默认为false
-		isLiked = false
+	// 2. 检查用户是否点赞了该帖子（先查Redis，miss时回源DB）
+	var isLiked bool
+	likedMap, _, cacheErr := redispkg.BatchCheckPostLiked(int64(userID), []int64{postID})
+	if cacheErr == nil {
+		if likedMap[postID] {
+			isLiked = true
+		} else {
+			// Redis缓存未命中，回源DB
+			isLiked, cacheErr = model.IsPostLiked(pgsql.DB, int64(userID), postID)
+			if cacheErr != nil {
+				isLiked = false
+			}
+			if isLiked {
+				redispkg.BackfillPostLikes(int64(userID), []int64{postID})
+			}
+		}
+	} else {
+		isLiked, cacheErr = model.IsPostLiked(pgsql.DB, int64(userID), postID)
+		if cacheErr != nil {
+			isLiked = false
+		}
 	}
 
 	// TODO: 3. 异步增加浏览量（不阻塞主流程）

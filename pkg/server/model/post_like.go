@@ -102,3 +102,21 @@ func ReactivatePostLike(db *gorm.DB, userID, postID int64) error {
 		Where("user_id = ? AND post_id = ?", userID, postID).
 		Update("deleted", PostLikeActive).Error
 }
+
+// BatchCheckPostLiked 批量检查用户是否点赞了多个帖子
+func BatchCheckPostLiked(db *gorm.DB, userID int64, postIDs []int64) (map[int64]bool, error) {
+	if len(postIDs) == 0 {
+		return make(map[int64]bool), nil
+	}
+	var likes []PostLike
+	err := db.Where("user_id = ? AND post_id IN ? AND deleted = ?", userID, postIDs, PostLikeActive).
+		Find(&likes).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int64]bool, len(likes))
+	for _, like := range likes {
+		result[like.PostID] = true
+	}
+	return result, nil
+}

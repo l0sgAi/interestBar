@@ -92,4 +92,12 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		category.GET("/get", sagin.CheckLogin(), categoryCtrl.GetCategories)
 	}
 
+	// Like routes (需要登录鉴权)
+	likeCtrl := controller.NewLikeController()
+	like := r.Group("like")
+	{
+		// 点赞/取消点赞 - 需要登录
+		like.POST("/toggle", sagin.CheckLogin(), likeCtrl.ToggleLike)
+	}
+
 }
