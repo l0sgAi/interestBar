@@ -128,7 +128,7 @@ func (ctrl *UserController) GoogleCallback(c *gin.Context) {
 
 			// 插入数据库
 			if createErr := pgsql.DB.Create(&newUser).Error; createErr != nil {
-				logger.Log.Error("Failed to create user account: " + err.Error())
+				logger.Log.Error("Failed to create user account: " + createErr.Error())
 				response.InternalError(c, "Failed to create user account")
 				return
 			}
@@ -234,7 +234,7 @@ func (ctrl *UserController) GithubCallback(c *gin.Context) {
 
 			// 插入数据库
 			if createErr := pgsql.DB.Create(&newUser).Error; createErr != nil {
-				logger.Log.Error("Failed to create user account: " + err.Error())
+				logger.Log.Error("Failed to create user account: " + createErr.Error())
 				response.InternalError(c, "Failed to create user account")
 				return
 			}
