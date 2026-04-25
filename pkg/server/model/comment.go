@@ -17,6 +17,7 @@ type Comment struct {
 	ReplyToID      int64      `json:"reply_to_id" gorm:"column:reply_to_id;default:0"`              // 被回复的评论ID，0为非回复
 	ReplyToUserID  int64      `json:"reply_to_user_id" gorm:"column:reply_to_user_id;default:0"`     // 被回复用户ID，0为非回复
 	Content        string     `json:"content" gorm:"column:content;type:text;not null"`             // 评论内容
+	ExtraData      json.RawMessage `json:"extra_data" gorm:"column:extra_data;type:jsonb;default:'{}'::jsonb"` // 扩展数据（JSON格式，如图片URL数组等）
 	LikeCount      int        `json:"like_count" gorm:"column:like_count;default:0"`                // 点赞数
 	ReplyCount     int        `json:"reply_count" gorm:"column:reply_count;default:0"`              // 子评论数
 	Status         int16      `json:"status" gorm:"column:status;type:smallint;default:1"`          // 状态

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
@@ -24,8 +25,9 @@ func NewCommentController() *CommentController {
 // CreateCommentRequest 发评论/回复的请求结构
 type CreateCommentRequest struct {
 	PostID    int64  `json:"post_id" binding:"required,min=1"`
-	Content   string `json:"content" binding:"required,min=1,max=10000"`
-	RootID    int64  `json:"root_id" binding:"omitempty,min=1"`     // 根评论ID，0或不传=顶层评论
+	Content   string          `json:"content" binding:"required,min=1,max=10000"`
+	ExtraData json.RawMessage `json:"extra_data" binding:"omitempty"`        // 扩展数据（JSON格式，如图片URL数组等）
+	RootID    int64           `json:"root_id" binding:"omitempty,min=1"`     // 根评论ID，0或不传=顶层评论
 	ReplyToID int64  `json:"reply_to_id" binding:"omitempty,min=1"` // 被回复的评论ID
 }
 
@@ -115,6 +117,7 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 		ReplyToID:     req.ReplyToID,
 		ReplyToUserID: replyToUserID,
 		Content:       req.Content,
+		ExtraData:     req.ExtraData,
 		Status:        model.CommentStatusNormal,
 		Deleted:       0,
 	}
@@ -153,6 +156,9 @@ type CommentVO struct {
 	ReplyCount int    `json:"reply_count"`
 	Status     int16  `json:"status"`
 	CreateTime string `json:"create_time"`
+
+	// 扩展数据（JSON格式，包含图片URL数组等）
+	ExtraData json.RawMessage `json:"extra_data,omitempty"`
 
 	// 评论者信息
 	AuthorName   string `json:"author_name"`
@@ -199,6 +205,7 @@ type GetRepliesRequest struct {
 	RootID int64  `form:"root_id" binding:"required,min=1"`
 	Sort   int    `form:"sort" binding:"omitempty,oneof=0 1"` // 0=时间倒序(默认), 1=点赞倒序
 	Cursor string `form:"cursor"`
+	Limit  int    `form:"limit" binding:"omitempty,min=1,max=50"` // 每页条数，默认10
 }
 
 // GetReplies 获取某条评论的子回复列表（游标分页）
@@ -225,7 +232,12 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 		return
 	}
 
-	comments, nextCursor, hasMore, err := model.GetRepliesByCursor(pgsql.DB, req.RootID, 5, req.Sort, req.Cursor)
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+
+	comments, nextCursor, hasMore, err := model.GetRepliesByCursor(pgsql.DB, req.RootID, limit, req.Sort, req.Cursor)
 	if err != nil {
 		response.InternalError(c, "Failed to get replies")
 		return
@@ -268,6 +280,7 @@ func buildCommentVOs(comments []model.Comment) []CommentVO {
 			RootID:     cm.RootID,
 			ReplyToID:  cm.ReplyToID,
 			Content:    cm.Content,
+			ExtraData:  cm.ExtraData,
 			LikeCount:  cm.LikeCount,
 			ReplyCount: cm.ReplyCount,
 			Status:     cm.Status,
@@ -321,6 +334,7 @@ func (ctrl *CommentController) GetCommentDetail(c *gin.Context) {
 		RootID:     comment.RootID,
 		ReplyToID:  comment.ReplyToID,
 		Content:    comment.Content,
+		ExtraData:  comment.ExtraData,
 		LikeCount:  comment.LikeCount,
 		ReplyCount: comment.ReplyCount,
 		Status:     comment.Status,

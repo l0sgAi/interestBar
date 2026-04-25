@@ -80,15 +80,10 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserList
 		}
 		} else {
 			// 有关键字时，使用 multi_match 进行加权搜索
-			// username 权重是 email 的 3 倍，按_score和id排序
+			// username 权重是 email 的 3 倍，按_score排序
 			sortWithScore := []map[string]interface{}{
 				{
 					"_score": map[string]interface{}{
-						"order": "desc",
-					},
-				},
-				{
-					"id": map[string]interface{}{
 						"order": "desc",
 					},
 				},

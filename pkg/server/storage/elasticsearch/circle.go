@@ -89,15 +89,10 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 		}
 	} else {
 		// 有关键字时，使用 multi_match 进行加权搜索
-		// name 权重是 description 的 3 倍，按_score和id排序
+		// name 权重是 description 的 3 倍，按_score排序
 		sortWithScore := []map[string]interface{}{
 			{
 				"_score": map[string]interface{}{
-					"order": "desc",
-				},
-			},
-			{
-				"id": map[string]interface{}{
 					"order": "desc",
 				},
 			},
@@ -255,15 +250,10 @@ func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []
 		}
 	} else {
 		// 有关键字时，使用 multi_match 进行加权搜索
-		// name 权重是 description 的 3 倍，按_score和id排序
+		// name 权重是 description 的 3 倍，按_score排序
 		sortWithScore := []map[string]interface{}{
 			{
 				"_score": map[string]interface{}{
-					"order": "desc",
-				},
-			},
-			{
-				"id": map[string]interface{}{
 					"order": "desc",
 				},
 			},
