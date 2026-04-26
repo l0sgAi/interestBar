@@ -509,18 +509,11 @@ func GetPostStatistics(postID int64) (*PostStatistics, error) {
 	return stats, nil
 }
 
-// IncrementPostViewCount 增加帖子浏览量（原子操作）
-func IncrementPostViewCount(postID int64) error {
-	key := GetPostStatsKey(postID)
-	pipe := Client.Pipeline()
-	pipe.HIncrBy(ctx, key, "view_count", 1)
-	pipe.Expire(ctx, key, postStatsTTL)
-
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to increment post view count: %w", err)
-	}
-	return nil
+// IncrementPostViewCount 增加帖子浏览量（原子操作，带去重和上限检查）
+// 返回值：>0=新浏览量, 0=去重跳过, -1=已达上限
+// 注意：此函数需要先调用 restorePostStatsIfNeed 确保 Redis 缓存存在
+func IncrementPostViewCount(postID, userID int64) (int64, error) {
+	return IncrementPostViewCountWithDedup(postID, userID)
 }
 
 // IncrementPostCommentCount 增加帖子评论数（原子操作）

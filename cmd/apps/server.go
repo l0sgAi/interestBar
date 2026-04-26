@@ -89,6 +89,13 @@ func Run(configPath string) {
 		logger.Log.Info("Like Lua scripts loaded successfully")
 	}
 
+	// 8.9 Init View Lua scripts in Redis
+	if err := redis.InitViewLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load view Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("View Lua scripts loaded successfully")
+	}
+
 	// 9. Init Router
 	r := router.InitRouter()
 

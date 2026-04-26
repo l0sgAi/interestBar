@@ -490,7 +490,7 @@ func (a *PostStatisticsAggregator) batchUpdatePostStats(deltas map[int64]*postSt
 		// 使用JSON批量更新所有统计字段
 		sql := `
 		UPDATE post p
-		SET view_count = GREATEST(p.view_count + v.view_delta, 0),
+		SET view_count = LEAST(GREATEST(p.view_count + v.view_delta, 0), 1000000000),
 		    comment_count = GREATEST(p.comment_count + v.comment_delta, 0),
 		    like_count = GREATEST(p.like_count + v.like_delta, 0),
 		    collect_count = GREATEST(p.collect_count + v.collect_delta, 0),

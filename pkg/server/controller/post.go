@@ -266,10 +266,22 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 		}
 	}
 
-	// TODO: 3. 异步增加浏览量（不阻塞主流程）
-	// go func() {
-	// 	_ = model.IncrementViewCount(pgsql.DB, postID)
-	// }()
+	// 3. 异步增加浏览量（不阻塞主流程）
+	go func(postID, userID int64) {
+		if err := restorePostStatsIfNeed(postID); err != nil {
+			logger.Log.Error("Failed to restore post stats cache: " + err.Error())
+		}
+		newCount, err := redispkg.IncrementPostViewCount(postID, userID)
+		if err != nil {
+			logger.Log.Error("Failed to increment post view count: " + err.Error())
+			return
+		}
+		if newCount > 0 {
+			if err := redpanda.PublishPostViewCount(postID); err != nil {
+				logger.Log.Error("Failed to publish view count event: " + err.Error())
+			}
+		}
+	}(postID, int64(userID))
 
 	// 4. 查询发帖人信息
 	var authorID int64 = post.UserID
@@ -309,6 +321,11 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 		AuthorName:    authorName,
 		AuthorAvatar:  authorAvatar,
 		IsLiked:       isLiked,
+	}
+
+	// 6. 尝试从 Redis 获取最新浏览量（覆盖 DB 值）
+	if stats, err := redispkg.GetPostStatistics(postID); err == nil && stats != nil {
+		vo.ViewCount = stats.ViewCount
 	}
 
 	response.Success(c, vo)
