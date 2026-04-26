@@ -8,8 +8,8 @@ import (
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
 	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
-	redpanda "interestBar/pkg/server/storage/redpanda"
 	redispkg "interestBar/pkg/server/storage/redis"
+	redpanda "interestBar/pkg/server/storage/redpanda"
 	"interestBar/pkg/server/utils"
 	"strings"
 	"time"
@@ -27,13 +27,13 @@ func NewPostController() *PostController {
 
 // CreatePostRequest 创建帖子的请求结构
 type CreatePostRequest struct {
-	CircleID   int64                  `json:"circle_id" binding:"required,min=1"`
-	Title      string                 `json:"title" binding:"required,min=1,max=200"`
-	Content    string                 `json:"content" binding:"omitempty,max=50000"`
-	Summary    string                 `json:"summary" binding:"omitempty,max=500"`
-	Type       int16                  `json:"type" binding:"omitempty,min=1,max=3"`
+	CircleID   int64    `json:"circle_id" binding:"required,min=1"`
+	Title      string   `json:"title" binding:"required,min=1,max=200"`
+	Content    string   `json:"content" binding:"omitempty,max=50000"`
+	Summary    string   `json:"summary" binding:"omitempty,max=500"`
+	Type       int16    `json:"type" binding:"omitempty,min=1,max=3"`
 	MediaExtra []string `json:"media_extra" binding:"omitempty"`
-	Status     int16                  `json:"status" binding:"omitempty,min=0,max=4"`
+	Status     int16    `json:"status" binding:"omitempty,min=0,max=4"`
 }
 
 // CreatePost 创建帖子
@@ -379,10 +379,12 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 	// 批量收集所有的用户ID和圈子ID
 	userIDs := make([]int64, 0, len(result.Posts))
 	circleIDs := make([]int64, 0, len(result.Posts))
+	postIDs := make([]int64, 0, len(result.Posts))
 	userIDSet := make(map[int64]struct{})
 	circleIDSet := make(map[int64]struct{})
 
 	for _, doc := range result.Posts {
+		postIDs = append(postIDs, doc.ID)
 		if _, exists := userIDSet[doc.UserID]; !exists {
 			userIDSet[doc.UserID] = struct{}{}
 			userIDs = append(userIDs, doc.UserID)
@@ -393,9 +395,10 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 		}
 	}
 
-	// 批量查询用户信息和圈子信息
+	// 批量查询用户信息、圈子信息和帖子媒体信息
 	userMap, _ := model.GetUsersByIDs(pgsql.DB, userIDs)
 	circleMap, _ := model.GetCirclesByIDs(pgsql.DB, circleIDs)
+	mediaMap, _ := model.GetPostsMediaByIDs(pgsql.DB, postIDs)
 
 	// 构建返回数据
 	for _, doc := range result.Posts {
@@ -419,6 +422,11 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 
 		// 解析时间字符串为 time.Time
 		createTime, _ := time.Parse(time.RFC3339Nano, doc.CreateTime)
+		// 获取首图URL
+		var firstImage string
+		if media, ok := mediaMap[doc.ID]; ok && len(media) > 0 {
+			firstImage = media[0]
+		}
 
 		post := PostListVO{
 			ID:           doc.ID,
@@ -441,6 +449,7 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 			AuthorAvatar: authorAvatar,
 			CircleName:   circleName,
 			CircleAvatar: circleAvatar,
+			FirstImage:   firstImage,
 		}
 		posts = append(posts, post)
 	}
@@ -490,4 +499,7 @@ type PostListVO struct {
 	// 圈子信息
 	CircleName   string `json:"circle_name"`   // 圈子名称
 	CircleAvatar string `json:"circle_avatar"` // 圈子头像URL
+
+	// 首图
+	FirstImage string `json:"first_image"` // 首图URL，来自media_extra第一张图片
 }

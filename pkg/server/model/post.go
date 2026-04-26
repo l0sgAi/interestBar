@@ -218,6 +218,20 @@ func DecrementLikeCount(db *gorm.DB, postID int64) error {
 		UpdateColumn("like_count", gorm.Expr("like_count - ?", 1)).Error
 }
 
+// GetPostsMediaByIDs 批量获取帖子的媒体信息
+func GetPostsMediaByIDs(db *gorm.DB, ids []int64) (map[int64]MediaExtraJSON, error) {
+	var posts []Post
+	err := db.Select("id, media_extra").Where("id IN ?", ids).Find(&posts).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[int64]MediaExtraJSON, len(posts))
+	for _, p := range posts {
+		result[p.ID] = p.MediaExtra
+	}
+	return result, nil
+}
+
 // CreatePost 创建帖子
 // 注意：帖子计数的持久化由Redpanda异步处理，Redis缓存由controller层实时更新
 func CreatePost(db *gorm.DB, post *Post) error {
