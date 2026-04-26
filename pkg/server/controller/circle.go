@@ -725,3 +725,123 @@ func (ctrl *CircleController) GetMyCircles(c *gin.Context) {
 		"search_after": searchAfterJSON,
 	})
 }
+
+// GetCirclePostsRequest 圈内帖子列表请求结构
+type GetCirclePostsRequest struct {
+	CircleID    int64  `form:"circle_id" binding:"required,min=1"`
+	Type        int    `form:"type" binding:"required,min=1,max=3"`
+	Size        int    `form:"size"`
+	SearchAfter string `form:"search_after"`
+}
+
+// GetCirclePosts 获取圈内帖子列表（支持3种排序模式）
+// GET /circle/posts
+func (ctrl *CircleController) GetCirclePosts(c *gin.Context) {
+	var req GetCirclePostsRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		response.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	size := req.Size
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	var searchAfter []interface{}
+	if req.SearchAfter != "" {
+		if err := json.Unmarshal([]byte(req.SearchAfter), &searchAfter); err != nil {
+			response.BadRequest(c, "Invalid search_after parameter")
+			return
+		}
+	}
+
+	// 调用 Elasticsearch 搜索
+	result, err := elasticsearch.SearchCirclePosts(req.CircleID, req.Type, size, searchAfter)
+	if err != nil {
+		logger.Log.Error("Failed to search circle posts: " + err.Error())
+		response.InternalError(c, "Failed to search circle posts")
+		return
+	}
+
+	// 收集所有用户ID和帖子ID
+	userIDs := make([]int64, 0, len(result.Posts))
+	postIDs := make([]int64, 0, len(result.Posts))
+	userIDSet := make(map[int64]struct{})
+
+	for _, doc := range result.Posts {
+		postIDs = append(postIDs, doc.ID)
+		if _, exists := userIDSet[doc.UserID]; !exists {
+			userIDSet[doc.UserID] = struct{}{}
+			userIDs = append(userIDs, doc.UserID)
+		}
+	}
+
+	// 批量查询用户信息、圈子信息、帖子媒体
+	userMap, _ := model.GetUsersByIDs(pgsql.DB, userIDs)
+	circleMap, _ := model.GetCirclesByIDs(pgsql.DB, []int64{req.CircleID})
+	mediaMap, _ := model.GetPostsMediaByIDs(pgsql.DB, postIDs)
+
+	// 获取圈子信息（所有帖子属于同一圈子）
+	var circleName, circleAvatar string
+	if circle, ok := circleMap[req.CircleID]; ok {
+		circleName = circle.Name
+		circleAvatar = circle.AvatarURL
+	}
+
+	// 构建帖子列表
+	posts := make([]PostListVO, 0, len(result.Posts))
+	for _, doc := range result.Posts {
+		var authorName, authorAvatar string
+		if author, ok := userMap[doc.UserID]; ok {
+			authorName = author.Username
+			authorAvatar = author.AvatarURL
+		}
+
+		createTime, _ := time.Parse(time.RFC3339Nano, doc.CreateTime)
+
+		var images []string
+		if media, ok := mediaMap[doc.ID]; ok {
+			images = media
+		}
+
+		posts = append(posts, PostListVO{
+			ID:           doc.ID,
+			CircleID:     doc.CircleID,
+			UserID:       doc.UserID,
+			Type:         doc.Type,
+			Title:        doc.Title,
+			Summary:      doc.Summary,
+			Content:      doc.Content,
+			ViewCount:    doc.ViewCount,
+			CommentCount: doc.CommentCount,
+			LikeCount:    doc.LikeCount,
+			CollectCount: doc.CollectCount,
+			IsPinned:     doc.IsPinned,
+			IsEssence:    doc.IsEssence,
+			IsLock:       doc.IsLock,
+			Status:       doc.Status,
+			CreateTime:   createTime,
+			AuthorName:   authorName,
+			AuthorAvatar: authorAvatar,
+			CircleName:   circleName,
+			CircleAvatar: circleAvatar,
+			Images:       images,
+		})
+	}
+
+	var searchAfterJSON string
+	if result.SearchAfter != nil {
+		if bytes, err := json.Marshal(result.SearchAfter); err == nil {
+			searchAfterJSON = string(bytes)
+		}
+	}
+
+	response.Success(c, map[string]interface{}{
+		"posts":        posts,
+		"total":        result.Total,
+		"size":         result.Size,
+		"search_after": searchAfterJSON,
+	})
+}

@@ -56,6 +56,8 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		circle.POST("/join", sagin.CheckLogin(), circleCtrl.JoinCircle)
 		// 退出兴趣圈
 		circle.POST("/leave", sagin.CheckLogin(), circleCtrl.LeaveCircle)
+		// 获取圈内帖子列表
+		circle.GET("/posts", sagin.CheckLogin(), circleCtrl.GetCirclePosts)
 	}
 
 	// Post routes (需要登录鉴权)

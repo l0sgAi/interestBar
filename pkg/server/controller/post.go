@@ -422,10 +422,10 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 
 		// 解析时间字符串为 time.Time
 		createTime, _ := time.Parse(time.RFC3339Nano, doc.CreateTime)
-		// 获取首图URL
-		var firstImage string
-		if media, ok := mediaMap[doc.ID]; ok && len(media) > 0 {
-			firstImage = media[0]
+		// 获取图片列表
+		var images []string
+		if media, ok := mediaMap[doc.ID]; ok {
+			images = media
 		}
 
 		post := PostListVO{
@@ -449,7 +449,7 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 			AuthorAvatar: authorAvatar,
 			CircleName:   circleName,
 			CircleAvatar: circleAvatar,
-			FirstImage:   firstImage,
+			Images:       images,
 		}
 		posts = append(posts, post)
 	}
@@ -500,6 +500,6 @@ type PostListVO struct {
 	CircleName   string `json:"circle_name"`   // 圈子名称
 	CircleAvatar string `json:"circle_avatar"` // 圈子头像URL
 
-	// 首图
-	FirstImage string `json:"first_image"` // 首图URL，来自media_extra第一张图片
+	// 图片列表
+	Images []string `json:"images"` // 图片URL列表，来自media_extra
 }

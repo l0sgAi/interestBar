@@ -269,3 +269,95 @@ func parsePostSearchResponse(res *esapi.Response, size int) (*PostListResponse, 
 
 	return response, nil
 }
+
+// SearchCirclePosts 圈内帖子列表搜索
+// circleID: 圈子ID（必传）
+// sortType: 排序类型 1=近期热点 2=最新 3=精华
+// size: 每页数量，默认 20
+// searchAfter: 上一页返回的 search_after 值，用于获取下一页
+func SearchCirclePosts(circleID int64, sortType int, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	// 共享过滤条件
+	mustConditions := []map[string]interface{}{
+		{"term": map[string]interface{}{"deleted": 0}},
+		{"term": map[string]interface{}{"status": 1}},
+		{"term": map[string]interface{}{"circle_id": circleID}},
+	}
+
+	var sortRules []map[string]interface{}
+	var runtimeMappings map[string]interface{}
+
+	switch sortType {
+	case 1: // 近期热点：rank_score = hot / (age_hours + 2)^0.8
+		runtimeMappings = map[string]interface{}{
+			"rank_score": map[string]interface{}{
+				"type": "double",
+				"script": map[string]interface{}{
+					"source": "double ageHours = (System.currentTimeMillis() - doc['create_time'].value.toInstant().toEpochMilli()) / 3600000.0; emit(doc['hot'].value / Math.pow(ageHours + 2, 0.8));",
+				},
+			},
+		}
+		sortRules = []map[string]interface{}{
+			{"rank_score": map[string]interface{}{"order": "desc"}},
+			{"id": map[string]interface{}{"order": "desc"}},
+		}
+
+	case 2: // 最新：按发帖时间降序
+		sortRules = []map[string]interface{}{
+			{"create_time": map[string]interface{}{"order": "desc"}},
+			{"id": map[string]interface{}{"order": "desc"}},
+		}
+
+	case 3: // 精华：is_essence优先，热度降序
+		sortRules = []map[string]interface{}{
+			{"is_essence": map[string]interface{}{"order": "desc"}},
+			{"hot": map[string]interface{}{"order": "desc"}},
+			{"id": map[string]interface{}{"order": "desc"}},
+		}
+	}
+
+	searchQuery := map[string]interface{}{
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"must": mustConditions,
+			},
+		},
+		"size": size,
+		"sort": sortRules,
+	}
+
+	if runtimeMappings != nil {
+		searchQuery["runtime_mappings"] = runtimeMappings
+	}
+
+	if len(searchAfter) > 0 {
+		searchQuery["search_after"] = searchAfter
+	}
+
+	queryJSON, err := json.Marshal(searchQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query: %w", err)
+	}
+
+	postIndex := GetPostIndexName()
+
+	res, err := Client.Search(
+		Client.Search.WithContext(nil),
+		Client.Search.WithIndex(postIndex),
+		Client.Search.WithBody(bytes.NewReader(queryJSON)),
+		Client.Search.WithTrackTotalHits(true),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+	}
+
+	return parsePostSearchResponse(res, size)
+}
