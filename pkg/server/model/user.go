@@ -14,9 +14,10 @@ type SysUser struct {
 	Username   string     `json:"username" gorm:"column:username;not null"`
 	Email      string     `json:"email" gorm:"column:email;unique;not null"`
 	Phone      string     `json:"phone,omitempty" gorm:"column:phone"`
-	GoogleID   string     `json:"google_id,omitempty" gorm:"column:google_id"`
-	XID        string     `json:"x_id,omitempty" gorm:"column:x_id"`
-	GithubID   string     `json:"github_id,omitempty" gorm:"column:github_id"`
+	GoogleID     string     `json:"google_id,omitempty" gorm:"column:google_id"`
+	XID          string     `json:"x_id,omitempty" gorm:"column:x_id"`
+	GithubID     string     `json:"github_id,omitempty" gorm:"column:github_id"`
+	MicrosoftID  string     `json:"microsoft_id,omitempty" gorm:"column:microsoft_id"`
 	AvatarURL  string     `json:"avatar_url,omitempty" gorm:"column:avatar_url"`
 	Gender     int        `json:"gender" gorm:"column:gender;default:0"`
 	Birthdate  *time.Time `json:"birthdate,omitempty" gorm:"column:birthdate"`

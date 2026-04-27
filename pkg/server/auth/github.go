@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"interestBar/pkg/conf"
+	"interestBar/pkg/server/model"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/github"
@@ -22,6 +24,46 @@ type GithubUser struct {
 	Name      string `json:"name"`
 	Email     string `json:"email"`
 	Bio       string `json:"bio"`
+}
+
+// GithubProvider implements Provider for GitHub OAuth2.
+type GithubProvider struct{}
+
+func (p *GithubProvider) Name() string { return "github" }
+
+func (p *GithubProvider) OAuthConfig() *oauth2.Config {
+	return GetGithubOAuthConfig()
+}
+
+func (p *GithubProvider) FetchUser(ctx context.Context, token *oauth2.Token) (*OAuthUserInfo, error) {
+	gu, err := GetGithubUser(token)
+	if err != nil {
+		return nil, err
+	}
+	name := gu.Name
+	if name == "" {
+		name = gu.Login
+	}
+	return &OAuthUserInfo{
+		ProviderID: strconv.FormatInt(gu.ID, 10),
+		Email:      gu.Email,
+		Name:       name,
+		AvatarURL:  gu.AvatarURL,
+	}, nil
+}
+
+func (p *GithubProvider) UserLookupField() string { return "github_id" }
+
+func (p *GithubProvider) ApplyProviderID(user *model.SysUser, providerID string) {
+	user.GithubID = providerID
+}
+
+func (p *GithubProvider) GetProviderID(user *model.SysUser) string {
+	return user.GithubID
+}
+
+func (p *GithubProvider) FrontendRedirectURL() string {
+	return conf.Config.Oauth.Github.FrontendRedirectURL
 }
 
 // GithubEmail represents the structure of email data returned by GitHub

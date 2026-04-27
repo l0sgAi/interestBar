@@ -12,11 +12,15 @@ func RegisterRoutes(r *gin.RouterGroup) {
 	// Auth routes (公开访问，不需要鉴权)
 	auth := r.Group("auth")
 	{
+		oauthCtrl := controller.NewOAuthController()
+		auth.GET("google/login", oauthCtrl.Login("google"))
+		auth.GET("google/callback", oauthCtrl.Callback("google"))
+		auth.GET("github/login", oauthCtrl.Login("github"))
+		auth.GET("github/callback", oauthCtrl.Callback("github"))
+		auth.GET("azure/login", oauthCtrl.Login("azure"))
+		auth.GET("azure/callback", oauthCtrl.Callback("azure"))
+
 		userCtrl := controller.NewUserController()
-		auth.GET("google/login", userCtrl.GoogleLogin)
-		auth.GET("google/callback", userCtrl.GoogleCallback)
-		auth.GET("github/login", userCtrl.GithubLogin)
-		auth.GET("github/callback", userCtrl.GithubCallback)
 		// logout 和 me 需要登录
 		auth.POST("logout", sagin.CheckLogin(), userCtrl.Logout)
 		auth.GET("me", sagin.CheckLogin(), userCtrl.GetCurrentUser)

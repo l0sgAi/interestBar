@@ -17,6 +17,7 @@ CREATE TABLE users (
     google_id       VARCHAR(100),                  -- Google OpenID / Sub
     x_id            VARCHAR(100),                  -- X (Twitter) ID
     github_id       VARCHAR(100),                  -- Github ID
+    microsoft_id    VARCHAR(100),   -- 微软id
 
     -- 用户资料
     avatar_url      VARCHAR(500),

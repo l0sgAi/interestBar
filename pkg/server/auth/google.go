@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"interestBar/pkg/conf"
+	"interestBar/pkg/server/model"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -42,6 +43,42 @@ func GetGoogleOAuthConfig() *oauth2.Config {
 		},
 		Endpoint: google.Endpoint,
 	}
+}
+
+// GoogleProvider implements Provider for Google OAuth2.
+type GoogleProvider struct{}
+
+func (p *GoogleProvider) Name() string { return "google" }
+
+func (p *GoogleProvider) OAuthConfig() *oauth2.Config {
+	return GetGoogleOAuthConfig()
+}
+
+func (p *GoogleProvider) FetchUser(ctx context.Context, token *oauth2.Token) (*OAuthUserInfo, error) {
+	gu, err := GetGoogleUser(token)
+	if err != nil {
+		return nil, err
+	}
+	return &OAuthUserInfo{
+		ProviderID: gu.ID,
+		Email:      gu.Email,
+		Name:       gu.Name,
+		AvatarURL:  gu.Picture,
+	}, nil
+}
+
+func (p *GoogleProvider) UserLookupField() string { return "google_id" }
+
+func (p *GoogleProvider) ApplyProviderID(user *model.SysUser, providerID string) {
+	user.GoogleID = providerID
+}
+
+func (p *GoogleProvider) GetProviderID(user *model.SysUser) string {
+	return user.GoogleID
+}
+
+func (p *GoogleProvider) FrontendRedirectURL() string {
+	return conf.Config.Oauth.Google.FrontendRedirectURL
 }
 
 // GetGoogleUser fetches user info from Google using the access token
