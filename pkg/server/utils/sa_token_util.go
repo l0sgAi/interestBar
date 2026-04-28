@@ -119,6 +119,11 @@ func GetUserFromSession(c *gin.Context) (*model.SysUser, bool) {
 		if gender, ok := v["gender"].(float64); ok {
 			user.Gender = int(gender)
 		}
+		if birthdate, ok := v["birthdate"].(string); ok {
+			if t, err := time.Parse(time.RFC3339, birthdate); err == nil {
+				user.Birthdate = &t
+			}
+		}
 		if status, ok := v["status"].(float64); ok {
 			user.Status = int(status)
 		}
