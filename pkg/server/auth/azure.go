@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 
 	"interestBar/pkg/conf"
+	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
+	s3storage "interestBar/pkg/server/storage/s3"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/microsoft"
@@ -34,7 +37,7 @@ func GetAzureOAuthConfig() *oauth2.Config {
 		Scopes: []string{
 			"User.Read",
 		},
-		Endpoint: microsoft.AzureADEndpoint("common"),
+		Endpoint: microsoft.AzureADEndpoint("consumers"),
 	}
 }
 
@@ -59,6 +62,37 @@ func GetAzureUser(token *oauth2.Token) (*AzureUser, error) {
 	return &user, nil
 }
 
+// GetAzureProfilePhoto fetches the user's profile photo binary data from Microsoft Graph API.
+// Returns (nil, "", nil) if the user has no photo set (404).
+func GetAzureProfilePhoto(token *oauth2.Token) ([]byte, string, error) {
+	client := GetAzureOAuthConfig().Client(context.Background(), token)
+	resp, err := client.Get("https://graph.microsoft.com/v1.0/me/photo/$value")
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to fetch profile photo: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, "", nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("failed to fetch profile photo: status code %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to read profile photo data: %v", err)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+
+	return data, contentType, nil
+}
+
 // AzureProvider implements Provider for Microsoft Azure AD OAuth2.
 type AzureProvider struct{}
 
@@ -78,11 +112,49 @@ func (p *AzureProvider) FetchUser(ctx context.Context, token *oauth2.Token) (*OA
 	if email == "" {
 		email = au.UserPrincipalName
 	}
+
+	var avatarURL string
+	data, contentType, err := GetAzureProfilePhoto(token)
+	if err != nil {
+		logger.Log.Warn("failed to fetch Azure profile photo: " + err.Error())
+	} else if data != nil {
+		avatarURL = uploadAzureAvatar(ctx, data, contentType, au.ID)
+	}
+
 	return &OAuthUserInfo{
 		ProviderID: au.ID,
 		Email:      email,
 		Name:       au.DisplayName,
+		AvatarURL:  avatarURL,
 	}, nil
+}
+
+// uploadAzureAvatar uploads the profile photo to S3 and returns the URL.
+// Returns empty string on any failure (never blocks login).
+func uploadAzureAvatar(ctx context.Context, imageData []byte, contentType string, azureUserID string) string {
+	s3Client := s3storage.GetS3Client()
+	if s3Client == nil {
+		logger.Log.Warn("S3 client not initialized, skipping avatar upload")
+		return ""
+	}
+
+	ext := ".jpg"
+	switch contentType {
+	case "image/png":
+		ext = ".png"
+	case "image/gif":
+		ext = ".gif"
+	case "image/webp":
+		ext = ".webp"
+	}
+
+	key := s3storage.GenerateKeyWithUUID("avatars/azure", azureUserID+ext)
+	url, err := s3Client.UploadFileFromBytes(ctx, key, imageData, contentType, "")
+	if err != nil {
+		logger.Log.Warn("failed to upload Azure avatar to S3: " + err.Error())
+		return ""
+	}
+	return url
 }
 
 func (p *AzureProvider) UserLookupField() string { return "microsoft_id" }
