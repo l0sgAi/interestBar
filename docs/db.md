@@ -10,7 +10,9 @@ CREATE TABLE users (
     -- 核心账号信息
     username        VARCHAR(50) NOT NULL,          -- 昵称
     email           VARCHAR(100) NOT NULL,         -- 核心唯一凭证
-    phone           VARCHAR(20),                   -- 手机号
+    phone           VARCHAR(20), -- 手机号
+    pwd VARCHAR(512), -- 密码(SHA_256加密)
+    motto VARCHAR(2048), -- 个人简介
 
     -- 第三方登录关联 ID (单表设计的核心)
     -- 只有当用户使用对应方式登录时，这些字段才有值，否则为 NULL

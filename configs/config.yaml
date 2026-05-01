@@ -5,8 +5,7 @@ server:
 # CORS 配置
 cors:
   allowed_origins:
-    - "https://l0sgai.github.io"
-    - "https://l0sgai.github.io/interestBar-frontend/"
+    - "https://qubar.site"
     - "http://localhost:*"
     - "http://127.0.0.1:*"
 
