@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Qubar - 邮箱验证</title>
+</head>
+<body style="margin:0;padding:0;background-color:#0d1117;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0d1117;min-height:100%;">
+  <tr>
+    <td align="center" style="padding:40px 20px;">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px;">
+
+        <!-- Logo -->
+        <tr>
+          <td align="center" style="padding-bottom:40px;">
+            <a href="https://qubar.site" target="_blank" style="text-decoration:none;">
+              <h1 style="margin:0;color:#2dd4bf;font-size:28px;font-weight:700;letter-spacing:1px;">Qubar</h1>
+            </a>
+          </td>
+        </tr>
+
+        <!-- Card -->
+        <tr>
+          <td>
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#161b22;border-radius:16px;border:1px solid #21262d;">
+              <tr>
+                <td style="padding:40px 40px 16px;">
+                  <h2 style="margin:0;color:#e6edf3;font-size:22px;font-weight:600;">验证你的邮箱地址</h2>
+                </td>
+              </tr>
+              <tr>
+                <td style="padding:0 40px 32px;">
+                  <p style="margin:0 0 8px;color:#8b949e;font-size:15px;line-height:1.6;">
+                    你正在为邮箱 <strong style="color:#e6edf3;">{{.Email}}</strong> 注册 <a href="https://qubar.site" target="_blank" style="color:#2dd4bf;text-decoration:none;">Qubar</a> 账号。
+                  </p>
+                  <p style="margin:0 0 8px;color:#8b949e;font-size:15px;line-height:1.6;">
+                    请在注册页面输入以下验证码完成验证：
+                  </p>
+
+                  <!-- Verification Code -->
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                    <tr>
+                      <td align="center" style="padding:28px 0;">
+                        <table cellpadding="0" cellspacing="0" border="0" style="background-color:#0d1117;border-radius:12px;border:1px solid #2dd4bf33;">
+                          <tr>
+                            <td style="padding:20px 48px;">
+                              <span style="font-size:36px;font-weight:700;color:#2dd4bf;letter-spacing:12px;font-family:'Courier New',Courier,monospace;">{{.Code}}</span>
+                            </td>
+                          </tr>
+                        </table>
+                      </td>
+                    </tr>
+                  </table>
+
+                  <p style="margin:0 0 4px;color:#8b949e;font-size:13px;line-height:1.6;">
+                    验证码有效期为 <strong style="color:#c9d1d9;">5 分钟</strong>，过期后需重新获取。
+                  </p>
+                  <p style="margin:0;color:#8b949e;font-size:13px;line-height:1.6;">
+                    如非本人操作，请忽略此邮件，你的账号不会被注册。
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td align="center" style="padding-top:32px;">
+            <p style="margin:0 0 4px;color:#484f58;font-size:12px;line-height:1.5;">
+              此邮件由系统自动发送，请勿直接回复。如有疑问请访问 <a href="https://qubar.site" target="_blank" style="color:#2dd4bf;text-decoration:none;">qubar.site</a>。
+            </p>
+            <p style="margin:0;color:#484f58;font-size:12px;">
+              &copy; 2026 Qubar. All rights reserved.
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>
