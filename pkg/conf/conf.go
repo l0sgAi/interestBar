@@ -22,6 +22,7 @@ type AppConfig struct {
 	Elasticsearch Elasticsearch `mapstructure:"elasticsearch" json:"elasticsearch" yaml:"elasticsearch"`
 	RabbitMQ     RabbitMQ     `mapstructure:"rabbitmq" json:"rabbitmq" yaml:"rabbitmq"`
 	Redpanda     Redpanda     `mapstructure:"redpanda" json:"redpanda" yaml:"redpanda"`
+	Mailtrap     Mailtrap     `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
 }
 
 type Server struct {
@@ -153,6 +154,14 @@ type Redpanda struct {
 	LikeEventTopic          string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
 	LikeEventConsumerGroup  string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
 	LikeEventFlushInterval  int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
+}
+
+// Mailtrap 邮件发送配置
+type Mailtrap struct {
+	APIToken    string `mapstructure:"api_token" json:"api_token" yaml:"api_token"`
+	SenderEmail string `mapstructure:"sender_email" json:"sender_email" yaml:"sender_email"`
+	SenderName  string `mapstructure:"sender_name" json:"sender_name" yaml:"sender_name"`
+	APIURL      string `mapstructure:"api_url" json:"api_url" yaml:"api_url"`
 }
 
 func InitConfig(path string) {

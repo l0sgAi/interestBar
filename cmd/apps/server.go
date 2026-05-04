@@ -11,6 +11,7 @@ import (
 	"interestBar/pkg/server/storage/elasticsearch"
 	redpanda "interestBar/pkg/server/storage/redpanda"
 	"interestBar/pkg/server/storage/redis"
+	emailutil "interestBar/pkg/util/email"
 	"os"
 	"os/signal"
 	"strings"
@@ -48,6 +49,12 @@ func Run(configPath string) {
 	if err := elasticsearch.InitElasticsearch(); err != nil {
 		logger.Log.Warn("Failed to initialize Elasticsearch: " + err.Error())
 		logger.Log.Info("Running without Elasticsearch search functionality")
+	}
+
+	// 7.5 Init Mailtrap email client
+	if err := emailutil.InitEmail(); err != nil {
+		logger.Log.Warn("Failed to initialize Mailtrap email client: " + err.Error())
+		logger.Log.Info("Running without email sending functionality")
 	}
 
 	// 8. Init Redpanda for async statistics persistence

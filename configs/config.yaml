@@ -99,3 +99,10 @@ redpanda:
   like_event_consumer_group: "like_events_consumer_group" # 点赞事件消费者组
   like_event_flush_interval: 10 # 点赞事件刷写间隔(秒)
 
+# Mailtrap 邮件发送配置
+mailtrap:
+  api_token: "xxx" # Mailtrap API Token
+  sender_email: "hello@demomailtrap.co" # 默认发件人邮箱
+  sender_name: "interestBar" # 默认发件人名称
+  api_url: "https://send.api.mailtrap.io/api/send" # API 地址
+
