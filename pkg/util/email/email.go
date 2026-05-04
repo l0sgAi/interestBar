@@ -31,6 +31,14 @@ type mailtrapRequest struct {
 	Category string            `json:"category,omitempty"`
 }
 
+// mailtrapTemplateRequest 对应 Mailtrap 模板发送 API 的请求体
+type mailtrapTemplateRequest struct {
+	From              mailtrapAddress      `json:"from"`
+	To                []mailtrapAddress    `json:"to"`
+	TemplateUUID      string               `json:"template_uuid"`
+	TemplateVariables map[string]interface{} `json:"template_variables"`
+}
+
 type mailtrapAddress struct {
 	Email string `json:"email"`
 	Name  string `json:"name,omitempty"`
@@ -47,11 +55,12 @@ type SendOptions struct {
 
 // Client Mailtrap 邮件客户端
 type Client struct {
-	apiToken    string
-	apiURL      string
-	senderEmail string
-	senderName  string
-	httpClient  *http.Client
+	apiToken               string
+	apiURL                 string
+	senderEmail            string
+	senderName             string
+	httpClient             *http.Client
+	verificationTemplates  map[string]string // lang -> template_uuid
 }
 
 // InitEmail 初始化全局 Mailtrap 邮件客户端
@@ -77,6 +86,10 @@ func InitEmail() error {
 			senderName:  cfg.SenderName,
 			httpClient: &http.Client{
 				Timeout: 10 * time.Second,
+			},
+			verificationTemplates: map[string]string{
+				"zh": cfg.Templates.VerificationCode.Zh,
+				"en": cfg.Templates.VerificationCode.En,
 			},
 		}
 
@@ -158,13 +171,67 @@ func (c *Client) Send(ctx context.Context, toEmail, toName, subject string, opts
 	return nil
 }
 
-// SendVerificationCode 发送验证码邮件
-func (c *Client) SendVerificationCode(ctx context.Context, toEmail, code string) error {
-	subject := "Your Verification Code"
-	textBody := fmt.Sprintf("Your verification code is: %s\n\nThis code will expire in a few minutes. If you did not request this code, please ignore this email.", code)
-
-	return c.Send(ctx, toEmail, "", subject, SendOptions{
-		TextBody: textBody,
-		Category: "verification",
+// SendVerificationCode 通过模板发送验证码邮件，lang 为 "zh" 或 "en"，无效值 fallback 到 "en"
+func (c *Client) SendVerificationCode(ctx context.Context, toEmail, code, lang string) error {
+	return c.SendWithTemplate(ctx, toEmail, lang, map[string]interface{}{
+		"Email": toEmail,
+		"Code":  code,
 	})
+}
+
+// SendWithTemplate 通过 Mailtrap 模板发送邮件
+func (c *Client) SendWithTemplate(ctx context.Context, toEmail, lang string, variables map[string]interface{}) error {
+	if toEmail == "" {
+		return fmt.Errorf("recipient email is required")
+	}
+
+	// 解析语言，无效时 fallback 到英文
+	if lang != "zh" && lang != "en" {
+		lang = "en"
+	}
+	templateUUID := c.verificationTemplates[lang]
+	if templateUUID == "" {
+		return fmt.Errorf("no template configured for lang: %s", lang)
+	}
+
+	reqBody := mailtrapTemplateRequest{
+		From:              mailtrapAddress{Email: c.senderEmail, Name: c.senderName},
+		To:                []mailtrapAddress{{Email: toEmail}},
+		TemplateUUID:      templateUUID,
+		TemplateVariables: variables,
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal template email request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.apiToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send template email request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read Mailtrap response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("mailtrap API error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	logger.Log.Info("template email sent successfully",
+		zap.String("to", toEmail),
+		zap.String("lang", lang),
+		zap.String("template_uuid", templateUUID),
+	)
+	return nil
 }
