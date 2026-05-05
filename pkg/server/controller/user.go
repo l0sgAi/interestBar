@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
@@ -39,15 +40,13 @@ func (ctrl *UserController) GetUser(c *gin.Context) {
 
 // Logout handles user logout
 func (ctrl *UserController) Logout(c *gin.Context) {
-	// 使用工具类获取用户ID
-	loginID, exists := utils.GetUserIDFromRequest(c)
-	if !exists {
-		response.Unauthorized(c, "User not authenticated")
+	token := c.GetHeader(conf.Config.SaToken.TokenName)
+	if token == "" {
+		response.Unauthorized(c, "Token not found")
 		return
 	}
 
-	// Sa-Token登出
-	err := stputil.Logout(loginID)
+	err := stputil.LogoutByToken(token)
 	if err != nil {
 		response.InternalError(c, "Failed to logout")
 		return

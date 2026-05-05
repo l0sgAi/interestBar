@@ -44,10 +44,11 @@ func (ctrl *LikeController) ToggleLike(c *gin.Context) {
 	var result redispkg.ToggleLikeResult
 	var err error
 	var postID int64
+	var comment *model.Comment
 
 	switch req.Type {
 	case "comment":
-		comment, err := model.GetCommentByID(pgsql.DB, req.TargetID)
+		comment, err = model.GetCommentByID(pgsql.DB, req.TargetID)
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
 				response.NotFound(c, "Comment not found")
@@ -66,7 +67,7 @@ func (ctrl *LikeController) ToggleLike(c *gin.Context) {
 		result, err = redispkg.ToggleCommentLike(int64(userID), req.TargetID)
 
 	case "post":
-		_, err := model.GetPostByID(pgsql.DB, req.TargetID)
+		_, err = model.GetPostByID(pgsql.DB, req.TargetID)
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
 				response.NotFound(c, "Post not found")

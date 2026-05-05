@@ -126,6 +126,7 @@ type completeReq struct {
 	Email    string `json:"email" binding:"required"`
 	Username string `json:"username" binding:"required"`
 	Password string `json:"password" binding:"required"`
+	Device   string `json:"device"` // mobile / web，可选，默认 web
 }
 
 // CompleteRegistration 完成注册
@@ -185,7 +186,7 @@ func (ctrl *RegisterController) CompleteRegistration(c *gin.Context) {
 
 	userIDStr := strconv.FormatUint(uint64(user.ID), 10)
 
-	authToken, err := stputil.Login(userIDStr)
+	authToken, err := stputil.Login(userIDStr, utils.ResolveDevice(req.Device))
 	if err != nil {
 		response.InternalError(c, "Failed to login")
 		return

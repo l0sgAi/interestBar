@@ -11,6 +11,19 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	DeviceMobile = "mobile"
+	DeviceWeb    = "web"
+)
+
+// ResolveDevice 返回有效的 device 值，空值默认为 web
+func ResolveDevice(device string) string {
+	if device == DeviceMobile || device == DeviceWeb {
+		return device
+	}
+	return DeviceWeb
+}
+
 // GetLoginIDFromRequest 从请求中获取当前登录用户的 loginID
 // 如果获取失败，会直接返回错误响应给客户端
 func GetLoginIDFromRequest(c *gin.Context) (string, bool) {

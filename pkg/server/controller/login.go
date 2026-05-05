@@ -24,6 +24,7 @@ func NewLoginController() *LoginController {
 type loginReq struct {
 	Email    string `json:"email" binding:"required"`
 	Password string `json:"password" binding:"required"`
+	Device   string `json:"device"` // mobile / web，可选，默认 web
 }
 
 // Login 邮箱密码登录
@@ -57,7 +58,7 @@ func (ctrl *LoginController) Login(c *gin.Context) {
 
 	userIDStr := strconv.FormatUint(uint64(user.ID), 10)
 
-	authToken, err := stputil.Login(userIDStr)
+	authToken, err := stputil.Login(userIDStr, utils.ResolveDevice(req.Device))
 	if err != nil {
 		response.InternalError(c, "Failed to login")
 		return
