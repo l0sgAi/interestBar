@@ -96,6 +96,11 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 					"order": "desc",
 				},
 			},
+			{
+				"id": map[string]interface{}{
+					"order": "desc",
+				},
+			},
 		}
 
 		searchQuery = map[string]interface{}{
@@ -254,6 +259,11 @@ func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []
 		sortWithScore := []map[string]interface{}{
 			{
 				"_score": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			{
+				"id": map[string]interface{}{
 					"order": "desc",
 				},
 			},

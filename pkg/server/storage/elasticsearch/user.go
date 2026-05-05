@@ -87,6 +87,11 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserList
 						"order": "desc",
 					},
 				},
+				{
+					"id": map[string]interface{}{
+						"order": "desc",
+					},
+				},
 			}
 
 			// 添加关键字搜索条件

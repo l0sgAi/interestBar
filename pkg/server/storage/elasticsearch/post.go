@@ -109,6 +109,11 @@ func SearchPosts(keyword string, circleID int64, size int, searchAfter []interfa
 					"order": "desc",
 				},
 			},
+			{
+				"id": map[string]interface{}{
+					"order": "desc",
+				},
+			},
 		}
 
 		// 添加关键字搜索条件
