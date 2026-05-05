@@ -124,6 +124,9 @@ func (ctrl *OAuthController) Callback(providerName string) gin.HandlerFunc {
 
 		userIDStr := strconv.FormatUint(uint64(user.ID), 10)
 
+		// 清理同设备的旧 token（直接删除 key，避免 KICK_OUT 残留）
+		_ = stputil.Logout(userIDStr, device)
+
 		authToken, err := stputil.Login(userIDStr, device)
 		if err != nil {
 			response.InternalError(c, "Failed to login")
