@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
@@ -39,15 +40,13 @@ func (ctrl *UserController) GetUser(c *gin.Context) {
 
 // Logout handles user logout
 func (ctrl *UserController) Logout(c *gin.Context) {
-	// 使用工具类获取用户ID
-	loginID, exists := utils.GetUserIDFromRequest(c)
-	if !exists {
-		response.Unauthorized(c, "User not authenticated")
+	token := c.GetHeader(conf.Config.SaToken.TokenName)
+	if token == "" {
+		response.Unauthorized(c, "Token not found")
 		return
 	}
 
-	// Sa-Token登出
-	err := stputil.Logout(loginID)
+	err := stputil.LogoutByToken(token)
 	if err != nil {
 		response.InternalError(c, "Failed to logout")
 		return
@@ -73,7 +72,7 @@ type UpdateProfileRequest struct {
 	Username  *string    `json:"username" binding:"omitempty,min=1,max=50"`
 	AvatarURL *string    `json:"avatar_url" binding:"omitempty,url"`
 	Phone     *string    `json:"phone" binding:"omitempty"`
-	Gender    *int       `json:"gender" binding:"omitempty,min=0,max=2"`
+	Gender    *int       `json:"gender" binding:"omitempty,min=0,max=3"`
 	Birthdate *time.Time `json:"birthdate" binding:"omitempty"`
 }
 
@@ -138,9 +137,9 @@ func (ctrl *UserController) UpdateProfile(c *gin.Context) {
 	}
 
 	if req.Gender != nil {
-		// 验证性别值：0=未知, 1=男, 2=女
-		if *req.Gender < 0 || *req.Gender > 2 {
-			response.BadRequest(c, "Gender must be 0 (unknown), 1 (male), or 2 (female)")
+		// 验证性别值：0=未知, 1=男, 2=女 3 = 其它
+		if *req.Gender < 0 || *req.Gender > 3 {
+			response.BadRequest(c, "Gender must be 0 (unknown), 1 (male), or 2 (female) 3 (others)")
 			return
 		}
 		updateData["gender"] = *req.Gender

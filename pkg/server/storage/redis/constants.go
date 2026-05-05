@@ -8,6 +8,23 @@ import (
 // Redis 相关键名常量定义
 
 const (
+	// RegisterCodePrefix 注册验证码缓存key前缀
+	// 完整key格式: register:code:{email}
+	// 存储内容：6位数字验证码，TTL 5分钟
+	RegisterCodePrefix = "register:code:"
+
+	// RegisterVerifiedPrefix 注册邮箱已验证标记key前缀
+	// 完整key格式: register:verified:{email}
+	// 存储内容：标记邮箱已通过验证码校验，TTL 10分钟
+	RegisterVerifiedPrefix = "register:verified:"
+
+	// RegisterRatePrefix 注册验证码发送频率限制key前缀
+	// 完整key格式: register:rate:{email}
+	// 存储内容：频率限制标记，TTL 60秒
+	RegisterRatePrefix = "register:rate:"
+)
+
+const (
 	// CircleInfoPrefix 圈子基础信息缓存key前缀
 	// 完整key格式: circle:info:{circle_id}
 	// 包含字段：id, name, slug, avatar_url, cover_url, description, rule, creator_id, category_id, join_type, status, deleted, create_time, update_time
@@ -131,4 +148,19 @@ func GetUserCommentLikeListKey(userID int64) string {
 // GetUserPostLikeListKey 获取用户帖子点赞列表ZSET的完整key
 func GetUserPostLikeListKey(userID int64) string {
 	return UserPostLikeListPrefix + fmt.Sprint(userID)
+}
+
+// GetRegisterCodeKey 获取注册验证码缓存的完整key
+func GetRegisterCodeKey(email string) string {
+	return RegisterCodePrefix + email
+}
+
+// GetRegisterVerifiedKey 获取注册邮箱已验证标记的完整key
+func GetRegisterVerifiedKey(email string) string {
+	return RegisterVerifiedPrefix + email
+}
+
+// GetRegisterRateKey 获取注册验证码发送频率限制的完整key
+func GetRegisterRateKey(email string) string {
+	return RegisterRatePrefix + email
 }

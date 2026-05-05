@@ -17,6 +17,9 @@ import (
 	"gorm.io/gorm"
 )
 
+// oauthStateDelimiter 用于 OAuth state 中编码 device 的分隔符
+const oauthStateDelimiter = ":"
+
 type OAuthController struct{}
 
 func NewOAuthController() *OAuthController {
@@ -31,7 +34,11 @@ func (ctrl *OAuthController) Login(providerName string) gin.HandlerFunc {
 			response.BadRequest(c, "Unknown OAuth provider")
 			return
 		}
-		url := p.OAuthConfig().AuthCodeURL("state-token")
+
+		device := utils.ResolveDevice(c.Query("device"))
+		// state 格式: device:<device>:<provider>-token，用于回调时提取 device
+		state := "device" + oauthStateDelimiter + device + oauthStateDelimiter + providerName + "-token"
+		url := p.OAuthConfig().AuthCodeURL(state)
 		c.Redirect(http.StatusTemporaryRedirect, url)
 	}
 }
@@ -43,6 +50,13 @@ func (ctrl *OAuthController) Callback(providerName string) gin.HandlerFunc {
 		if p == nil {
 			response.BadRequest(c, "Unknown OAuth provider")
 			return
+		}
+
+		// 从 state 中提取 device
+		state := c.Query("state")
+		device := utils.DeviceWeb
+		if parts := strings.SplitN(state, oauthStateDelimiter, 3); len(parts) >= 2 {
+			device = utils.ResolveDevice(parts[1])
 		}
 
 		code := c.Query("code")
@@ -110,7 +124,10 @@ func (ctrl *OAuthController) Callback(providerName string) gin.HandlerFunc {
 
 		userIDStr := strconv.FormatUint(uint64(user.ID), 10)
 
-		authToken, err := stputil.Login(userIDStr)
+		// 清理同设备的旧 token（直接删除 key，避免 KICK_OUT 残留）
+		_ = stputil.Logout(userIDStr, device)
+
+		authToken, err := stputil.Login(userIDStr, device)
 		if err != nil {
 			response.InternalError(c, "Failed to login")
 			return

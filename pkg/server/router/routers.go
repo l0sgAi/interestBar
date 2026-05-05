@@ -20,6 +20,14 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		auth.GET("azure/login", oauthCtrl.Login("azure"))
 		auth.GET("azure/callback", oauthCtrl.Callback("azure"))
 
+		regCtrl := controller.NewRegisterController()
+		auth.POST("register/send-code", regCtrl.SendCode)
+		auth.POST("register/verify", regCtrl.VerifyCode)
+		auth.POST("register/complete", regCtrl.CompleteRegistration)
+
+		loginCtrl := controller.NewLoginController()
+		auth.POST("login", loginCtrl.Login)
+
 		userCtrl := controller.NewUserController()
 		// logout 和 me 需要登录
 		auth.POST("logout", sagin.CheckLogin(), userCtrl.Logout)

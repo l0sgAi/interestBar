@@ -14,6 +14,7 @@ type SysUser struct {
 	Username   string     `json:"username" gorm:"column:username;not null"`
 	Email      string     `json:"email" gorm:"column:email;unique;not null"`
 	Phone      string     `json:"phone,omitempty" gorm:"column:phone"`
+	Pwd        string     `json:"-" gorm:"column:pwd"`
 	GoogleID     string     `json:"google_id,omitempty" gorm:"column:google_id"`
 	XID          string     `json:"x_id,omitempty" gorm:"column:x_id"`
 	GithubID     string     `json:"github_id,omitempty" gorm:"column:github_id"`
@@ -34,6 +35,19 @@ func (SysUser) TableName() string {
 func GetUserByID(db *gorm.DB, userID int64) (*SysUser, error) {
 	var user SysUser
 	err := db.Where("id = ? AND deleted = ?", userID, 0).First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &user, nil
+}
+
+// GetUserByEmail 根据邮箱从数据库获取用户信息
+func GetUserByEmail(db *gorm.DB, email string) (*SysUser, error) {
+	var user SysUser
+	err := db.Where("email = ? AND deleted = ?", email, 0).First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
