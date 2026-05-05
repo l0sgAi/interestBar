@@ -73,7 +73,7 @@ type UpdateProfileRequest struct {
 	Username  *string    `json:"username" binding:"omitempty,min=1,max=50"`
 	AvatarURL *string    `json:"avatar_url" binding:"omitempty,url"`
 	Phone     *string    `json:"phone" binding:"omitempty"`
-	Gender    *int       `json:"gender" binding:"omitempty,min=0,max=2"`
+	Gender    *int       `json:"gender" binding:"omitempty,min=0,max=3"`
 	Birthdate *time.Time `json:"birthdate" binding:"omitempty"`
 }
 
@@ -138,9 +138,9 @@ func (ctrl *UserController) UpdateProfile(c *gin.Context) {
 	}
 
 	if req.Gender != nil {
-		// 验证性别值：0=未知, 1=男, 2=女
-		if *req.Gender < 0 || *req.Gender > 2 {
-			response.BadRequest(c, "Gender must be 0 (unknown), 1 (male), or 2 (female)")
+		// 验证性别值：0=未知, 1=男, 2=女 3 = 其它
+		if *req.Gender < 0 || *req.Gender > 3 {
+			response.BadRequest(c, "Gender must be 0 (unknown), 1 (male), or 2 (female) 3 (others)")
 			return
 		}
 		updateData["gender"] = *req.Gender
