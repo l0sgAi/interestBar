@@ -1,7 +1,9 @@
 package conf
 
 import (
+	"errors"
 	"fmt"
+	"log"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
@@ -176,7 +178,26 @@ type MailtrapTemplate struct {
 	En string `mapstructure:"en" json:"en" yaml:"en"`
 }
 
-func InitConfig(path string) {
+// InitConfig 是配置加载入口。
+//   fallbackPath   — Nacos 不可用时的本地兜底配置文件(通过 -c 传入，默认 configs/config.yaml)。
+//   bootstrapPath  — Nacos 引导文件(通过 -b 传入，默认 configs/bootstrap.yaml)。
+//                    为空或文件不存在时跳过 Nacos，直接加载 fallbackPath。
+func InitConfig(fallbackPath, bootstrapPath string) {
+	if bootstrapPath != "" {
+		switch err := initFromNacos(bootstrapPath); {
+		case err == nil:
+			return // Nacos 加载成功，监听已注册
+		case errors.Is(err, errNoBootstrap):
+			// 静默回退：没有引导文件，直接用本地配置(开发者未接入 Nacos 的默认路径)
+		default:
+			log.Printf("[conf] Nacos load failed (%v); falling back to local %s", err, fallbackPath)
+		}
+	}
+	initFromFile(fallbackPath)
+}
+
+// initFromFile 是本地文件加载器(含 fsnotify 热更新)，作为 Nacos 不可用时的兜底。
+func initFromFile(path string) {
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetConfigType("yaml")

@@ -18,9 +18,9 @@ import (
 	"syscall"
 )
 
-func Run(configPath string) {
-	// 1. Init Config
-	conf.InitConfig(configPath)
+func Run(configPath, bootstrapPath string) {
+	// 1. Init Config (优先 Nacos，不可用时回退本地文件)
+	conf.InitConfig(configPath, bootstrapPath)
 
 	// 2. Init Logger
 	logger.InitLogger()

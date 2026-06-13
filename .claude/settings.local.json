@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go build:*)"
+      "Bash(go build:*)",
+      "Bash(rm -f /tmp/qubar-smoke /tmp/qubar-smoke.log /tmp/qubar-smoke.pid; echo \"cleaned\")"
+    ],
+    "additionalDirectories": [
+      "/private/tmp"
     ]
   }
 }
