@@ -18,7 +18,7 @@ type PostLike struct {
 
 // TableName 指定表名
 func (PostLike) TableName() string {
-	return "post_like"
+	return "domains.post_like"
 }
 
 // PostLikeStatus 点赞状态常量

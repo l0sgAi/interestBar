@@ -28,7 +28,7 @@ type Comment struct {
 
 // TableName 指定表名
 func (Comment) TableName() string {
-	return "comment"
+	return "domains.comment"
 }
 
 // CommentStatus 评论状态常量

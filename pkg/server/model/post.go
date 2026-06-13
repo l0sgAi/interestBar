@@ -34,7 +34,7 @@ type Post struct {
 
 // TableName 指定表名
 func (Post) TableName() string {
-	return "post"
+	return "domains.post"
 }
 
 // PostType 帖子类型常量

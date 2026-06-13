@@ -23,7 +23,7 @@ type Category struct {
 
 // TableName 指定表名
 func (Category) TableName() string {
-	return "category"
+	return "domains.category"
 }
 
 // CategoryStatus 分类状态常量

@@ -29,7 +29,7 @@ type Circle struct {
 
 // TableName 指定表名
 func (Circle) TableName() string {
-	return "circle"
+	return "domains.circle"
 }
 
 // CircleJoinType 加入方式常量

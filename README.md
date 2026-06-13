@@ -128,15 +128,45 @@ CREATE DATABASE interestbar;
 
 ### 6. 运行应用
 
+应用配置默认从 **Nacos 配置中心**读取，通过环境变量 `APP_ENV` 区分开发/生产环境；Nacos 不可用时会自动回退到本地 `configs/config.yaml`。
+
+#### 前置准备
+
+1. 从模板创建本地引导配置并填入真实值（Nacos 地址、账号密码、命名空间 UUID）：
+
+   ```bash
+   cp configs/bootstrap.yaml.example configs/bootstrap.yaml
+   ```
+
+   > 注意：`namespace_id` 必须填 Nacos 控制台「命名空间」页的 **UUID**（而非名称 `qubar-dev`/`qubar-prod`）；`group` 需与 Nacos 中配置所属分组一致（模板默认 `QUBAR_GROUP`）。
+
+2. 确认 Nacos 中已在对应命名空间/分组下发布配置：Data ID `qubar-dev-conf` / `qubar-prod-conf`，类型选择 **YAML**。
+
+#### 运行（开发环境）
+
 ```bash
-go run cmd/main.go
+APP_ENV=dev go run cmd/main.go -c configs/config.yaml -b configs/bootstrap.yaml
 ```
 
-或编译后运行：
+#### 运行（生产环境）
 
 ```bash
-go build -o interestBar.exe cmd/main.go
-./interestBar.exe
+APP_ENV=prod go run cmd/main.go -c configs/config.yaml -b configs/bootstrap.yaml
+```
+
+#### 编译后运行
+
+```bash
+go build -o interestBar cmd/main.go
+APP_ENV=dev ./interestBar -c configs/config.yaml -b configs/bootstrap.yaml
+```
+
+#### 离线 / 不使用 Nacos
+
+不创建 `configs/bootstrap.yaml`（或显式传 `-b ""`）时，应用自动回退到本地 `configs/config.yaml`：
+
+```bash
+go run cmd/main.go -c configs/config.yaml -b ""
 ```
 
 服务将在 http://localhost:8888 启动

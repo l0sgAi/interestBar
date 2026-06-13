@@ -28,7 +28,7 @@ type SysUser struct {
 }
 
 func (SysUser) TableName() string {
-	return "users"
+	return "domains.users"
 }
 
 // GetUserByID 根据用户ID从数据库获取用户信息

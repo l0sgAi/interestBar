@@ -23,7 +23,7 @@ type CircleMember struct {
 
 // TableName 指定表名
 func (CircleMember) TableName() string {
-	return "circle_member"
+	return "domains.circle_member"
 }
 
 // CircleMemberRole 角色常量

@@ -19,7 +19,7 @@ type CommentLike struct {
 
 // TableName 指定表名
 func (CommentLike) TableName() string {
-	return "comment_like"
+	return "domains.comment_like"
 }
 
 // CommentLikeStatus 点赞状态常量
