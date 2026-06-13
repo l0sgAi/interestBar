@@ -9,6 +9,7 @@ import (
 
 	"interestBar/pkg/logger"
 
+	"github.com/google/uuid"
 	"github.com/klauspost/compress/zstd"
 	"github.com/redis/go-redis/v9"
 )
@@ -230,7 +231,7 @@ func GetJSONCompressed(key string, value interface{}) error {
 }
 
 // UpdateCircleStatistics 更新圈子统计信息缓存到Hash
-func UpdateCircleStatistics(circleID int64, statistics *CircleStatistics) error {
+func UpdateCircleStatistics(circleID uuid.UUID, statistics *CircleStatistics) error {
 	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
 	pipe.HSet(ctx, key, "member_count", statistics.MemberCount)
@@ -247,7 +248,7 @@ func UpdateCircleStatistics(circleID int64, statistics *CircleStatistics) error 
 }
 
 // GetCircleStatistics 获取圈子统计信息（从Hash读取）
-func GetCircleStatistics(circleID int64) (*CircleStatistics, error) {
+func GetCircleStatistics(circleID uuid.UUID) (*CircleStatistics, error) {
 	key := GetCircleStatsKey(circleID)
 	values, err := Client.HMGet(ctx, key, "member_count", "post_count", "hot").Result()
 	if err != nil && err != redis.Nil {
@@ -280,7 +281,7 @@ func GetCircleStatistics(circleID int64) (*CircleStatistics, error) {
 }
 
 // CircleStatisticsExists 检查圈子统计信息Hash是否存在（所有字段都存在才返回true）
-func CircleStatisticsExists(circleID int64) (bool, error) {
+func CircleStatisticsExists(circleID uuid.UUID) (bool, error) {
 	key := GetCircleStatsKey(circleID)
 	exists, err := Client.Exists(ctx, key).Result()
 	if err != nil {
@@ -290,7 +291,7 @@ func CircleStatisticsExists(circleID int64) (bool, error) {
 }
 
 // IncrementCircleMemberCount 增加圈子成员数量（原子操作）
-func IncrementCircleMemberCount(circleID int64) error {
+func IncrementCircleMemberCount(circleID uuid.UUID) error {
 	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
 	pipe.HIncrBy(ctx, key, "member_count", 1)
@@ -304,7 +305,7 @@ func IncrementCircleMemberCount(circleID int64) error {
 }
 
 // DecrementCircleMemberCount 减少圈子成员数量（原子操作）
-func DecrementCircleMemberCount(circleID int64) error {
+func DecrementCircleMemberCount(circleID uuid.UUID) error {
 	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
 	decrCmd := pipe.HIncrBy(ctx, key, "member_count", -1)
@@ -329,7 +330,7 @@ func DecrementCircleMemberCount(circleID int64) error {
 }
 
 // IncrementCirclePostCount 增加圈子帖子数量（原子操作）
-func IncrementCirclePostCount(circleID int64) error {
+func IncrementCirclePostCount(circleID uuid.UUID) error {
 	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
 	pipe.HIncrBy(ctx, key, "post_count", 1)
@@ -343,7 +344,7 @@ func IncrementCirclePostCount(circleID int64) error {
 }
 
 // DecrementCirclePostCount 减少圈子帖子数量（原子操作）
-func DecrementCirclePostCount(circleID int64) error {
+func DecrementCirclePostCount(circleID uuid.UUID) error {
 	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
 	decrCmd := pipe.HIncrBy(ctx, key, "post_count", -1)
@@ -368,7 +369,7 @@ func DecrementCirclePostCount(circleID int64) error {
 }
 
 // IncrementCircleHot 增加圈子热度（原子操作）
-func IncrementCircleHot(circleID int64, increment int64) error {
+func IncrementCircleHot(circleID uuid.UUID, increment int64) error {
 	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
 	incrCmd := pipe.HIncrBy(ctx, key, "hot", increment)
@@ -381,13 +382,13 @@ func IncrementCircleHot(circleID int64, increment int64) error {
 
 	// 记录结果
 	newHot := incrCmd.Val()
-	logger.Log.Debug(fmt.Sprintf("Circle hot incremented: circleID=%d, increment=%d, newHot=%d", circleID, increment, newHot))
+	logger.Log.Debug(fmt.Sprintf("Circle hot incremented: circleID=%s, increment=%d, newHot=%d", circleID.String(), increment, newHot))
 
 	return nil
 }
 
 // DecrementCircleHot 减少圈子热度（原子操作）
-func DecrementCircleHot(circleID int64, decrement int64) error {
+func DecrementCircleHot(circleID uuid.UUID, decrement int64) error {
 	key := GetCircleStatsKey(circleID)
 	pipe := Client.Pipeline()
 	decrCmd := pipe.HIncrBy(ctx, key, "hot", -decrement)
@@ -409,13 +410,13 @@ func DecrementCircleHot(circleID int64, decrement int64) error {
 		newHot = 0
 	}
 
-	logger.Log.Debug(fmt.Sprintf("Circle hot decremented: circleID=%d, decrement=%d, newHot=%d", circleID, decrement, newHot))
+	logger.Log.Debug(fmt.Sprintf("Circle hot decremented: circleID=%s, decrement=%d, newHot=%d", circleID.String(), decrement, newHot))
 
 	return nil
 }
 
 // BatchUpdateCircleStatistics 批量更新圈子统计信息（用于MQ消费等场景）
-func BatchUpdateCircleStatistics(updates map[int64]*CircleStatistics) error {
+func BatchUpdateCircleStatistics(updates map[uuid.UUID]*CircleStatistics) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -445,7 +446,7 @@ func BatchUpdateCircleStatistics(updates map[int64]*CircleStatistics) error {
 const postStatsTTL = 43 * time.Minute
 
 // PostStatisticsExists 检查帖子统计信息Hash是否存在
-func PostStatisticsExists(postID int64) (bool, error) {
+func PostStatisticsExists(postID uuid.UUID) (bool, error) {
 	key := GetPostStatsKey(postID)
 	exists, err := Client.Exists(ctx, key).Result()
 	if err != nil {
@@ -455,7 +456,7 @@ func PostStatisticsExists(postID int64) (bool, error) {
 }
 
 // UpdatePostStatistics 更新帖子统计信息缓存到Hash
-func UpdatePostStatistics(postID int64, statistics *PostStatistics) error {
+func UpdatePostStatistics(postID uuid.UUID, statistics *PostStatistics) error {
 	key := GetPostStatsKey(postID)
 	pipe := Client.Pipeline()
 	pipe.HSet(ctx, key, "view_count", statistics.ViewCount)
@@ -472,7 +473,7 @@ func UpdatePostStatistics(postID int64, statistics *PostStatistics) error {
 }
 
 // GetPostStatistics 获取帖子统计信息（从Hash读取）
-func GetPostStatistics(postID int64) (*PostStatistics, error) {
+func GetPostStatistics(postID uuid.UUID) (*PostStatistics, error) {
 	key := GetPostStatsKey(postID)
 	values, err := Client.HMGet(ctx, key, "view_count", "comment_count", "like_count", "collect_count").Result()
 	if err != nil && err != redis.Nil {
@@ -512,12 +513,12 @@ func GetPostStatistics(postID int64) (*PostStatistics, error) {
 // IncrementPostViewCount 增加帖子浏览量（原子操作，带去重和上限检查）
 // 返回值：>0=新浏览量, 0=去重跳过, -1=已达上限
 // 注意：此函数需要先调用 restorePostStatsIfNeed 确保 Redis 缓存存在
-func IncrementPostViewCount(postID, userID int64) (int64, error) {
+func IncrementPostViewCount(postID, userID uuid.UUID) (int64, error) {
 	return IncrementPostViewCountWithDedup(postID, userID)
 }
 
 // IncrementPostCommentCount 增加帖子评论数（原子操作）
-func IncrementPostCommentCount(postID int64) error {
+func IncrementPostCommentCount(postID uuid.UUID) error {
 	key := GetPostStatsKey(postID)
 	pipe := Client.Pipeline()
 	pipe.HIncrBy(ctx, key, "comment_count", 1)
@@ -531,7 +532,7 @@ func IncrementPostCommentCount(postID int64) error {
 }
 
 // DecrementPostCommentCount 减少帖子评论数（原子操作）
-func DecrementPostCommentCount(postID int64) error {
+func DecrementPostCommentCount(postID uuid.UUID) error {
 	key := GetPostStatsKey(postID)
 	pipe := Client.Pipeline()
 	decrCmd := pipe.HIncrBy(ctx, key, "comment_count", -1)
@@ -553,7 +554,7 @@ func DecrementPostCommentCount(postID int64) error {
 }
 
 // IncrementPostLikeCount 增加帖子点赞数（原子操作）
-func IncrementPostLikeCount(postID int64) error {
+func IncrementPostLikeCount(postID uuid.UUID) error {
 	key := GetPostStatsKey(postID)
 	pipe := Client.Pipeline()
 	pipe.HIncrBy(ctx, key, "like_count", 1)
@@ -567,7 +568,7 @@ func IncrementPostLikeCount(postID int64) error {
 }
 
 // DecrementPostLikeCount 减少帖子点赞数（原子操作）
-func DecrementPostLikeCount(postID int64) error {
+func DecrementPostLikeCount(postID uuid.UUID) error {
 	key := GetPostStatsKey(postID)
 	pipe := Client.Pipeline()
 	decrCmd := pipe.HIncrBy(ctx, key, "like_count", -1)
@@ -589,7 +590,7 @@ func DecrementPostLikeCount(postID int64) error {
 }
 
 // IncrementPostCollectCount 增加帖子收藏数（原子操作）
-func IncrementPostCollectCount(postID int64) error {
+func IncrementPostCollectCount(postID uuid.UUID) error {
 	key := GetPostStatsKey(postID)
 	pipe := Client.Pipeline()
 	pipe.HIncrBy(ctx, key, "collect_count", 1)
@@ -603,7 +604,7 @@ func IncrementPostCollectCount(postID int64) error {
 }
 
 // DecrementPostCollectCount 减少帖子收藏数（原子操作）
-func DecrementPostCollectCount(postID int64) error {
+func DecrementPostCollectCount(postID uuid.UUID) error {
 	key := GetPostStatsKey(postID)
 	pipe := Client.Pipeline()
 	decrCmd := pipe.HIncrBy(ctx, key, "collect_count", -1)
@@ -625,7 +626,7 @@ func DecrementPostCollectCount(postID int64) error {
 }
 
 // BatchUpdatePostStatistics 批量更新帖子统计信息（用于MQ消费等场景）
-func BatchUpdatePostStatistics(updates map[int64]*PostStatistics) error {
+func BatchUpdatePostStatistics(updates map[uuid.UUID]*PostStatistics) error {
 	if len(updates) == 0 {
 		return nil
 	}
@@ -653,7 +654,7 @@ func BatchUpdatePostStatistics(updates map[int64]*PostStatistics) error {
 // ==================== 评论统计信息操作 ====================
 
 // CommentStatisticsExists 检查评论统计信息Hash是否存在
-func CommentStatisticsExists(commentID int64) (bool, error) {
+func CommentStatisticsExists(commentID uuid.UUID) (bool, error) {
 	key := GetCommentStatsKey(commentID)
 	exists, err := Client.Exists(ctx, key).Result()
 	if err != nil {
@@ -663,7 +664,7 @@ func CommentStatisticsExists(commentID int64) (bool, error) {
 }
 
 // UpdateCommentStatistics 更新评论统计信息缓存到Hash
-func UpdateCommentStatistics(commentID int64, likeCount int) error {
+func UpdateCommentStatistics(commentID uuid.UUID, likeCount int) error {
 	key := GetCommentStatsKey(commentID)
 	pipe := Client.Pipeline()
 	pipe.HSet(ctx, key, "like_count", likeCount)
@@ -676,7 +677,7 @@ func UpdateCommentStatistics(commentID int64, likeCount int) error {
 }
 
 // GetCommentLikeCount 获取评论点赞数（从Hash读取）
-func GetCommentLikeCount(commentID int64) (int, error) {
+func GetCommentLikeCount(commentID uuid.UUID) (int, error) {
 	key := GetCommentStatsKey(commentID)
 	val, err := Client.HGet(ctx, key, "like_count").Result()
 	if err != nil {
@@ -693,7 +694,7 @@ func GetCommentLikeCount(commentID int64) (int, error) {
 }
 
 // IncrementCommentLikeCount 增加评论点赞数（原子操作）
-func IncrementCommentLikeCount(commentID int64) error {
+func IncrementCommentLikeCount(commentID uuid.UUID) error {
 	key := GetCommentStatsKey(commentID)
 	pipe := Client.Pipeline()
 	pipe.HIncrBy(ctx, key, "like_count", 1)
@@ -706,7 +707,7 @@ func IncrementCommentLikeCount(commentID int64) error {
 }
 
 // DecrementCommentLikeCount 减少评论点赞数（原子操作）
-func DecrementCommentLikeCount(commentID int64) error {
+func DecrementCommentLikeCount(commentID uuid.UUID) error {
 	key := GetCommentStatsKey(commentID)
 	pipe := Client.Pipeline()
 	decrCmd := pipe.HIncrBy(ctx, key, "like_count", -1)

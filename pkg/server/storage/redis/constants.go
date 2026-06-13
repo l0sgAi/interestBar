@@ -3,6 +3,8 @@ package redis
 import (
 	"fmt"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Redis 相关键名常量定义
@@ -42,26 +44,26 @@ const (
 
 	// UserJoinedCirclesPrefix 用户已加入圈子ID列表缓存key前缀
 	// 完整key格式: user_joined_circles:{user_id}
-	// 存储内容：[]int64 圈子ID列表，按加入时间倒序排列
+	// 存储内容：[]uuid.UUID 圈子ID列表，按加入时间倒序排列
 	UserJoinedCirclesPrefix = "user_joined_circles:"
 )
 
 // CircleBaseInfo 圈子基础信息（不含统计信息）
 type CircleBaseInfo struct {
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Slug        string    `json:"slug,omitempty"`
-	AvatarURL   string    `json:"avatar_url,omitempty"`
-	CoverURL    string    `json:"cover_url,omitempty"`
-	Description string    `json:"description"`
-	Rule        string    `json:"rule,omitempty"`
-	CreatorID   int64     `json:"creator_id"`
-	CategoryID  int       `json:"category_id"`
-	JoinType    int16     `json:"join_type"`
-	Status      int16     `json:"status"`
-	Deleted     int16     `json:"deleted"`
-	CreateTime  time.Time `json:"create_time"`
-	UpdateTime  time.Time `json:"update_time"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Slug        string     `json:"slug,omitempty"`
+	AvatarURL   string     `json:"avatar_url,omitempty"`
+	CoverURL    string     `json:"cover_url,omitempty"`
+	Description string     `json:"description"`
+	Rule        string     `json:"rule,omitempty"`
+	CreatorID   uuid.UUID  `json:"creator_id"`
+	CategoryID  *uuid.UUID `json:"category_id,omitempty"`
+	JoinType    int16      `json:"join_type"`
+	Status      int16      `json:"status"`
+	Deleted     int16      `json:"deleted"`
+	CreateTime  time.Time  `json:"create_time"`
+	UpdateTime  time.Time  `json:"update_time"`
 }
 
 // CircleStatistics 圈子统计信息（用于批量更新和MQ消费等场景）
@@ -86,33 +88,33 @@ type PostStatistics struct {
 }
 
 // GetUserJoinedCirclesKey 获取用户已加入圈子ID列表缓存的完整key
-func GetUserJoinedCirclesKey(userID int64) string {
-	return UserJoinedCirclesPrefix + fmt.Sprint(userID)
+func GetUserJoinedCirclesKey(userID uuid.UUID) string {
+	return UserJoinedCirclesPrefix + userID.String()
 }
 
 // GetUserInfoKey 获取用户基础信息缓存的完整key
-func GetUserInfoKey(userID int64) string {
-	return UserInfoPrefix + fmt.Sprint(userID)
+func GetUserInfoKey(userID uuid.UUID) string {
+	return UserInfoPrefix + userID.String()
 }
 
 // GetCircleInfoKey 获取圈子基础信息缓存的完整key
-func GetCircleInfoKey(circleID int64) string {
-	return CircleInfoPrefix + fmt.Sprint(circleID)
+func GetCircleInfoKey(circleID uuid.UUID) string {
+	return CircleInfoPrefix + circleID.String()
 }
 
 // GetCircleStatsKey 获取圈子统计信息Hash缓存的完整key
-func GetCircleStatsKey(circleID int64) string {
-	return CircleStatsPrefix + fmt.Sprint(circleID)
+func GetCircleStatsKey(circleID uuid.UUID) string {
+	return CircleStatsPrefix + circleID.String()
 }
 
 // GetPostStatsKey 获取帖子统计信息Hash缓存的完整key
-func GetPostStatsKey(postID int64) string {
-	return PostStatsPrefix + fmt.Sprint(postID)
+func GetPostStatsKey(postID uuid.UUID) string {
+	return PostStatsPrefix + postID.String()
 }
 
 // GetPostViewDedupeKey 获取帖子浏览去重 key
-func GetPostViewDedupeKey(postID, userID int64) string {
-	return fmt.Sprintf("%s%d:%d", PostViewDedupePrefix, postID, userID)
+func GetPostViewDedupeKey(postID, userID uuid.UUID) string {
+	return fmt.Sprintf("%s%s:%s", PostViewDedupePrefix, postID.String(), userID.String())
 }
 
 // PostViewDedupePrefix 帖子浏览去重 key 前缀
@@ -127,27 +129,27 @@ const CommentStatsPrefix = "comment:stats:"
 
 // UserCommentLikeListPrefix 用户评论点赞列表ZSET key前缀
 // 完整key格式: user:like:comments:{user_id}
-// Score: 最后访问时间戳(Unix毫秒), Member: commentId
+// Score: 最后访问时间戳(Unix毫秒), Member: commentId(UUID字符串)
 const UserCommentLikeListPrefix = "user:like:comments:"
 
 // UserPostLikeListPrefix 用户帖子点赞列表ZSET key前缀
 // 完整key格式: user:like:posts:{user_id}
-// Score: 最后访问时间戳(Unix毫秒), Member: postId
+// Score: 最后访问时间戳(Unix毫秒), Member: postId(UUID字符串)
 const UserPostLikeListPrefix = "user:like:posts:"
 
 // GetCommentStatsKey 获取评论统计信息Hash缓存的完整key
-func GetCommentStatsKey(commentID int64) string {
-	return CommentStatsPrefix + fmt.Sprint(commentID)
+func GetCommentStatsKey(commentID uuid.UUID) string {
+	return CommentStatsPrefix + commentID.String()
 }
 
 // GetUserCommentLikeListKey 获取用户评论点赞列表ZSET的完整key
-func GetUserCommentLikeListKey(userID int64) string {
-	return UserCommentLikeListPrefix + fmt.Sprint(userID)
+func GetUserCommentLikeListKey(userID uuid.UUID) string {
+	return UserCommentLikeListPrefix + userID.String()
 }
 
 // GetUserPostLikeListKey 获取用户帖子点赞列表ZSET的完整key
-func GetUserPostLikeListKey(userID int64) string {
-	return UserPostLikeListPrefix + fmt.Sprint(userID)
+func GetUserPostLikeListKey(userID uuid.UUID) string {
+	return UserPostLikeListPrefix + userID.String()
 }
 
 // GetRegisterCodeKey 获取注册验证码缓存的完整key

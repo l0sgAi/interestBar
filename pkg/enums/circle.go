@@ -13,29 +13,29 @@ const (
 type CircleStatus int8
 
 const (
-	CircleStatusPending  CircleStatus = 0 // 待审(审核中)
-	CircleStatusNormal   CircleStatus = 1 // 正常
-	CircleStatusBanned   CircleStatus = 2 // 封禁
+	CircleStatusPending CircleStatus = 0 // 待审(审核中)
+	CircleStatusNormal  CircleStatus = 1 // 正常
+	CircleStatusBanned  CircleStatus = 2 // 封禁
 )
 
 // CircleMemberRole 圈子成员角色枚举
 type CircleMemberRole int8
 
 const (
-	CircleMemberRoleMember   CircleMemberRole = 10 // 普通成员
-	CircleMemberRoleAdmin    CircleMemberRole = 20 // 管理员
-	CircleMemberRoleOwner    CircleMemberRole = 30 // 圈主
+	CircleMemberRoleMember CircleMemberRole = 10 // 普通成员
+	CircleMemberRoleAdmin  CircleMemberRole = 20 // 管理员
+	CircleMemberRoleOwner  CircleMemberRole = 30 // 圈主
 )
 
 // CircleMemberStatus 圈子成员状态枚举
 type CircleMemberStatus int8
 
 const (
-	CircleMemberStatusPending   CircleMemberStatus = 0 // 待审核(申请中)
-	CircleMemberStatusNormal    CircleMemberStatus = 1 // 正常
-	CircleMemberStatusMuted     CircleMemberStatus = 2 // 禁言
-	CircleMemberStatusBanned    CircleMemberStatus = 3 // 拉黑/踢出
-	CircleMemberStatusLeft      CircleMemberStatus = 4 // 已退出(暂时退出，保留记录)
+	CircleMemberStatusPending CircleMemberStatus = 0 // 待审核(申请中)
+	CircleMemberStatusNormal  CircleMemberStatus = 1 // 正常
+	CircleMemberStatusMuted   CircleMemberStatus = 2 // 禁言
+	CircleMemberStatusBanned  CircleMemberStatus = 3 // 拉黑/踢出
+	CircleMemberStatusLeft    CircleMemberStatus = 4 // 已退出(暂时退出，保留记录)
 )
 
 // String 返回加入方式的字符串表示

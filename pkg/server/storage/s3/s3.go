@@ -20,11 +20,11 @@ import (
 
 // Client S3 客户端封装
 type Client struct {
-	client            *s3.Client
-	bucket            string
-	presignExpire     time.Duration
-	logger            *zap.Logger
-	cloudfrontDomain  string // CloudFront 分发域名
+	client           *s3.Client
+	bucket           string
+	presignExpire    time.Duration
+	logger           *zap.Logger
+	cloudfrontDomain string // CloudFront 分发域名
 }
 
 // NewClient 创建 S3 客户端
@@ -484,12 +484,12 @@ func IsImageFile(filename string) bool {
 func IsVideoFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	videoExts := map[string]bool{
-		".mp4": true,
-		".avi": true,
-		".mov": true,
-		".wmv": true,
-		".flv": true,
-		".mkv": true,
+		".mp4":  true,
+		".avi":  true,
+		".mov":  true,
+		".wmv":  true,
+		".flv":  true,
+		".mkv":  true,
 		".webm": true,
 	}
 	return videoExts[ext]

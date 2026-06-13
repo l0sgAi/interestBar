@@ -3,27 +3,25 @@ package model
 import (
 	"encoding/base64"
 	"encoding/json"
-	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // Comment 评论表
 type Comment struct {
-	ID             int64      `json:"id" gorm:"primarykey;column:id"`
-	PostID         int64      `json:"post_id" gorm:"column:post_id;not null"`                      // 所属帖子ID
-	UserID         int64      `json:"user_id" gorm:"column:user_id;not null"`                      // 评论发布者ID
-	RootID         int64      `json:"root_id" gorm:"column:root_id;default:0"`                      // 根评论ID，0为根评论
-	ReplyToID      int64      `json:"reply_to_id" gorm:"column:reply_to_id;default:0"`              // 被回复的评论ID，0为非回复
-	ReplyToUserID  int64      `json:"reply_to_user_id" gorm:"column:reply_to_user_id;default:0"`     // 被回复用户ID，0为非回复
-	Content        string     `json:"content" gorm:"column:content;type:text;not null"`             // 评论内容
-	ExtraData      json.RawMessage `json:"extra_data" gorm:"column:extra_data;type:jsonb;default:'{}'::jsonb"` // 扩展数据（JSON格式，如图片URL数组等）
-	LikeCount      int        `json:"like_count" gorm:"column:like_count;default:0"`                // 点赞数
-	ReplyCount     int        `json:"reply_count" gorm:"column:reply_count;default:0"`              // 子评论数
-	Status         int16      `json:"status" gorm:"column:status;type:smallint;default:1"`          // 状态
-	Deleted        int16      `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`        // 逻辑删除
-	CreateTime     time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime     time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	BaseModel
+	PostID        uuid.UUID       `json:"post_id" gorm:"column:post_id;type:uuid;not null"`                    // 所属帖子ID
+	UserID        uuid.UUID       `json:"user_id" gorm:"column:user_id;type:uuid;not null"`                    // 评论发布者ID
+	RootID        *uuid.UUID      `json:"root_id,omitempty" gorm:"column:root_id;type:uuid"`                   // 根评论ID，NULL为根评论
+	ReplyToID     *uuid.UUID      `json:"reply_to_id,omitempty" gorm:"column:reply_to_id;type:uuid"`           // 被回复的评论ID，NULL为非回复
+	ReplyToUserID *uuid.UUID      `json:"reply_to_user_id,omitempty" gorm:"column:reply_to_user_id;type:uuid"` // 被回复用户ID，NULL为非回复
+	Content       string          `json:"content" gorm:"column:content;type:text;not null"`                    // 评论内容
+	ExtraData     json.RawMessage `json:"extra_data" gorm:"column:extra_data;type:jsonb;default:'{}'::jsonb"`  // 扩展数据（JSON格式，如图片URL数组等）
+	LikeCount     int             `json:"like_count" gorm:"column:like_count;default:0"`                       // 点赞数
+	ReplyCount    int             `json:"reply_count" gorm:"column:reply_count;default:0"`                     // 子评论数
+	Status        int16           `json:"status" gorm:"column:status;type:smallint;default:1"`                 // 状态
+	Deleted       int16           `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`               // 逻辑删除
 }
 
 // TableName 指定表名
@@ -33,9 +31,9 @@ func (Comment) TableName() string {
 
 // CommentStatus 评论状态常量
 const (
-	CommentStatusNormal   = 1 // 正常
-	CommentStatusReview   = 2 // 审核中
-	CommentStatusHidden   = 3 // 折叠/隐藏
+	CommentStatusNormal = 1 // 正常
+	CommentStatusReview = 2 // 审核中
+	CommentStatusHidden = 3 // 折叠/隐藏
 )
 
 // CreateComment 创建评论（事务内更新根评论回复计数）
@@ -47,9 +45,9 @@ func CreateComment(db *gorm.DB, comment *Comment) error {
 			return err
 		}
 
-		// 2. 如果是回复（root_id > 0），增加根评论的回复计数
-		if comment.RootID > 0 {
-			if err := tx.Model(&Comment{}).Where("id = ?", comment.RootID).
+		// 2. 如果是回复（root_id 非空），增加根评论的回复计数
+		if comment.RootID != nil {
+			if err := tx.Model(&Comment{}).Where("id = ?", *comment.RootID).
 				UpdateColumn("reply_count", gorm.Expr("reply_count + ?", 1)).Error; err != nil {
 				return err
 			}
@@ -60,7 +58,7 @@ func CreateComment(db *gorm.DB, comment *Comment) error {
 }
 
 // GetCommentByID 根据ID获取评论
-func GetCommentByID(db *gorm.DB, commentID int64) (*Comment, error) {
+func GetCommentByID(db *gorm.DB, commentID uuid.UUID) (*Comment, error) {
 	var comment Comment
 	err := db.Where("id = ? AND deleted = ?", commentID, 0).First(&comment).Error
 	if err != nil {
@@ -70,11 +68,11 @@ func GetCommentByID(db *gorm.DB, commentID int64) (*Comment, error) {
 }
 
 // GetRootCommentsByPost 获取帖子的顶级评论列表
-func GetRootCommentsByPost(db *gorm.DB, postID int64, page, pageSize int) ([]Comment, int64, error) {
+func GetRootCommentsByPost(db *gorm.DB, postID uuid.UUID, page, pageSize int) ([]Comment, int64, error) {
 	var comments []Comment
 	var total int64
 
-	query := db.Model(&Comment{}).Where("post_id = ? AND root_id = ? AND deleted = ?", postID, 0, 0)
+	query := db.Model(&Comment{}).Where("post_id = ? AND root_id IS NULL AND deleted = ?", postID, 0)
 
 	// 获取总数
 	query.Count(&total)
@@ -89,7 +87,7 @@ func GetRootCommentsByPost(db *gorm.DB, postID int64, page, pageSize int) ([]Com
 }
 
 // GetSubCommentsByRoot 获取某条评论的子回复列表
-func GetSubCommentsByRoot(db *gorm.DB, rootID int64, page, pageSize int) ([]Comment, int64, error) {
+func GetSubCommentsByRoot(db *gorm.DB, rootID uuid.UUID, page, pageSize int) ([]Comment, int64, error) {
 	var comments []Comment
 	var total int64
 
@@ -108,7 +106,7 @@ func GetSubCommentsByRoot(db *gorm.DB, rootID int64, page, pageSize int) ([]Comm
 }
 
 // GetCommentsByUser 获取用户的评论历史
-func GetCommentsByUser(db *gorm.DB, userID int64, page, pageSize int) ([]Comment, int64, error) {
+func GetCommentsByUser(db *gorm.DB, userID uuid.UUID, page, pageSize int) ([]Comment, int64, error) {
 	var comments []Comment
 	var total int64
 
@@ -127,25 +125,25 @@ func GetCommentsByUser(db *gorm.DB, userID int64, page, pageSize int) ([]Comment
 }
 
 // IncrementLikeCount 增加点赞数
-func IncrementCommentLikeCount(db *gorm.DB, commentID int64) error {
+func IncrementCommentLikeCount(db *gorm.DB, commentID uuid.UUID) error {
 	return db.Model(&Comment{}).Where("id = ?", commentID).
 		UpdateColumn("like_count", gorm.Expr("like_count + ?", 1)).Error
 }
 
 // DecrementLikeCount 减少点赞数
-func DecrementCommentLikeCount(db *gorm.DB, commentID int64) error {
+func DecrementCommentLikeCount(db *gorm.DB, commentID uuid.UUID) error {
 	return db.Model(&Comment{}).Where("id = ?", commentID).
 		UpdateColumn("like_count", gorm.Expr("like_count - ?", 1)).Error
 }
 
 // IncrementReplyCount 增加回复数
-func IncrementReplyCount(db *gorm.DB, rootID int64) error {
+func IncrementReplyCount(db *gorm.DB, rootID uuid.UUID) error {
 	return db.Model(&Comment{}).Where("id = ?", rootID).
 		UpdateColumn("reply_count", gorm.Expr("reply_count + ?", 1)).Error
 }
 
 // DecrementReplyCount 减少回复数
-func DecrementReplyCount(db *gorm.DB, rootID int64) error {
+func DecrementReplyCount(db *gorm.DB, rootID uuid.UUID) error {
 	return db.Model(&Comment{}).Where("id = ?", rootID).
 		UpdateColumn("reply_count", gorm.Expr("reply_count - ?", 1)).Error
 }
@@ -172,16 +170,17 @@ func decodeCursor(cursor string) (map[string]interface{}, error) {
 }
 
 // buildNextCursor 根据评论和排序方式构建下一页游标
+// 注意：id 使用 UUIDv7 字符串编码(字典序 == 时间序,与 ORDER BY id DESC 配合)
 func buildNextCursor(comment *Comment, sort int) string {
 	switch sort {
 	case 0: // 按点赞
 		return encodeCursor(map[string]interface{}{
 			"like_count": float64(comment.LikeCount),
-			"id":         float64(comment.ID),
+			"id":         comment.ID.String(),
 		})
 	case 1: // 按时间
 		return encodeCursor(map[string]interface{}{
-			"id": float64(comment.ID),
+			"id": comment.ID.String(),
 		})
 	}
 	return ""
@@ -201,13 +200,21 @@ func applyCursorCondition(query *gorm.DB, cursor string, sort int) (*gorm.DB, er
 	switch sort {
 	case 0: // 按点赞倒序：keyset (like_count, id)
 		likeCount := int64(values["like_count"].(float64))
-		id := int64(values["id"].(float64))
+		idStr, _ := values["id"].(string)
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, err
+		}
 		query = query.Where(
 			"(like_count < ?) OR (like_count = ? AND id < ?)",
 			likeCount, likeCount, id,
 		)
 	case 1: // 按时间倒序：id DESC
-		id := int64(values["id"].(float64))
+		idStr, _ := values["id"].(string)
+		id, err := uuid.Parse(idStr)
+		if err != nil {
+			return nil, err
+		}
 		query = query.Where("id < ?", id)
 	}
 
@@ -228,8 +235,8 @@ func applyOrderBy(query *gorm.DB, sort int) *gorm.DB {
 // GetRootCommentsByCursor 游标分页获取帖子的顶层评论
 // sort: 0=按点赞倒序, 1=按时间倒序
 // 返回评论列表、下一页游标、是否有更多、错误
-func GetRootCommentsByCursor(db *gorm.DB, postID int64, size, sort int, cursor string) ([]Comment, string, bool, error) {
-	query := db.Model(&Comment{}).Where("post_id = ? AND root_id = 0 AND deleted = 0", postID)
+func GetRootCommentsByCursor(db *gorm.DB, postID uuid.UUID, size, sort int, cursor string) ([]Comment, string, bool, error) {
+	query := db.Model(&Comment{}).Where("post_id = ? AND root_id IS NULL AND deleted = 0", postID)
 
 	// 应用游标条件
 	var err error
@@ -264,7 +271,7 @@ func GetRootCommentsByCursor(db *gorm.DB, postID int64, size, sort int, cursor s
 // GetRepliesByCursor 游标分页获取某条评论的子回复
 // sort: 0=按时间倒序, 1=按点赞倒序
 // 返回评论列表、下一页游标、是否有更多、错误
-func GetRepliesByCursor(db *gorm.DB, rootID int64, size, sort int, cursor string) ([]Comment, string, bool, error) {
+func GetRepliesByCursor(db *gorm.DB, rootID uuid.UUID, size, sort int, cursor string) ([]Comment, string, bool, error) {
 	query := db.Model(&Comment{}).Where("root_id = ? AND deleted = 0", rootID)
 
 	// 应用游标条件

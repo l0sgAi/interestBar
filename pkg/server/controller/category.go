@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // CategoryController 处理分类相关操作
@@ -19,9 +20,9 @@ func NewCategoryController() *CategoryController {
 
 // CategorySimpleResponse 分类简化响应结构
 type CategorySimpleResponse struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	Sort int    `json:"sort"`
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	Sort int       `json:"sort"`
 }
 
 // GetCategories 获取分类列表

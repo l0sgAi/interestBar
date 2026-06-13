@@ -1,5 +1,9 @@
 package rabbitmq
 
+import (
+	"github.com/google/uuid"
+)
+
 // RabbitMQ 相关常量定义
 
 // 成员计数相关常量
@@ -16,6 +20,6 @@ const (
 
 // JoinMsg 圈子成员加入/退出消息
 type JoinMsg struct {
-	CircleID int64 `json:"circle_id"` // 圈子ID
-	IsJoin   int64 `json:"is_join"`   // 1表示加入，-1表示退出
+	CircleID uuid.UUID `json:"circle_id"` // 圈子ID
+	IsJoin   int64     `json:"is_join"`   // 1表示加入，-1表示退出
 }

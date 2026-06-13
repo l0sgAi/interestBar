@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 	"gorm.io/gorm"
 )
@@ -19,9 +20,9 @@ import (
 // likeEventDelta 点赞事件增量
 type likeEventDelta struct {
 	EventType string
-	UserID    int64
-	TargetID  int64
-	PostID    int64
+	UserID    uuid.UUID
+	TargetID  uuid.UUID
+	PostID    uuid.UUID
 	Amount    int64
 }
 
@@ -34,8 +35,8 @@ type LikeEventAggregator struct {
 	stopped  bool
 }
 
-func likeDeltaKey(eventType string, userID, targetID int64) string {
-	return fmt.Sprintf("%s:%d:%d", eventType, userID, targetID)
+func likeDeltaKey(eventType string, userID, targetID uuid.UUID) string {
+	return fmt.Sprintf("%s:%s:%s", eventType, userID.String(), targetID.String())
 }
 
 // StartLikeEventConsumer 启动点赞事件消费者
@@ -182,7 +183,7 @@ func batchUpdateCommentLikes(deltas []*likeEventDelta) error {
 					if err := tx.Create(&model.CommentLike{
 						UserID:    d.UserID,
 						CommentID: d.TargetID,
-						PostID:    d.PostID,
+						PostID:    &d.PostID,
 						Deleted:   model.CommentLikeActive,
 					}).Error; err != nil {
 						if !strings.Contains(err.Error(), "duplicate key") {
@@ -200,14 +201,14 @@ func batchUpdateCommentLikes(deltas []*likeEventDelta) error {
 		}
 
 		// Aggregate by commentID for like_count update
-		commentCountDeltas := make(map[int64]int64)
+		commentCountDeltas := make(map[uuid.UUID]int64)
 		for _, d := range deltas {
 			commentCountDeltas[d.TargetID] += d.Amount
 		}
 
 		type row struct {
-			CommentID int64 `json:"comment_id"`
-			Delta     int64 `json:"delta"`
+			CommentID uuid.UUID `json:"comment_id"`
+			Delta     int64     `json:"delta"`
 		}
 		rows := make([]row, 0, len(commentCountDeltas))
 		for commentID, delta := range commentCountDeltas {
@@ -217,7 +218,7 @@ func batchUpdateCommentLikes(deltas []*likeEventDelta) error {
 		}
 		if len(rows) > 0 {
 			sql := `UPDATE comment c SET like_count = GREATEST(c.like_count + v.delta, 0), update_time = CURRENT_TIMESTAMP
-				FROM (SELECT * FROM jsonb_to_recordset(?::jsonb) AS v(comment_id BIGINT, delta BIGINT)) v
+				FROM (SELECT * FROM jsonb_to_recordset(?::jsonb) AS v(comment_id uuid, delta BIGINT)) v
 				WHERE c.id = v.comment_id AND c.deleted = 0`
 			jsonBytes, _ := json.Marshal(rows)
 			if err := tx.Exec(sql, string(jsonBytes)).Error; err != nil {
@@ -257,14 +258,14 @@ func batchUpdatePostLikes(deltas []*likeEventDelta) error {
 		}
 
 		// Aggregate by postID for like_count update
-		postCountDeltas := make(map[int64]int64)
+		postCountDeltas := make(map[uuid.UUID]int64)
 		for _, d := range deltas {
 			postCountDeltas[d.TargetID] += d.Amount
 		}
 
 		type row struct {
-			PostID int64 `json:"post_id"`
-			Delta  int64 `json:"delta"`
+			PostID uuid.UUID `json:"post_id"`
+			Delta  int64     `json:"delta"`
 		}
 		rows := make([]row, 0, len(postCountDeltas))
 		for postID, delta := range postCountDeltas {
@@ -274,7 +275,7 @@ func batchUpdatePostLikes(deltas []*likeEventDelta) error {
 		}
 		if len(rows) > 0 {
 			sql := `UPDATE post p SET like_count = GREATEST(p.like_count + v.delta, 0), update_time = CURRENT_TIMESTAMP
-				FROM (SELECT * FROM jsonb_to_recordset(?::jsonb) AS v(post_id BIGINT, delta BIGINT)) v
+				FROM (SELECT * FROM jsonb_to_recordset(?::jsonb) AS v(post_id uuid, delta BIGINT)) v
 				WHERE p.id = v.post_id AND p.deleted = 0`
 			jsonBytes, _ := json.Marshal(rows)
 			if err := tx.Exec(sql, string(jsonBytes)).Error; err != nil {

@@ -4,21 +4,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // CircleMember 圈子成员关系与权限表
 type CircleMember struct {
-	ID           int64      `json:"id" gorm:"primarykey;column:id"`
-	CircleID     int64      `json:"circle_id" gorm:"column:circle_id;not null"`                 // 圈子ID
-	UserID       int64      `json:"user_id" gorm:"column:user_id;not null"`                     // 用户ID
-	Role         int16      `json:"role" gorm:"column:role;type:smallint;default:10"`           // 角色
-	Status       int16      `json:"status" gorm:"column:status;type:smallint;default:1"`       // 成员状态
-	MuteEndTime  *time.Time `json:"mute_end_time,omitempty" gorm:"column:mute_end_time"`        // 禁言结束时间
-	IsTop        int16      `json:"is_top" gorm:"column:is_top;type:smallint;default:0"`        // 是否置顶显示
-	IsDisturb    int16      `json:"is_disturb" gorm:"column:is_disturb;type:smallint;default:0"` // 消息免打扰
-	CreateTime   time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime   time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	BaseModel
+	CircleID    uuid.UUID  `json:"circle_id" gorm:"column:circle_id;type:uuid;not null"`        // 圈子ID
+	UserID      uuid.UUID  `json:"user_id" gorm:"column:user_id;type:uuid;not null"`            // 用户ID
+	Role        int16      `json:"role" gorm:"column:role;type:smallint;default:10"`            // 角色
+	Status      int16      `json:"status" gorm:"column:status;type:smallint;default:1"`         // 成员状态
+	MuteEndTime *time.Time `json:"mute_end_time,omitempty" gorm:"column:mute_end_time"`         // 禁言结束时间
+	IsTop       int16      `json:"is_top" gorm:"column:is_top;type:smallint;default:0"`         // 是否置顶显示
+	IsDisturb   int16      `json:"is_disturb" gorm:"column:is_disturb;type:smallint;default:0"` // 消息免打扰
 }
 
 // TableName 指定表名
@@ -28,22 +27,22 @@ func (CircleMember) TableName() string {
 
 // CircleMemberRole 角色常量
 const (
-	MemberRoleMember    = 10 // 普通成员
-	MemberRoleAdmin     = 20 // 管理员
-	MemberRoleOwner     = 30 // 圈主
+	MemberRoleMember = 10 // 普通成员
+	MemberRoleAdmin  = 20 // 管理员
+	MemberRoleOwner  = 30 // 圈主
 )
 
 // CircleMemberStatus 成员状态常量
 const (
-	MemberStatusPending  = 0 // 待审核(申请中)
-	MemberStatusNormal   = 1 // 正常
-	MemberStatusMuted    = 2 // 禁言
-	MemberStatusBanned   = 3 // 拉黑/踢出
-	MemberStatusLeft     = 4 // 已退出(暂时退出，保留记录)
+	MemberStatusPending = 0 // 待审核(申请中)
+	MemberStatusNormal  = 1 // 正常
+	MemberStatusMuted   = 2 // 禁言
+	MemberStatusBanned  = 3 // 拉黑/踢出
+	MemberStatusLeft    = 4 // 已退出(暂时退出，保留记录)
 )
 
 // GetMember 获取成员信息
-func GetMember(db *gorm.DB, circleID, userID int64) (*CircleMember, error) {
+func GetMember(db *gorm.DB, circleID, userID uuid.UUID) (*CircleMember, error) {
 	var member CircleMember
 	err := db.Where("circle_id = ? AND user_id = ?", circleID, userID).First(&member).Error
 	if err != nil {
@@ -53,7 +52,7 @@ func GetMember(db *gorm.DB, circleID, userID int64) (*CircleMember, error) {
 }
 
 // GetCirclesByUserID 获取用户加入的圈子列表
-func GetCirclesByUserID(db *gorm.DB, userID int64) ([]CircleMember, error) {
+func GetCirclesByUserID(db *gorm.DB, userID uuid.UUID) ([]CircleMember, error) {
 	var members []CircleMember
 	err := db.Where("user_id = ? AND status = ?", userID, MemberStatusNormal).
 		Order("create_time DESC").
@@ -64,8 +63,8 @@ func GetCirclesByUserID(db *gorm.DB, userID int64) ([]CircleMember, error) {
 // GetJoinedCircleIDsByUserID 获取用户加入的圈子ID列表（按加入时间倒序）
 // 用于缓存恢复，仅返回 circle_id 数组
 // limit: 限制返回数量，0表示不限制
-func GetJoinedCircleIDsByUserID(db *gorm.DB, userID int64, limit int) ([]int64, error) {
-	var circleIDs []int64
+func GetJoinedCircleIDsByUserID(db *gorm.DB, userID uuid.UUID, limit int) ([]uuid.UUID, error) {
+	var circleIDs []uuid.UUID
 	query := db.Model(&CircleMember{}).
 		Where("user_id = ? AND status = ?", userID, MemberStatusNormal).
 		Order("create_time DESC")
@@ -77,7 +76,7 @@ func GetJoinedCircleIDsByUserID(db *gorm.DB, userID int64, limit int) ([]int64, 
 }
 
 // GetMembersByCircleID 获取圈子成员列表
-func GetMembersByCircleID(db *gorm.DB, circleID int64, role int16, page, pageSize int) ([]CircleMember, int64, error) {
+func GetMembersByCircleID(db *gorm.DB, circleID uuid.UUID, role int16, page, pageSize int) ([]CircleMember, int64, error) {
 	var members []CircleMember
 	var total int64
 
@@ -100,7 +99,7 @@ func GetMembersByCircleID(db *gorm.DB, circleID int64, role int16, page, pageSiz
 }
 
 // GetAdminsByCircleID 获取圈子管理员列表
-func GetAdminsByCircleID(db *gorm.DB, circleID int64) ([]CircleMember, error) {
+func GetAdminsByCircleID(db *gorm.DB, circleID uuid.UUID) ([]CircleMember, error) {
 	var members []CircleMember
 	err := db.Where("circle_id = ? AND role >= ? AND status = ?", circleID, MemberRoleAdmin, MemberStatusNormal).
 		Order("role DESC").
@@ -109,7 +108,7 @@ func GetAdminsByCircleID(db *gorm.DB, circleID int64) ([]CircleMember, error) {
 }
 
 // IsMember 检查用户是否是圈子成员
-func IsMember(db *gorm.DB, circleID, userID int64) (bool, error) {
+func IsMember(db *gorm.DB, circleID, userID uuid.UUID) (bool, error) {
 	var count int64
 	err := db.Model(&CircleMember{}).
 		Where("circle_id = ? AND user_id = ? AND status = ?", circleID, userID, MemberStatusNormal).
@@ -118,7 +117,7 @@ func IsMember(db *gorm.DB, circleID, userID int64) (bool, error) {
 }
 
 // IsAdmin 检查用户是否是圈子管理员或圈主
-func IsAdmin(db *gorm.DB, circleID, userID int64) (bool, error) {
+func IsAdmin(db *gorm.DB, circleID, userID uuid.UUID) (bool, error) {
 	var member CircleMember
 	err := db.Where("circle_id = ? AND user_id = ? AND status = ?", circleID, userID, MemberStatusNormal).
 		First(&member).Error
@@ -129,7 +128,7 @@ func IsAdmin(db *gorm.DB, circleID, userID int64) (bool, error) {
 }
 
 // IsOwner 检查用户是否是圈主
-func IsOwner(db *gorm.DB, circleID, userID int64) (bool, error) {
+func IsOwner(db *gorm.DB, circleID, userID uuid.UUID) (bool, error) {
 	var member CircleMember
 	err := db.Where("circle_id = ? AND user_id = ? AND status = ?", circleID, userID, MemberStatusNormal).
 		First(&member).Error
@@ -140,7 +139,7 @@ func IsOwner(db *gorm.DB, circleID, userID int64) (bool, error) {
 }
 
 // JoinCircle 用户加入圈子
-func JoinCircle(db *gorm.DB, circleID, userID int64, joinType int16) (*CircleMember, error) {
+func JoinCircle(db *gorm.DB, circleID, userID uuid.UUID, joinType int16) (*CircleMember, error) {
 	// 检查是否已经是成员
 	var existingMember CircleMember
 	err := db.Where("circle_id = ? AND user_id = ?", circleID, userID).First(&existingMember).Error
@@ -185,12 +184,12 @@ func JoinCircle(db *gorm.DB, circleID, userID int64, joinType int16) (*CircleMem
 
 	// 创建新成员记录
 	member := CircleMember{
-		CircleID:   circleID,
-		UserID:     userID,
-		Role:       MemberRoleMember,
-		Status:     status,
-		IsTop:      0,
-		IsDisturb:  0,
+		CircleID:  circleID,
+		UserID:    userID,
+		Role:      MemberRoleMember,
+		Status:    status,
+		IsTop:     0,
+		IsDisturb: 0,
 	}
 
 	if err := db.Create(&member).Error; err != nil {
@@ -201,7 +200,7 @@ func JoinCircle(db *gorm.DB, circleID, userID int64, joinType int16) (*CircleMem
 }
 
 // LeaveCircle 用户退出圈子
-func LeaveCircle(db *gorm.DB, circleID, userID int64) error {
+func LeaveCircle(db *gorm.DB, circleID, userID uuid.UUID) error {
 	// 检查是否是成员
 	var member CircleMember
 	err := db.Where("circle_id = ? AND user_id = ?", circleID, userID).First(&member).Error

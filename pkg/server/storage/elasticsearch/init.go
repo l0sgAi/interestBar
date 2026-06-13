@@ -71,7 +71,7 @@ func createCircleIndex() error {
 		"mappings": map[string]interface{}{
 			"properties": map[string]interface{}{
 				"id": map[string]interface{}{
-					"type": "long",
+					"type": "keyword",
 				},
 				"name": map[string]interface{}{
 					"type":            "text",
@@ -101,7 +101,7 @@ func createCircleIndex() error {
 					"type": "integer",
 				},
 				"category_id": map[string]interface{}{
-					"type": "integer",
+					"type": "keyword",
 				},
 				"member_count": map[string]interface{}{
 					"type": "integer",

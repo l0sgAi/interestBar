@@ -12,19 +12,19 @@ import (
 var Config *AppConfig
 
 type AppConfig struct {
-	Server       Server       `mapstructure:"server" json:"server" yaml:"server"`
-	CORS         CORS         `mapstructure:"cors" json:"cors" yaml:"cors"`
-	App          App          `mapstructure:"app" json:"app" yaml:"app"`
-	Log          Log          `mapstructure:"log" json:"log" yaml:"log"`
-	Pgsql        Pgsql        `mapstructure:"pgsql" json:"pgsql" yaml:"pgsql"`
-	Oauth        Oauth        `mapstructure:"oauth" json:"oauth" yaml:"oauth"`
-	Redis        Redis        `mapstructure:"redis" json:"redis" yaml:"redis"`
-	SaToken      SaToken      `mapstructure:"sa_token" json:"sa_token" yaml:"sa_token"`
-	S3           S3           `mapstructure:"s3" json:"s3" yaml:"s3"`
+	Server        Server        `mapstructure:"server" json:"server" yaml:"server"`
+	CORS          CORS          `mapstructure:"cors" json:"cors" yaml:"cors"`
+	App           App           `mapstructure:"app" json:"app" yaml:"app"`
+	Log           Log           `mapstructure:"log" json:"log" yaml:"log"`
+	Pgsql         Pgsql         `mapstructure:"pgsql" json:"pgsql" yaml:"pgsql"`
+	Oauth         Oauth         `mapstructure:"oauth" json:"oauth" yaml:"oauth"`
+	Redis         Redis         `mapstructure:"redis" json:"redis" yaml:"redis"`
+	SaToken       SaToken       `mapstructure:"sa_token" json:"sa_token" yaml:"sa_token"`
+	S3            S3            `mapstructure:"s3" json:"s3" yaml:"s3"`
 	Elasticsearch Elasticsearch `mapstructure:"elasticsearch" json:"elasticsearch" yaml:"elasticsearch"`
-	RabbitMQ     RabbitMQ     `mapstructure:"rabbitmq" json:"rabbitmq" yaml:"rabbitmq"`
-	Redpanda     Redpanda     `mapstructure:"redpanda" json:"redpanda" yaml:"redpanda"`
-	Mailtrap     Mailtrap     `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
+	RabbitMQ      RabbitMQ      `mapstructure:"rabbitmq" json:"rabbitmq" yaml:"rabbitmq"`
+	Redpanda      Redpanda      `mapstructure:"redpanda" json:"redpanda" yaml:"redpanda"`
+	Mailtrap      Mailtrap      `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
 }
 
 type Server struct {
@@ -108,13 +108,13 @@ type SaToken struct {
 
 // S3 AWS S3 对象存储配置
 type S3 struct {
-	AccessKeyID       string `mapstructure:"access_key_id" json:"access_key_id" yaml:"access_key_id"`
-	SecretAccessKey   string `mapstructure:"secret_access_key" json:"secret_access_key" yaml:"secret_access_key"`
-	Region            string `mapstructure:"region" json:"region" yaml:"region"`
-	Bucket            string `mapstructure:"bucket" json:"bucket" yaml:"bucket"`
-	Endpoint          string `mapstructure:"endpoint" json:"endpoint" yaml:"endpoint"`
-	PresignURLExpire  int    `mapstructure:"presign_url_expire" json:"presign_url_expire" yaml:"presign_url_expire"`
-	CloudfrontDomain  string `mapstructure:"cloudfront_domain" json:"cloudfront_domain" yaml:"cloudfront_domain"`
+	AccessKeyID      string `mapstructure:"access_key_id" json:"access_key_id" yaml:"access_key_id"`
+	SecretAccessKey  string `mapstructure:"secret_access_key" json:"secret_access_key" yaml:"secret_access_key"`
+	Region           string `mapstructure:"region" json:"region" yaml:"region"`
+	Bucket           string `mapstructure:"bucket" json:"bucket" yaml:"bucket"`
+	Endpoint         string `mapstructure:"endpoint" json:"endpoint" yaml:"endpoint"`
+	PresignURLExpire int    `mapstructure:"presign_url_expire" json:"presign_url_expire" yaml:"presign_url_expire"`
+	CloudfrontDomain string `mapstructure:"cloudfront_domain" json:"cloudfront_domain" yaml:"cloudfront_domain"`
 }
 
 // Elasticsearch Elasticsearch 配置
@@ -126,14 +126,14 @@ type Elasticsearch struct {
 
 // RabbitMQ RabbitMQ 配置
 type RabbitMQ struct {
-	Host       string      `mapstructure:"host" json:"host" yaml:"host"`
-	Port       int         `mapstructure:"port" json:"port" yaml:"port"`
-	Username   string      `mapstructure:"username" json:"username" yaml:"username"`
-	Password   string      `mapstructure:"password" json:"password" yaml:"password"`
-	VHost      string      `mapstructure:"vhost" json:"vhost" yaml:"vhost"`
-	Exchange   string      `mapstructure:"exchange" json:"exchange" yaml:"exchange"`
-	Queue      string      `mapstructure:"queue" json:"queue" yaml:"queue"`
-	RoutingKey string      `mapstructure:"routing_key" json:"routing_key" yaml:"routing_key"`
+	Host       string        `mapstructure:"host" json:"host" yaml:"host"`
+	Port       int           `mapstructure:"port" json:"port" yaml:"port"`
+	Username   string        `mapstructure:"username" json:"username" yaml:"username"`
+	Password   string        `mapstructure:"password" json:"password" yaml:"password"`
+	VHost      string        `mapstructure:"vhost" json:"vhost" yaml:"vhost"`
+	Exchange   string        `mapstructure:"exchange" json:"exchange" yaml:"exchange"`
+	Queue      string        `mapstructure:"queue" json:"queue" yaml:"queue"`
+	RoutingKey string        `mapstructure:"routing_key" json:"routing_key" yaml:"routing_key"`
 	Retry      RabbitMQRetry `mapstructure:"retry" json:"retry" yaml:"retry"`
 }
 
@@ -144,18 +144,18 @@ type RabbitMQRetry struct {
 
 // Redpanda Redpanda配置
 type Redpanda struct {
-	Brokers            []string `mapstructure:"brokers" json:"brokers" yaml:"brokers"`
-	Topic              string   `mapstructure:"topic" json:"topic" yaml:"topic"`
-	ConsumerGroup      string   `mapstructure:"consumer_group" json:"consumer_group" yaml:"consumer_group"`
-	FlushInterval      int      `mapstructure:"flush_interval" json:"flush_interval" yaml:"flush_interval"`
-	FlushMessages      int      `mapstructure:"flush_messages" json:"flush_messages" yaml:"flush_messages"`
-	PostTopic          string   `mapstructure:"post_topic" json:"post_topic" yaml:"post_topic"`
-	PostConsumerGroup  string   `mapstructure:"post_consumer_group" json:"post_consumer_group" yaml:"post_consumer_group"`
-	PostFlushInterval  int      `mapstructure:"post_flush_interval" json:"post_flush_interval" yaml:"post_flush_interval"`
-	PostStatsTTL            int      `mapstructure:"post_stats_ttl" json:"post_stats_ttl" yaml:"post_stats_ttl"`
-	LikeEventTopic          string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
-	LikeEventConsumerGroup  string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
-	LikeEventFlushInterval  int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
+	Brokers                []string `mapstructure:"brokers" json:"brokers" yaml:"brokers"`
+	Topic                  string   `mapstructure:"topic" json:"topic" yaml:"topic"`
+	ConsumerGroup          string   `mapstructure:"consumer_group" json:"consumer_group" yaml:"consumer_group"`
+	FlushInterval          int      `mapstructure:"flush_interval" json:"flush_interval" yaml:"flush_interval"`
+	FlushMessages          int      `mapstructure:"flush_messages" json:"flush_messages" yaml:"flush_messages"`
+	PostTopic              string   `mapstructure:"post_topic" json:"post_topic" yaml:"post_topic"`
+	PostConsumerGroup      string   `mapstructure:"post_consumer_group" json:"post_consumer_group" yaml:"post_consumer_group"`
+	PostFlushInterval      int      `mapstructure:"post_flush_interval" json:"post_flush_interval" yaml:"post_flush_interval"`
+	PostStatsTTL           int      `mapstructure:"post_stats_ttl" json:"post_stats_ttl" yaml:"post_stats_ttl"`
+	LikeEventTopic         string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
+	LikeEventConsumerGroup string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
+	LikeEventFlushInterval int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
 }
 
 // Mailtrap 邮件发送配置
@@ -179,9 +179,10 @@ type MailtrapTemplate struct {
 }
 
 // InitConfig 是配置加载入口。
-//   fallbackPath   — Nacos 不可用时的本地兜底配置文件(通过 -c 传入，默认 configs/config.yaml)。
-//   bootstrapPath  — Nacos 引导文件(通过 -b 传入，默认 configs/bootstrap.yaml)。
-//                    为空或文件不存在时跳过 Nacos，直接加载 fallbackPath。
+//
+//	fallbackPath   — Nacos 不可用时的本地兜底配置文件(通过 -c 传入，默认 configs/config.yaml)。
+//	bootstrapPath  — Nacos 引导文件(通过 -b 传入，默认 configs/bootstrap.yaml)。
+//	                 为空或文件不存在时跳过 Nacos，直接加载 fallbackPath。
 func InitConfig(fallbackPath, bootstrapPath string) {
 	if bootstrapPath != "" {
 		switch err := initFromNacos(bootstrapPath); {

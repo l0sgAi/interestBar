@@ -33,9 +33,9 @@ type mailtrapRequest struct {
 
 // mailtrapTemplateRequest 对应 Mailtrap 模板发送 API 的请求体
 type mailtrapTemplateRequest struct {
-	From              mailtrapAddress      `json:"from"`
-	To                []mailtrapAddress    `json:"to"`
-	TemplateUUID      string               `json:"template_uuid"`
+	From              mailtrapAddress        `json:"from"`
+	To                []mailtrapAddress      `json:"to"`
+	TemplateUUID      string                 `json:"template_uuid"`
 	TemplateVariables map[string]interface{} `json:"template_variables"`
 }
 
@@ -55,12 +55,12 @@ type SendOptions struct {
 
 // Client Mailtrap 邮件客户端
 type Client struct {
-	apiToken               string
-	apiURL                 string
-	senderEmail            string
-	senderName             string
-	httpClient             *http.Client
-	verificationTemplates  map[string]string // lang -> template_uuid
+	apiToken              string
+	apiURL                string
+	senderEmail           string
+	senderName            string
+	httpClient            *http.Client
+	verificationTemplates map[string]string // lang -> template_uuid
 }
 
 // InitEmail 初始化全局 Mailtrap 邮件客户端

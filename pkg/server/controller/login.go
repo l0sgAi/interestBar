@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
@@ -56,7 +55,7 @@ func (ctrl *LoginController) Login(c *gin.Context) {
 		return
 	}
 
-	userIDStr := strconv.FormatUint(uint64(user.ID), 10)
+	userIDStr := user.ID.String()
 
 	// 清理同设备的旧 token（直接删除 key，避免 KICK_OUT 残留）
 	_ = stputil.Logout(userIDStr, utils.ResolveDevice(req.Device))

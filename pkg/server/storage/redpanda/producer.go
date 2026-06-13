@@ -8,6 +8,7 @@ import (
 	"interestBar/pkg/logger"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -29,7 +30,7 @@ func InitRedpandaProducer() error {
 	writer = &kafka.Writer{
 		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
 		Topic:                  conf.Config.Redpanda.Topic,
-		AllowAutoTopicCreation: true, // 自动创建topic
+		AllowAutoTopicCreation: true,                // 自动创建topic
 		Balancer:               &kafka.LeastBytes{}, // 使用LeastBytes均衡器
 		BatchTimeout:           10 * time.Millisecond,
 		RequiredAcks:           kafka.RequireOne, // 只需要leader确认
@@ -66,7 +67,7 @@ func InitRedpandaProducer() error {
 }
 
 // PublishCircleMemberCount 发布圈子成员计数变化消息
-func PublishCircleMemberCount(circleID int64, value int64) error {
+func PublishCircleMemberCount(circleID uuid.UUID, value int64) error {
 	if writer == nil {
 		return fmt.Errorf("redpanda writer is not initialized")
 	}
@@ -81,7 +82,7 @@ func PublishCircleMemberCount(circleID int64, value int64) error {
 }
 
 // PublishCirclePostCount 发布圈子帖子计数变化消息
-func PublishCirclePostCount(circleID int64) error {
+func PublishCirclePostCount(circleID uuid.UUID) error {
 	if writer == nil {
 		return fmt.Errorf("redpanda writer is not initialized")
 	}
@@ -103,7 +104,7 @@ func publishMessage(message CircleStatisticsMessage) error {
 	}
 
 	kafkaMsg := kafka.Message{
-		Key:   []byte(fmt.Sprintf("%d", message.CircleID)), // 使用circle_id作为key，保证同一圈子的消息有序
+		Key:   []byte(message.CircleID.String()), // 使用circle_id作为key，保证同一圈子的消息有序
 		Value: value,
 	}
 
@@ -117,8 +118,8 @@ func publishMessage(message CircleStatisticsMessage) error {
 	if message.Value < 0 {
 		action = "decrement"
 	}
-	logger.Log.Debug(fmt.Sprintf("Published %s message: type=%s, circle_id=%d, value=%d",
-		action, message.Type, message.CircleID, message.Value))
+	logger.Log.Debug(fmt.Sprintf("Published %s message: type=%s, circle_id=%s, value=%d",
+		action, message.Type, message.CircleID.String(), message.Value))
 
 	return nil
 }
@@ -160,7 +161,7 @@ func InitPostStatsProducer() error {
 }
 
 // PublishPostViewCount 发布帖子浏览量变化消息
-func PublishPostViewCount(postID int64) error {
+func PublishPostViewCount(postID uuid.UUID) error {
 	if postWriter == nil {
 		return fmt.Errorf("post stats writer is not initialized")
 	}
@@ -172,7 +173,7 @@ func PublishPostViewCount(postID int64) error {
 }
 
 // PublishPostCommentCount 发布帖子评论数变化消息
-func PublishPostCommentCount(postID int64, value int64) error {
+func PublishPostCommentCount(postID uuid.UUID, value int64) error {
 	if postWriter == nil {
 		return fmt.Errorf("post stats writer is not initialized")
 	}
@@ -184,7 +185,7 @@ func PublishPostCommentCount(postID int64, value int64) error {
 }
 
 // PublishPostLikeCount 发布帖子点赞数变化消息
-func PublishPostLikeCount(postID int64, value int64) error {
+func PublishPostLikeCount(postID uuid.UUID, value int64) error {
 	if postWriter == nil {
 		return fmt.Errorf("post stats writer is not initialized")
 	}
@@ -196,7 +197,7 @@ func PublishPostLikeCount(postID int64, value int64) error {
 }
 
 // PublishPostCollectCount 发布帖子收藏数变化消息
-func PublishPostCollectCount(postID int64, value int64) error {
+func PublishPostCollectCount(postID uuid.UUID, value int64) error {
 	if postWriter == nil {
 		return fmt.Errorf("post stats writer is not initialized")
 	}
@@ -215,7 +216,7 @@ func publishPostMessage(message PostStatisticsMessage) error {
 	}
 
 	kafkaMsg := kafka.Message{
-		Key:   []byte(fmt.Sprintf("%d", message.PostID)),
+		Key:   []byte(message.PostID.String()),
 		Value: value,
 	}
 
@@ -224,8 +225,8 @@ func publishPostMessage(message PostStatisticsMessage) error {
 		return fmt.Errorf("failed to write post stats message: %w", err)
 	}
 
-	logger.Log.Debug(fmt.Sprintf("Published post stats message: type=%s, post_id=%d, value=%d",
-		message.Type, message.PostID, message.Value))
+	logger.Log.Debug(fmt.Sprintf("Published post stats message: type=%s, post_id=%s, value=%d",
+		message.Type, message.PostID.String(), message.Value))
 
 	return nil
 }
@@ -266,7 +267,7 @@ func InitLikeEventProducer() error {
 }
 
 // PublishCommentLikeEvent 发布评论点赞事件消息
-func PublishCommentLikeEvent(userID, commentID, postID int64, amount int64) error {
+func PublishCommentLikeEvent(userID, commentID, postID uuid.UUID, amount int64) error {
 	if likeEventWriter == nil {
 		return fmt.Errorf("like event writer is not initialized")
 	}
@@ -280,7 +281,7 @@ func PublishCommentLikeEvent(userID, commentID, postID int64, amount int64) erro
 }
 
 // PublishPostLikeEvent 发布帖子点赞事件消息
-func PublishPostLikeEvent(userID, postID int64, amount int64) error {
+func PublishPostLikeEvent(userID, postID uuid.UUID, amount int64) error {
 	if likeEventWriter == nil {
 		return fmt.Errorf("like event writer is not initialized")
 	}
@@ -298,14 +299,14 @@ func publishLikeEvent(msg LikeEventMessage) error {
 		return fmt.Errorf("failed to marshal like event message: %w", err)
 	}
 	kafkaMsg := kafka.Message{
-		Key:   []byte(fmt.Sprintf("%d:%d", msg.UserID, msg.TargetID)),
+		Key:   []byte(fmt.Sprintf("%s:%s", msg.UserID.String(), msg.TargetID.String())),
 		Value: value,
 	}
 	if err := likeEventWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
 		return fmt.Errorf("failed to write like event message: %w", err)
 	}
-	logger.Log.Debug(fmt.Sprintf("Published like event: type=%s, user=%d, target=%d, amount=%d",
-		msg.Type, msg.UserID, msg.TargetID, msg.Amount))
+	logger.Log.Debug(fmt.Sprintf("Published like event: type=%s, user=%s, target=%s, amount=%d",
+		msg.Type, msg.UserID.String(), msg.TargetID.String(), msg.Amount))
 	return nil
 }
 

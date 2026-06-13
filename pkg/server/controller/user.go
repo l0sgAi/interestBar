@@ -2,7 +2,6 @@ package controller
 
 import (
 	"encoding/json"
-	"fmt"
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
@@ -11,12 +10,12 @@ import (
 	elasticsearch "interestBar/pkg/server/storage/elasticsearch"
 	redispkg "interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/click33/sa-token-go/stputil"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -167,7 +166,7 @@ func (ctrl *UserController) UpdateProfile(c *gin.Context) {
 	}
 
 	// 同步更新 session 中的用户信息（保持会话一致性）
-	loginID := strconv.FormatUint(uint64(userID), 10)
+	loginID := userID.String()
 	if err := utils.SetUserToSession(loginID, &user); err != nil {
 		// session 更新失败不影响主流程
 		// 可以考虑添加日志记录
@@ -193,7 +192,7 @@ type SearchUsersRequest struct {
 
 // UserListItemVO 用户列表项VO
 type UserListItemVO struct {
-	ID         int64  `json:"id"`
+	ID         string `json:"id"`
 	Username   string `json:"username"`
 	Email      string `json:"email"`
 	AvatarURL  string `json:"avatar_url"`
@@ -273,10 +272,9 @@ func (ctrl *UserController) SearchUsers(c *gin.Context) {
 // GetUserDetail 获取用户详情
 // GET /user/detail/:id
 func (ctrl *UserController) GetUserDetail(c *gin.Context) {
-	// 获取用户ID参数
-	userIDStr := c.Param("id")
-	var userID int64
-	if _, err := fmt.Sscanf(userIDStr, "%d", &userID); err != nil || userID <= 0 {
+	// 获取用户ID参数 (UUIDv7)
+	userID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
 		response.BadRequest(c, "Invalid user id")
 		return
 	}
@@ -286,7 +284,7 @@ func (ctrl *UserController) GetUserDetail(c *gin.Context) {
 
 	// 1. 先尝试从缓存获取用户信息
 	var user model.SysUser
-	err := redispkg.GetJSONCompressed(redisKey, &user)
+	err = redispkg.GetJSONCompressed(redisKey, &user)
 
 	if err == nil {
 		// 缓存命中，验证用户状态

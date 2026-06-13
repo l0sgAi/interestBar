@@ -2,7 +2,6 @@ package controller
 
 import (
 	"encoding/json"
-	"fmt"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -27,13 +27,13 @@ func NewPostController() *PostController {
 
 // CreatePostRequest 创建帖子的请求结构
 type CreatePostRequest struct {
-	CircleID   int64    `json:"circle_id" binding:"required,min=1"`
-	Title      string   `json:"title" binding:"required,min=1,max=200"`
-	Content    string   `json:"content" binding:"omitempty,max=50000"`
-	Summary    string   `json:"summary" binding:"omitempty,max=500"`
-	Type       int16    `json:"type" binding:"omitempty,min=1,max=3"`
-	MediaExtra []string `json:"media_extra" binding:"omitempty"`
-	Status     int16    `json:"status" binding:"omitempty,min=0,max=4"`
+	CircleID   uuid.UUID `json:"circle_id" binding:"required"`
+	Title      string    `json:"title" binding:"required,min=1,max=200"`
+	Content    string    `json:"content" binding:"omitempty,max=50000"`
+	Summary    string    `json:"summary" binding:"omitempty,max=500"`
+	Type       int16     `json:"type" binding:"omitempty,min=1,max=3"`
+	MediaExtra []string  `json:"media_extra" binding:"omitempty"`
+	Status     int16     `json:"status" binding:"omitempty,min=0,max=4"`
 }
 
 // CreatePost 创建帖子
@@ -67,7 +67,7 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 	// 如果是草稿，不限制标题和内容
 	if postStatus != model.PostStatusDraft {
 		// 检查圈子ID和标题不能为空
-		if req.CircleID == 0 {
+		if req.CircleID == uuid.Nil {
 			response.BadRequest(c, "circle_id is required")
 			return
 		}
@@ -78,7 +78,7 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 	}
 
 	// 1. 检查是否为圈子成员
-	member, err := model.GetMember(pgsql.DB, req.CircleID, int64(userID))
+	member, err := model.GetMember(pgsql.DB, req.CircleID, userID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			response.Forbidden(c, "You are not a member of this circle")
@@ -139,7 +139,7 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 	// 构建帖子数据模型
 	post := model.Post{
 		CircleID:   req.CircleID,
-		UserID:     int64(userID),
+		UserID:     userID,
 		Type:       postType,
 		Title:      strings.TrimSpace(req.Title),
 		Summary:    summary,
@@ -179,9 +179,9 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 // PostDetailVO 帖子详情VO（包含Post所有字段 + 用户点赞状态 + 发帖人信息）
 type PostDetailVO struct {
 	// Post 所有字段
-	ID            int64                `json:"id"`
-	CircleID      int64                `json:"circle_id"`
-	UserID        int64                `json:"user_id"`
+	ID            uuid.UUID            `json:"id"`
+	CircleID      uuid.UUID            `json:"circle_id"`
+	UserID        uuid.UUID            `json:"user_id"`
 	Type          int16                `json:"type"`
 	Title         string               `json:"title"`
 	Summary       string               `json:"summary"`
@@ -201,9 +201,9 @@ type PostDetailVO struct {
 	LastReplyTime *time.Time           `json:"last_reply_time,omitempty"`
 
 	// 发帖人信息
-	AuthorID     int64  `json:"author_id"`     // 发帖人ID
-	AuthorName   string `json:"author_name"`   // 发帖人用户昵称
-	AuthorAvatar string `json:"author_avatar"` // 发帖人头像URL
+	AuthorID     uuid.UUID `json:"author_id"`     // 发帖人ID
+	AuthorName   string    `json:"author_name"`   // 发帖人用户昵称
+	AuthorAvatar string    `json:"author_avatar"` // 发帖人头像URL
 
 	// 用户交互状态
 	IsLiked bool `json:"is_liked"` // 当前用户是否点赞了该帖子
@@ -218,10 +218,9 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 		return
 	}
 
-	// 获取post_id参数
-	postIDStr := c.Param("id")
-	var postID int64
-	if _, err := fmt.Sscanf(postIDStr, "%d", &postID); err != nil || postID <= 0 {
+	// 获取post_id参数 (UUIDv7)
+	postID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
 		response.BadRequest(c, "Invalid post id")
 		return
 	}
@@ -238,36 +237,36 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 	}
 
 	// 2. 权限检查：如果是作者本人，可以查看所有状态的帖子；如果是其他用户，只能查看已发布的帖子（status=1）
-	if int64(userID) != post.UserID && post.Status != model.PostStatusPublished {
+	if userID != post.UserID && post.Status != model.PostStatusPublished {
 		response.NotFound(c, "Post not found")
 		return
 	}
 
 	// 2. 检查用户是否点赞了该帖子（先查Redis，miss时回源DB）
 	var isLiked bool
-	likedMap, _, cacheErr := redispkg.BatchCheckPostLiked(int64(userID), []int64{postID})
+	likedMap, _, cacheErr := redispkg.BatchCheckPostLiked(userID, []uuid.UUID{postID})
 	if cacheErr == nil {
 		if likedMap[postID] {
 			isLiked = true
 		} else {
 			// Redis缓存未命中，回源DB
-			isLiked, cacheErr = model.IsPostLiked(pgsql.DB, int64(userID), postID)
+			isLiked, cacheErr = model.IsPostLiked(pgsql.DB, userID, postID)
 			if cacheErr != nil {
 				isLiked = false
 			}
 			if isLiked {
-				redispkg.BackfillPostLikes(int64(userID), []int64{postID})
+				redispkg.BackfillPostLikes(userID, []uuid.UUID{postID})
 			}
 		}
 	} else {
-		isLiked, cacheErr = model.IsPostLiked(pgsql.DB, int64(userID), postID)
+		isLiked, cacheErr = model.IsPostLiked(pgsql.DB, userID, postID)
 		if cacheErr != nil {
 			isLiked = false
 		}
 	}
 
 	// 3. 异步增加浏览量（不阻塞主流程）
-	go func(postID, userID int64) {
+	go func(postID, userID uuid.UUID) {
 		if err := restorePostStatsIfNeed(postID); err != nil {
 			logger.Log.Error("Failed to restore post stats cache: " + err.Error())
 		}
@@ -281,10 +280,10 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 				logger.Log.Error("Failed to publish view count event: " + err.Error())
 			}
 		}
-	}(postID, int64(userID))
+	}(postID, userID)
 
 	// 4. 查询发帖人信息
-	var authorID int64 = post.UserID
+	authorID := post.UserID
 	var authorName string
 	var authorAvatar string
 
@@ -333,10 +332,10 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 
 // GetPostsRequest 获取帖子列表的请求结构
 type GetPostsRequest struct {
-	Keyword     string `form:"keyword"`      // 搜索关键字
-	CircleID    int64  `form:"circle_id"`    // 圈子ID，为0时搜索所有圈子
-	Size        int    `form:"size"`         // 每页数量，默认20
-	SearchAfter string `form:"search_after"` // 上一页返回的search_after值（JSON字符串）
+	Keyword     string    `form:"keyword"`      // 搜索关键字
+	CircleID    uuid.UUID `form:"circle_id"`    // 圈子ID，为零值时搜索所有圈子
+	Size        int       `form:"size"`         // 每页数量，默认20
+	SearchAfter string    `form:"search_after"` // 上一页返回的search_after值（JSON字符串）
 }
 
 // GetPosts 获取帖子列表
@@ -376,22 +375,25 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 	// 构建帖子列表VO，包含发帖人信息和圈子信息
 	posts := make([]PostListVO, 0, len(result.Posts))
 
-	// 批量收集所有的用户ID和圈子ID
-	userIDs := make([]int64, 0, len(result.Posts))
-	circleIDs := make([]int64, 0, len(result.Posts))
-	postIDs := make([]int64, 0, len(result.Posts))
-	userIDSet := make(map[int64]struct{})
-	circleIDSet := make(map[int64]struct{})
+	// 批量收集所有的用户ID和圈子ID (ES 文档中 ID 为字符串，需解析为 uuid.UUID)
+	userIDs := make([]uuid.UUID, 0, len(result.Posts))
+	circleIDs := make([]uuid.UUID, 0, len(result.Posts))
+	postIDs := make([]uuid.UUID, 0, len(result.Posts))
+	userIDSet := make(map[uuid.UUID]struct{})
+	circleIDSet := make(map[uuid.UUID]struct{})
 
 	for _, doc := range result.Posts {
-		postIDs = append(postIDs, doc.ID)
-		if _, exists := userIDSet[doc.UserID]; !exists {
-			userIDSet[doc.UserID] = struct{}{}
-			userIDs = append(userIDs, doc.UserID)
+		postID, _ := uuid.Parse(doc.ID)
+		postIDs = append(postIDs, postID)
+		uid, _ := uuid.Parse(doc.UserID)
+		if _, exists := userIDSet[uid]; !exists {
+			userIDSet[uid] = struct{}{}
+			userIDs = append(userIDs, uid)
 		}
-		if _, exists := circleIDSet[doc.CircleID]; !exists {
-			circleIDSet[doc.CircleID] = struct{}{}
-			circleIDs = append(circleIDs, doc.CircleID)
+		cid, _ := uuid.Parse(doc.CircleID)
+		if _, exists := circleIDSet[cid]; !exists {
+			circleIDSet[cid] = struct{}{}
+			circleIDs = append(circleIDs, cid)
 		}
 	}
 
@@ -402,11 +404,15 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 
 	// 构建返回数据
 	for _, doc := range result.Posts {
+		postID, _ := uuid.Parse(doc.ID)
+		uid, _ := uuid.Parse(doc.UserID)
+		cid, _ := uuid.Parse(doc.CircleID)
+
 		// 从map中获取发帖人信息
 		var authorName string
 		var authorAvatar string
 
-		if author, exists := userMap[doc.UserID]; exists {
+		if author, exists := userMap[uid]; exists {
 			authorName = author.Username
 			authorAvatar = author.AvatarURL
 		}
@@ -415,7 +421,7 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 		var circleName string
 		var circleAvatar string
 
-		if circle, exists := circleMap[doc.CircleID]; exists {
+		if circle, exists := circleMap[cid]; exists {
 			circleName = circle.Name
 			circleAvatar = circle.AvatarURL
 		}
@@ -424,14 +430,14 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 		createTime, _ := time.Parse(time.RFC3339Nano, doc.CreateTime)
 		// 获取图片列表
 		var images []string
-		if media, ok := mediaMap[doc.ID]; ok {
+		if media, ok := mediaMap[postID]; ok {
 			images = media
 		}
 
 		post := PostListVO{
-			ID:           doc.ID,
-			CircleID:     doc.CircleID,
-			UserID:       doc.UserID,
+			ID:           postID,
+			CircleID:     cid,
+			UserID:       uid,
 			Type:         doc.Type,
 			Title:        doc.Title,
 			Summary:      doc.Summary,
@@ -475,9 +481,9 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 
 // PostListVO 帖子列表VO（包含Post所有字段 + 发帖人信息）
 type PostListVO struct {
-	ID           int64     `json:"id"`
-	CircleID     int64     `json:"circle_id"`
-	UserID       int64     `json:"user_id"`
+	ID           uuid.UUID `json:"id"`
+	CircleID     uuid.UUID `json:"circle_id"`
+	UserID       uuid.UUID `json:"user_id"`
 	Type         int16     `json:"type"`
 	Title        string    `json:"title"`
 	Summary      string    `json:"summary"`

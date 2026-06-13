@@ -4,27 +4,26 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 type SysUser struct {
-	ID         int64      `json:"id" gorm:"primarykey;column:id"`
-	CreateTime time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
-	Username   string     `json:"username" gorm:"column:username;not null"`
-	Email      string     `json:"email" gorm:"column:email;unique;not null"`
-	Phone      string     `json:"phone,omitempty" gorm:"column:phone"`
-	Pwd        string     `json:"-" gorm:"column:pwd"`
-	GoogleID     string     `json:"google_id,omitempty" gorm:"column:google_id"`
-	XID          string     `json:"x_id,omitempty" gorm:"column:x_id"`
-	GithubID     string     `json:"github_id,omitempty" gorm:"column:github_id"`
-	MicrosoftID  string     `json:"microsoft_id,omitempty" gorm:"column:microsoft_id"`
-	AvatarURL  string     `json:"avatar_url,omitempty" gorm:"column:avatar_url"`
-	Gender     int        `json:"gender" gorm:"column:gender;default:0"`
-	Birthdate  *time.Time `json:"birthdate,omitempty" gorm:"column:birthdate"`
-	Status     int        `json:"status" gorm:"column:status;default:1"`
-	Role       int        `json:"role" gorm:"column:role;default:0"`
-	Deleted    int        `json:"deleted" gorm:"column:deleted;default:0"`
+	BaseModel
+	Username    string     `json:"username" gorm:"column:username;not null"`
+	Email       string     `json:"email" gorm:"column:email;unique;not null"`
+	Phone       string     `json:"phone,omitempty" gorm:"column:phone"`
+	Pwd         string     `json:"-" gorm:"column:pwd"`
+	GoogleID    string     `json:"google_id,omitempty" gorm:"column:google_id"`
+	XID         string     `json:"x_id,omitempty" gorm:"column:x_id"`
+	GithubID    string     `json:"github_id,omitempty" gorm:"column:github_id"`
+	MicrosoftID string     `json:"microsoft_id,omitempty" gorm:"column:microsoft_id"`
+	AvatarURL   string     `json:"avatar_url,omitempty" gorm:"column:avatar_url"`
+	Gender      int        `json:"gender" gorm:"column:gender;default:0"`
+	Birthdate   *time.Time `json:"birthdate,omitempty" gorm:"column:birthdate"`
+	Status      int        `json:"status" gorm:"column:status;default:1"`
+	Role        int        `json:"role" gorm:"column:role;default:0"`
+	Deleted     int        `json:"deleted" gorm:"column:deleted;default:0"`
 }
 
 func (SysUser) TableName() string {
@@ -32,7 +31,7 @@ func (SysUser) TableName() string {
 }
 
 // GetUserByID 根据用户ID从数据库获取用户信息
-func GetUserByID(db *gorm.DB, userID int64) (*SysUser, error) {
+func GetUserByID(db *gorm.DB, userID uuid.UUID) (*SysUser, error) {
 	var user SysUser
 	err := db.Where("id = ? AND deleted = ?", userID, 0).First(&user).Error
 	if err != nil {
@@ -58,9 +57,9 @@ func GetUserByEmail(db *gorm.DB, email string) (*SysUser, error) {
 }
 
 // GetUsersByIDs 根据用户ID列表批量获取用户信息
-func GetUsersByIDs(db *gorm.DB, userIDs []int64) (map[int64]*SysUser, error) {
+func GetUsersByIDs(db *gorm.DB, userIDs []uuid.UUID) (map[uuid.UUID]*SysUser, error) {
 	if len(userIDs) == 0 {
-		return make(map[int64]*SysUser), nil
+		return make(map[uuid.UUID]*SysUser), nil
 	}
 
 	var users []SysUser
@@ -70,7 +69,7 @@ func GetUsersByIDs(db *gorm.DB, userIDs []int64) (map[int64]*SysUser, error) {
 	}
 
 	// 将用户切片转换为以ID为key的map，方便快速查找
-	userMap := make(map[int64]*SysUser, len(users))
+	userMap := make(map[uuid.UUID]*SysUser, len(users))
 	for i := range users {
 		userMap[users[i].ID] = &users[i]
 	}

@@ -12,8 +12,8 @@ const (
 type UserRole int8
 
 const (
-	UserRoleUser      UserRole = 0 // 用户
-	UserRoleAdmin     UserRole = 1 // 管理员
+	UserRoleUser  UserRole = 0 // 用户
+	UserRoleAdmin UserRole = 1 // 管理员
 )
 
 // UserGender 用户性别枚举

@@ -8,13 +8,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // MemberCountAggregator 成员计数聚合器
 type MemberCountAggregator struct {
 	mu              sync.Mutex
-	pendingMessages map[int64]int64 // circle_id -> 累计变化量 (int64防止溢出)
+	pendingMessages map[uuid.UUID]int64 // circle_id -> 累计变化量 (int64防止溢出)
 	ticker          *time.Ticker
 	stopChan        chan struct{}
 	stopped         bool
@@ -26,7 +27,7 @@ const redisPipelineThreshold = 20
 // NewMemberCountAggregator 创建聚合器
 func NewMemberCountAggregator() *MemberCountAggregator {
 	return &MemberCountAggregator{
-		pendingMessages: make(map[int64]int64),
+		pendingMessages: make(map[uuid.UUID]int64),
 		ticker:          time.NewTicker(3 * time.Second),
 		stopChan:        make(chan struct{}),
 	}
@@ -90,7 +91,7 @@ func StartMemberCountConsumer() error {
 }
 
 // addMessage 添加消息到待处理队列
-func (a *MemberCountAggregator) addMessage(circleID int64, delta int64) {
+func (a *MemberCountAggregator) addMessage(circleID uuid.UUID, delta int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -124,7 +125,7 @@ func (a *MemberCountAggregator) flush() {
 	}
 
 	messages := a.pendingMessages
-	a.pendingMessages = make(map[int64]int64)
+	a.pendingMessages = make(map[uuid.UUID]int64)
 	a.mu.Unlock()
 
 	logger.Log.Info(fmt.Sprintf(
@@ -139,13 +140,13 @@ func (a *MemberCountAggregator) flush() {
 
 // batchUpdateMemberCount 批量更新圈子成员计数到数据库（持久化）
 // Redis缓存已在加入/退出时通过INCR/DECR实时更新，此处仅持久化到数据库
-func (a *MemberCountAggregator) batchUpdateMemberCount(deltas map[int64]int64) error {
+func (a *MemberCountAggregator) batchUpdateMemberCount(deltas map[uuid.UUID]int64) error {
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
 
 		// 1. 构造 VALUES 列表
 		type row struct {
-			CircleID int64 `json:"circle_id"`
-			Delta    int64 `json:"delta"`
+			CircleID uuid.UUID `json:"circle_id"`
+			Delta    int64     `json:"delta"`
 		}
 
 		rows := make([]row, 0, len(deltas))
@@ -166,7 +167,7 @@ func (a *MemberCountAggregator) batchUpdateMemberCount(deltas map[int64]int64) e
 		    update_time = CURRENT_TIMESTAMP
 		FROM (
 			SELECT * FROM jsonb_to_recordset(?::jsonb)
-			AS v(circle_id BIGINT, delta BIGINT)
+			AS v(circle_id uuid, delta BIGINT)
 		) v
 		WHERE c.id = v.circle_id AND c.deleted = 0
 		`
@@ -189,8 +190,8 @@ func (a *MemberCountAggregator) batchUpdateMemberCount(deltas map[int64]int64) e
 }
 
 // 辅助函数
-func keys(m map[int64]int64) []int64 {
-	ids := make([]int64, 0, len(m))
+func keys(m map[uuid.UUID]int64) []uuid.UUID {
+	ids := make([]uuid.UUID, 0, len(m))
 	for k := range m {
 		ids = append(ids, k)
 	}

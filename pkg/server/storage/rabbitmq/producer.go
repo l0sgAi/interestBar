@@ -8,6 +8,7 @@ import (
 	"interestBar/pkg/logger"
 	"time"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -86,7 +87,7 @@ func InitRabbitMQ() error {
 }
 
 // PublishJoinMsg 发布圈子成员加入/退出消息
-func PublishJoinMsg(circleID int64, isJoin int64) error {
+func PublishJoinMsg(circleID uuid.UUID, isJoin int64) error {
 	if channel == nil {
 		return fmt.Errorf("RabbitMQ channel is not initialized")
 	}
@@ -124,7 +125,7 @@ func PublishJoinMsg(circleID int64, isJoin int64) error {
 	if isJoin == -1 {
 		action = "leave"
 	}
-	logger.Log.Info(fmt.Sprintf("Published member count message: action=%s, circle_id=%d", action, circleID))
+	logger.Log.Info(fmt.Sprintf("Published member count message: action=%s, circle_id=%s", action, circleID.String()))
 	return nil
 }
 

@@ -14,6 +14,7 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/gin-gonic/gin v1.11.0
 	github.com/gomarkdown/markdown v0.0.0-20260217112301-37c66b85d6ab
+	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.3
 	github.com/nacos-group/nacos-sdk-go/v2 v2.3.5
 	github.com/rabbitmq/amqp091-go v1.10.0
@@ -89,7 +90,6 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.3.0 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/pgx/v5 v5.6.0 // indirect

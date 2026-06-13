@@ -5,31 +5,30 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // Post 帖子主表
 type Post struct {
-	ID            int64          `json:"id" gorm:"primarykey;column:id"`
-	CircleID      int64          `json:"circle_id" gorm:"column:circle_id;not null"`                      // 所属圈子ID
-	UserID        int64          `json:"user_id" gorm:"column:user_id;not null"`                          // 发帖人ID
-	Type          int16          `json:"type" gorm:"column:type;type:smallint;default:1"`                 // 帖子类型
-	Title         string         `json:"title" gorm:"column:title;type:varchar(200);default:''"`          // 标题
-	Summary       string         `json:"summary" gorm:"column:summary;type:varchar(2000);default:''"`      // 摘要
-	Content       string         `json:"content" gorm:"column:content;type:text;default:''"`              // 正文
+	BaseModel
+	CircleID      uuid.UUID      `json:"circle_id" gorm:"column:circle_id;type:uuid;not null"`                 // 所属圈子ID
+	UserID        uuid.UUID      `json:"user_id" gorm:"column:user_id;type:uuid;not null"`                     // 发帖人ID
+	Type          int16          `json:"type" gorm:"column:type;type:smallint;default:1"`                      // 帖子类型
+	Title         string         `json:"title" gorm:"column:title;type:varchar(200);default:''"`               // 标题
+	Summary       string         `json:"summary" gorm:"column:summary;type:varchar(2000);default:''"`          // 摘要
+	Content       string         `json:"content" gorm:"column:content;type:text;default:''"`                   // 正文
 	MediaExtra    MediaExtraJSON `json:"media_extra" gorm:"column:media_extra;type:jsonb;default:'[]'::jsonb"` // 媒体扩展信息
-	ViewCount     int            `json:"view_count" gorm:"column:view_count;default:0"`                   // 浏览量
-	CommentCount  int            `json:"comment_count" gorm:"column:comment_count;default:0"`             // 评论数
-	LikeCount     int            `json:"like_count" gorm:"column:like_count;default:0"`                   // 点赞数
-	CollectCount  int            `json:"collect_count" gorm:"column:collect_count;default:0"`             // 收藏数
-	IsPinned      int16          `json:"is_pinned" gorm:"column:is_pinned;type:smallint;default:0"`       // 是否置顶
-	IsEssence     int16          `json:"is_essence" gorm:"column:is_essence;type:smallint;default:0"`     // 是否加精
-	IsLock        int16          `json:"is_lock" gorm:"column:is_lock;type:smallint;default:0"`           // 是否锁定
-	Status        int16          `json:"status" gorm:"column:status;type:smallint;default:1"`             // 状态
-	Deleted       int16          `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`           // 逻辑删除
-	CreateTime    time.Time      `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime    time.Time      `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
-	LastReplyTime *time.Time     `json:"last_reply_time,omitempty" gorm:"column:last_reply_time"`         // 最后回复时间
+	ViewCount     int            `json:"view_count" gorm:"column:view_count;default:0"`                        // 浏览量
+	CommentCount  int            `json:"comment_count" gorm:"column:comment_count;default:0"`                  // 评论数
+	LikeCount     int            `json:"like_count" gorm:"column:like_count;default:0"`                        // 点赞数
+	CollectCount  int            `json:"collect_count" gorm:"column:collect_count;default:0"`                  // 收藏数
+	IsPinned      int16          `json:"is_pinned" gorm:"column:is_pinned;type:smallint;default:0"`            // 是否置顶
+	IsEssence     int16          `json:"is_essence" gorm:"column:is_essence;type:smallint;default:0"`          // 是否加精
+	IsLock        int16          `json:"is_lock" gorm:"column:is_lock;type:smallint;default:0"`                // 是否锁定
+	Status        int16          `json:"status" gorm:"column:status;type:smallint;default:1"`                  // 状态
+	Deleted       int16          `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`                // 逻辑删除
+	LastReplyTime *time.Time     `json:"last_reply_time,omitempty" gorm:"column:last_reply_time"`              // 最后回复时间
 }
 
 // TableName 指定表名
@@ -46,11 +45,11 @@ const (
 
 // PostStatus 帖子状态常量
 const (
-	PostStatusDraft      = 0 // 草稿
-	PostStatusPublished  = 1 // 发布(正常)
-	PostStatusReviewing  = 2 // 审核中
-	PostStatusRejected   = 3 // 审核失败
-	PostStatusBlocked    = 4 // 被屏蔽(软删/违规)
+	PostStatusDraft     = 0 // 草稿
+	PostStatusPublished = 1 // 发布(正常)
+	PostStatusReviewing = 2 // 审核中
+	PostStatusRejected  = 3 // 审核失败
+	PostStatusBlocked   = 4 // 被屏蔽(软删/违规)
 )
 
 // MediaExtraJSON 媒体扩展信息JSON类型（存储图片URL数组）
@@ -85,7 +84,7 @@ func (m MediaExtraJSON) Value() (driver.Value, error) {
 }
 
 // GetPostByID 根据ID获取帖子
-func GetPostByID(db *gorm.DB, postID int64) (*Post, error) {
+func GetPostByID(db *gorm.DB, postID uuid.UUID) (*Post, error) {
 	var post Post
 	err := db.Where("id = ? AND deleted = ?", postID, 0).First(&post).Error
 	if err != nil {
@@ -95,7 +94,7 @@ func GetPostByID(db *gorm.DB, postID int64) (*Post, error) {
 }
 
 // GetPublishedPostByID 根据ID获取已发布的帖子（status=1）
-func GetPublishedPostByID(db *gorm.DB, postID int64) (*Post, error) {
+func GetPublishedPostByID(db *gorm.DB, postID uuid.UUID) (*Post, error) {
 	var post Post
 	err := db.Where("id = ? AND status = ? AND deleted = ?", postID, PostStatusPublished, 0).First(&post).Error
 	if err != nil {
@@ -105,7 +104,7 @@ func GetPublishedPostByID(db *gorm.DB, postID int64) (*Post, error) {
 }
 
 // GetPostsByCircle 获取圈子下的帖子列表
-func GetPostsByCircle(db *gorm.DB, circleID int64, page, pageSize int) ([]Post, int64, error) {
+func GetPostsByCircle(db *gorm.DB, circleID uuid.UUID, page, pageSize int) ([]Post, int64, error) {
 	var posts []Post
 	var total int64
 
@@ -142,7 +141,7 @@ func GetPostsByCircle(db *gorm.DB, circleID int64, page, pageSize int) ([]Post, 
 }
 
 // GetPinnedPostsByCircle 获取圈子置顶帖子
-func GetPinnedPostsByCircle(db *gorm.DB, circleID int64) ([]Post, error) {
+func GetPinnedPostsByCircle(db *gorm.DB, circleID uuid.UUID) ([]Post, error) {
 	var posts []Post
 	err := db.Where("circle_id = ? AND is_pinned = ? AND deleted = ?", circleID, 1, 0).
 		Order("create_time DESC").
@@ -151,7 +150,7 @@ func GetPinnedPostsByCircle(db *gorm.DB, circleID int64) ([]Post, error) {
 }
 
 // GetPostsByUser 获取用户的帖子列表
-func GetPostsByUser(db *gorm.DB, userID int64, page, pageSize int) ([]Post, int64, error) {
+func GetPostsByUser(db *gorm.DB, userID uuid.UUID, page, pageSize int) ([]Post, int64, error) {
 	var posts []Post
 	var total int64
 
@@ -189,43 +188,43 @@ func GetPostsByStatus(db *gorm.DB, status int16, page, pageSize int) ([]Post, in
 }
 
 // IncrementViewCount 增加浏览量
-func IncrementViewCount(db *gorm.DB, postID int64) error {
+func IncrementViewCount(db *gorm.DB, postID uuid.UUID) error {
 	return db.Model(&Post{}).Where("id = ?", postID).
 		UpdateColumn("view_count", gorm.Expr("view_count + ?", 1)).Error
 }
 
 // IncrementCommentCount 增加评论数
-func IncrementCommentCount(db *gorm.DB, postID int64) error {
+func IncrementCommentCount(db *gorm.DB, postID uuid.UUID) error {
 	return db.Model(&Post{}).Where("id = ?", postID).
 		UpdateColumn("comment_count", gorm.Expr("comment_count + ?", 1)).Error
 }
 
 // DecrementCommentCount 减少评论数
-func DecrementCommentCount(db *gorm.DB, postID int64) error {
+func DecrementCommentCount(db *gorm.DB, postID uuid.UUID) error {
 	return db.Model(&Post{}).Where("id = ?", postID).
 		UpdateColumn("comment_count", gorm.Expr("comment_count - ?", 1)).Error
 }
 
 // IncrementLikeCount 增加点赞数
-func IncrementLikeCount(db *gorm.DB, postID int64) error {
+func IncrementLikeCount(db *gorm.DB, postID uuid.UUID) error {
 	return db.Model(&Post{}).Where("id = ?", postID).
 		UpdateColumn("like_count", gorm.Expr("like_count + ?", 1)).Error
 }
 
 // DecrementLikeCount 减少点赞数
-func DecrementLikeCount(db *gorm.DB, postID int64) error {
+func DecrementLikeCount(db *gorm.DB, postID uuid.UUID) error {
 	return db.Model(&Post{}).Where("id = ?", postID).
 		UpdateColumn("like_count", gorm.Expr("like_count - ?", 1)).Error
 }
 
 // GetPostsMediaByIDs 批量获取帖子的媒体信息
-func GetPostsMediaByIDs(db *gorm.DB, ids []int64) (map[int64]MediaExtraJSON, error) {
+func GetPostsMediaByIDs(db *gorm.DB, ids []uuid.UUID) (map[uuid.UUID]MediaExtraJSON, error) {
 	var posts []Post
 	err := db.Select("id, media_extra").Where("id IN ?", ids).Find(&posts).Error
 	if err != nil {
 		return nil, err
 	}
-	result := make(map[int64]MediaExtraJSON, len(posts))
+	result := make(map[uuid.UUID]MediaExtraJSON, len(posts))
 	for _, p := range posts {
 		result[p.ID] = p.MediaExtra
 	}

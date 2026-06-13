@@ -28,9 +28,9 @@ type Provider interface {
 }
 
 var providers = map[string]Provider{
-	"google":  &GoogleProvider{},
-	"github":  &GithubProvider{},
-	"azure":   &AzureProvider{},
+	"google": &GoogleProvider{},
+	"github": &GithubProvider{},
+	"azure":  &AzureProvider{},
 }
 
 // GetProvider returns the Provider for the given name, or nil.

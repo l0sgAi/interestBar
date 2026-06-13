@@ -6,15 +6,13 @@ import (
 	"math/rand"
 	"net/http"
 	"net/mail"
-	"strconv"
-	"time"
 
-	emailutil "interestBar/pkg/util/email"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
 	"interestBar/pkg/server/storage/redis"
 	"interestBar/pkg/server/utils"
+	emailutil "interestBar/pkg/util/email"
 
 	"github.com/click33/sa-token-go/stputil"
 	"github.com/gin-gonic/gin"
@@ -169,14 +167,12 @@ func (ctrl *RegisterController) CompleteRegistration(c *gin.Context) {
 	pwdHash := fmt.Sprintf("%x", sha256.Sum256([]byte(req.Password)))
 
 	user := model.SysUser{
-		Username:   req.Username,
-		Email:      req.Email,
-		Pwd:        pwdHash,
-		Role:       0,
-		Status:     1,
-		Deleted:    0,
-		CreateTime: time.Now(),
-		UpdateTime: time.Now(),
+		Username: req.Username,
+		Email:    req.Email,
+		Pwd:      pwdHash,
+		Role:     0,
+		Status:   1,
+		Deleted:  0,
 	}
 
 	if err := pgsql.DB.Create(&user).Error; err != nil {
@@ -184,7 +180,7 @@ func (ctrl *RegisterController) CompleteRegistration(c *gin.Context) {
 		return
 	}
 
-	userIDStr := strconv.FormatUint(uint64(user.ID), 10)
+	userIDStr := user.ID.String()
 
 	authToken, err := stputil.Login(userIDStr, utils.ResolveDevice(req.Device))
 	if err != nil {

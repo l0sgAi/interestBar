@@ -1,19 +1,16 @@
 package model
 
 import (
-	"time"
-
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 // PostLike 帖子点赞流水表
 type PostLike struct {
-	ID         int64      `json:"id" gorm:"primarykey;column:id"`
-	UserID     int64      `json:"user_id" gorm:"column:user_id;not null"`                      // 点赞人
-	PostID     int64      `json:"post_id" gorm:"column:post_id;default:0;not null"`            // 帖子ID
-	Deleted    int16      `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`       // 点赞状态: 0=有效点赞, 1=取消点赞
-	CreateTime time.Time  `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime time.Time  `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	BaseModel
+	UserID  uuid.UUID `json:"user_id" gorm:"column:user_id;type:uuid;not null"`      // 点赞人
+	PostID  uuid.UUID `json:"post_id" gorm:"column:post_id;type:uuid;not null"`      // 帖子ID (必填)
+	Deleted int16     `json:"deleted" gorm:"column:deleted;type:smallint;default:0"` // 点赞状态: 0=有效点赞, 1=取消点赞
 }
 
 // TableName 指定表名
@@ -28,7 +25,7 @@ const (
 )
 
 // GetPostLike 获取用户对帖子的点赞记录
-func GetPostLike(db *gorm.DB, userID, postID int64) (*PostLike, error) {
+func GetPostLike(db *gorm.DB, userID, postID uuid.UUID) (*PostLike, error) {
 	var like PostLike
 	err := db.Where("user_id = ? AND post_id = ?", userID, postID).First(&like).Error
 	if err != nil {
@@ -38,7 +35,7 @@ func GetPostLike(db *gorm.DB, userID, postID int64) (*PostLike, error) {
 }
 
 // IsPostLiked 检查用户是否点赞了帖子
-func IsPostLiked(db *gorm.DB, userID, postID int64) (bool, error) {
+func IsPostLiked(db *gorm.DB, userID, postID uuid.UUID) (bool, error) {
 	var count int64
 	err := db.Model(&PostLike{}).
 		Where("user_id = ? AND post_id = ? AND deleted = ?", userID, postID, PostLikeActive).
@@ -47,7 +44,7 @@ func IsPostLiked(db *gorm.DB, userID, postID int64) (bool, error) {
 }
 
 // GetLikedPostsByUser 获取用户点赞过的帖子列表
-func GetLikedPostsByUser(db *gorm.DB, userID int64, page, pageSize int) ([]PostLike, int64, error) {
+func GetLikedPostsByUser(db *gorm.DB, userID uuid.UUID, page, pageSize int) ([]PostLike, int64, error) {
 	var likes []PostLike
 	var total int64
 
@@ -66,7 +63,7 @@ func GetLikedPostsByUser(db *gorm.DB, userID int64, page, pageSize int) ([]PostL
 }
 
 // GetPostLikers 获取帖子的点赞者列表
-func GetPostLikers(db *gorm.DB, postID int64, page, pageSize int) ([]PostLike, int64, error) {
+func GetPostLikers(db *gorm.DB, postID uuid.UUID, page, pageSize int) ([]PostLike, int64, error) {
 	var likes []PostLike
 	var total int64
 
@@ -90,23 +87,23 @@ func CreatePostLike(db *gorm.DB, like *PostLike) error {
 }
 
 // CancelPostLike 取消点赞
-func CancelPostLike(db *gorm.DB, userID, postID int64) error {
+func CancelPostLike(db *gorm.DB, userID, postID uuid.UUID) error {
 	return db.Model(&PostLike{}).
 		Where("user_id = ? AND post_id = ?", userID, postID).
 		Update("deleted", PostLikeCanceled).Error
 }
 
 // ReactivatePostLike 重新激活点赞（取消后再点赞）
-func ReactivatePostLike(db *gorm.DB, userID, postID int64) error {
+func ReactivatePostLike(db *gorm.DB, userID, postID uuid.UUID) error {
 	return db.Model(&PostLike{}).
 		Where("user_id = ? AND post_id = ?", userID, postID).
 		Update("deleted", PostLikeActive).Error
 }
 
 // BatchCheckPostLiked 批量检查用户是否点赞了多个帖子
-func BatchCheckPostLiked(db *gorm.DB, userID int64, postIDs []int64) (map[int64]bool, error) {
+func BatchCheckPostLiked(db *gorm.DB, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
 	if len(postIDs) == 0 {
-		return make(map[int64]bool), nil
+		return make(map[uuid.UUID]bool), nil
 	}
 	var likes []PostLike
 	err := db.Where("user_id = ? AND post_id IN ? AND deleted = ?", userID, postIDs, PostLikeActive).
@@ -114,7 +111,7 @@ func BatchCheckPostLiked(db *gorm.DB, userID int64, postIDs []int64) (map[int64]
 	if err != nil {
 		return nil, err
 	}
-	result := make(map[int64]bool, len(likes))
+	result := make(map[uuid.UUID]bool, len(likes))
 	for _, like := range likes {
 		result[like.PostID] = true
 	}
