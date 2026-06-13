@@ -17,11 +17,11 @@ log:
   format: console
   director: ./logs
 pgsql:
-  path: 192.168.200.132
-  port: 3367
+  path: 127.0.0.1
+  port: 5432
   config: sslmode=disable TimeZone=Asia/Shanghai
-  db_name: interest_bar_DB
-  username: root
+  db_name: qubar
+  username: qubar_web_app
   password: 1q2w3e4r5t
   max_idle_conns: 10
   max_open_conns: 100
@@ -44,8 +44,8 @@ oauth:
     frontend_redirect_url: "xxx/success"
 
 redis:
-  host: "192.168.200.132"
-  port: 6389
+  host: "127.0.0.1"
+  port: 6379
   password: ""
   db: 0
   pool_size: 10
@@ -80,13 +80,13 @@ mailtrap:
 
 # Elasticsearch 配置
 elasticsearch:
-  url: "http://192.168.200.132:9200" # ES 地址
+  url: "http://127.0.0.1:9200" # ES 地址
   index_prefix: "pg.public" # ES 索引前缀（用于构建完整索引名）
   refresh_interval: "30s" # 索引刷新间隔，提升性能
 
 # RabbitMQ 配置
 rabbitmq:
-  host: "192.168.200.132"
+  host: "127.0.0.1"
   port: 5672
   username: "admin"
   password: "admin"
@@ -97,7 +97,7 @@ rabbitmq:
 # Redpanda 配置 (Kafka兼容)
 redpanda:
   brokers:
-    - "192.168.200.132:19092"
+    - "127.0.0.1:19092"
   topic: "circle_statistics" # 统计数据topic
   consumer_group: "circle_statistics_consumer_group" # 消费者组
   flush_interval: 27 # 消费者刷新间隔(分钟)

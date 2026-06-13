@@ -172,7 +172,7 @@ go build -o interestBar.exe cmd/main.go
 
 请求头格式：
 
-```
+```bash
 satoken: your-token-here
 ```
 
