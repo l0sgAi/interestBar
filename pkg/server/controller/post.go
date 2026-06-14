@@ -138,9 +138,13 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 	}
 	summary = utils.SanitizeForPg(strings.TrimSpace(summary))
 
-	// 限制 summary 最大长度为 2000 字符（数据库字段限制）
-	if len(summary) > 2001 {
-		summary = string([]rune(summary)[:2001])
+	// 限制 summary 最大长度为 2000 字符（数据库字段限制 varchar(2000)）。
+	// 必须先按 rune 数判断、再按 rune 切片：若用字节长度 len() 判断却按 rune 切片，
+	// 当字节数 > 阈值但 rune 数 < 阈值（中文等密集多字节内容）时，[:N] 会越过
+	// 切片 length 读到 capacity 内的零初始化内存，产生 NUL 字节，导致 PostgreSQL
+	// 报 "invalid byte sequence for encoding UTF8: 0x00"。
+	if r := []rune(summary); len(r) > 2000 {
+		summary = string(r[:2000])
 	}
 
 	// 构建帖子数据模型
