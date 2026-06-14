@@ -22,7 +22,6 @@ type AppConfig struct {
 	SaToken       SaToken       `mapstructure:"sa_token" json:"sa_token" yaml:"sa_token"`
 	S3            S3            `mapstructure:"s3" json:"s3" yaml:"s3"`
 	Elasticsearch Elasticsearch `mapstructure:"elasticsearch" json:"elasticsearch" yaml:"elasticsearch"`
-	RabbitMQ      RabbitMQ      `mapstructure:"rabbitmq" json:"rabbitmq" yaml:"rabbitmq"`
 	Redpanda      Redpanda      `mapstructure:"redpanda" json:"redpanda" yaml:"redpanda"`
 	Mailtrap      Mailtrap      `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
 }
@@ -122,24 +121,6 @@ type Elasticsearch struct {
 	URL             string `mapstructure:"url" json:"url" yaml:"url"`
 	IndexPrefix     string `mapstructure:"index_prefix" json:"index_prefix" yaml:"index_prefix"`
 	RefreshInterval string `mapstructure:"refresh_interval" json:"refresh_interval" yaml:"refresh_interval"`
-}
-
-// RabbitMQ RabbitMQ 配置
-type RabbitMQ struct {
-	Host       string        `mapstructure:"host" json:"host" yaml:"host"`
-	Port       int           `mapstructure:"port" json:"port" yaml:"port"`
-	Username   string        `mapstructure:"username" json:"username" yaml:"username"`
-	Password   string        `mapstructure:"password" json:"password" yaml:"password"`
-	VHost      string        `mapstructure:"vhost" json:"vhost" yaml:"vhost"`
-	Exchange   string        `mapstructure:"exchange" json:"exchange" yaml:"exchange"`
-	Queue      string        `mapstructure:"queue" json:"queue" yaml:"queue"`
-	RoutingKey string        `mapstructure:"routing_key" json:"routing_key" yaml:"routing_key"`
-	Retry      RabbitMQRetry `mapstructure:"retry" json:"retry" yaml:"retry"`
-}
-
-// RabbitMQRetry RabbitMQ 重试配置
-type RabbitMQRetry struct {
-	MaxAttempts int `mapstructure:"max_attempts" json:"max_attempts" yaml:"max_attempts"`
 }
 
 // Redpanda Redpanda配置

@@ -17,7 +17,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.3
 	github.com/nacos-group/nacos-sdk-go/v2 v2.3.5
-	github.com/rabbitmq/amqp091-go v1.10.0
 	github.com/redis/go-redis/v9 v9.17.2
 	github.com/segmentio/kafka-go v0.4.50
 	github.com/spf13/viper v1.21.0
