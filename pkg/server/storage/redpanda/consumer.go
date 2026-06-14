@@ -203,7 +203,7 @@ func (a *StatisticsAggregator) batchUpdateMemberCounts(deltas map[uuid.UUID]int6
 
 		// 使用JSON批量更新
 		sql := `
-		UPDATE circle c
+		UPDATE domains.circle c
 		SET member_count = GREATEST(c.member_count + v.delta, 0),
 		    update_time = CURRENT_TIMESTAMP
 		FROM (
@@ -249,7 +249,7 @@ func (a *StatisticsAggregator) batchUpdatePostCounts(deltas map[uuid.UUID]int64)
 
 		// 使用JSON批量更新
 		sql := `
-		UPDATE circle c
+		UPDATE domains.circle c
 		SET post_count = GREATEST(c.post_count + v.delta, 0),
 		    update_time = CURRENT_TIMESTAMP
 		FROM (
@@ -490,7 +490,7 @@ func (a *PostStatisticsAggregator) batchUpdatePostStats(deltas map[uuid.UUID]*po
 
 		// 使用JSON批量更新所有统计字段
 		sql := `
-		UPDATE post p
+		UPDATE domains.post p
 		SET view_count = LEAST(GREATEST(p.view_count + v.view_delta, 0), 1000000000),
 		    comment_count = GREATEST(p.comment_count + v.comment_delta, 0),
 		    like_count = GREATEST(p.like_count + v.like_delta, 0),

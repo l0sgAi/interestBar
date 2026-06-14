@@ -123,13 +123,20 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 		return
 	}
 
+	// 清洗 PostgreSQL text 字段不接受的字符（NULL 字节 U+0000），
+	// 避免写入时报 "invalid byte sequence for encoding UTF8: 0x00"。
+	// 这些字节常来自富文本粘贴或 Markdown 解析残留；在生成 summary 之前
+	// 清洗 content，可保证自动生成的 summary 也干净。
+	title := utils.SanitizeForPg(strings.TrimSpace(req.Title))
+	content := utils.SanitizeForPg(req.Content)
+
 	// 生成摘要：使用专门的工具从 Markdown 内容生成纯文本摘要
 	// 如果用户提供了 summary，则使用用户的；否则从 content 自动生成
 	summary := req.Summary
-	if summary == "" && req.Content != "" {
-		summary = utils.GenerateSummary(req.Content)
+	if summary == "" && content != "" {
+		summary = utils.GenerateSummary(content)
 	}
-	summary = strings.TrimSpace(summary)
+	summary = utils.SanitizeForPg(strings.TrimSpace(summary))
 
 	// 限制 summary 最大长度为 2000 字符（数据库字段限制）
 	if len(summary) > 2001 {
@@ -141,9 +148,9 @@ func (ctrl *PostController) CreatePost(c *gin.Context) {
 		CircleID:   req.CircleID,
 		UserID:     userID,
 		Type:       postType,
-		Title:      strings.TrimSpace(req.Title),
+		Title:      title,
 		Summary:    summary,
-		Content:    req.Content,
+		Content:    content,
 		MediaExtra: req.MediaExtra,
 		Status:     postStatus,
 		Deleted:    0,

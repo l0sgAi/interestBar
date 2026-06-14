@@ -289,7 +289,7 @@ CREATE TABLE domains.post (
     -- 2. 内容主体
     type SMALLINT NOT NULL DEFAULT 1,   -- 帖子类型：1=图文, 2=纯视频, 3=投票/链接
     title VARCHAR(200) NOT NULL DEFAULT '', -- 标题 (允许为空，适配微博/朋友圈式的短内容)
-    summary VARCHAR(500) NOT NULL DEFAULT '', -- 摘要 (纯文本，用于推送/列表预览，去除了HTML标签)
+    summary VARCHAR(2048) NOT NULL DEFAULT '', -- 摘要 (纯文本，用于推送/列表预览，去除了HTML标签)
     content TEXT NOT NULL DEFAULT '',   -- 正文 (富文本/Mardown/HTML)
 
     -- 3. 多媒体与扩展

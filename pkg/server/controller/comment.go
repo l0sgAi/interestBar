@@ -114,26 +114,35 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 		}
 	}
 
-	// 3. 构建评论数据
+	// 3. 清洗 PostgreSQL text 字段不接受的字符（NULL 字节 U+0000 及其它无效
+	// UTF-8 字节序列），避免写入时报 "invalid byte sequence for encoding UTF8"
+	// (SQLSTATE 22021)。这些字节常来自富文本/Markdown 粘贴残留。
+	content := utils.SanitizeForPg(req.Content)
+	if content == "" {
+		response.BadRequest(c, "Comment content is empty")
+		return
+	}
+
+	// 4. 构建评论数据
 	comment := model.Comment{
 		PostID:        req.PostID,
 		UserID:        userID,
 		RootID:        req.RootID,
 		ReplyToID:     req.ReplyToID,
 		ReplyToUserID: replyToUserID,
-		Content:       req.Content,
+		Content:       content,
 		ExtraData:     req.ExtraData,
 		Status:        model.CommentStatusNormal,
 		Deleted:       0,
 	}
 
-	// 4. 创建评论（事务：插入评论 + 更新根评论回复计数）
+	// 5. 创建评论（事务：插入评论 + 更新根评论回复计数）
 	if err := model.CreateComment(pgsql.DB, &comment); err != nil {
 		response.InternalError(c, "Failed to create comment")
 		return
 	}
 
-	// 5. 实时更新帖子评论计数（Redis Hash）
+	// 6. 实时更新帖子评论计数（Redis Hash）
 	if err := restorePostStatsIfNeed(req.PostID); err != nil {
 		logger.Log.Error("Failed to restore post stats cache: " + err.Error())
 	}
@@ -141,7 +150,7 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 		logger.Log.Error("Failed to increment post comment count in Redis: " + err.Error())
 	}
 
-	// 6. 发送Kafka消息用于持久化到数据库
+	// 7. 发送Kafka消息用于持久化到数据库
 	if err := redpanda.PublishPostCommentCount(req.PostID, 1); err != nil {
 		logger.Log.Error("Failed to publish post comment count message: " + err.Error())
 	}

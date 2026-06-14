@@ -217,7 +217,7 @@ func batchUpdateCommentLikes(deltas []*likeEventDelta) error {
 			}
 		}
 		if len(rows) > 0 {
-			sql := `UPDATE comment c SET like_count = GREATEST(c.like_count + v.delta, 0), update_time = CURRENT_TIMESTAMP
+			sql := `UPDATE domains.comment c SET like_count = GREATEST(c.like_count + v.delta, 0), update_time = CURRENT_TIMESTAMP
 				FROM (SELECT * FROM jsonb_to_recordset(?::jsonb) AS v(comment_id uuid, delta BIGINT)) v
 				WHERE c.id = v.comment_id AND c.deleted = 0`
 			jsonBytes, _ := json.Marshal(rows)
@@ -274,7 +274,7 @@ func batchUpdatePostLikes(deltas []*likeEventDelta) error {
 			}
 		}
 		if len(rows) > 0 {
-			sql := `UPDATE post p SET like_count = GREATEST(p.like_count + v.delta, 0), update_time = CURRENT_TIMESTAMP
+			sql := `UPDATE domains.post p SET like_count = GREATEST(p.like_count + v.delta, 0), update_time = CURRENT_TIMESTAMP
 				FROM (SELECT * FROM jsonb_to_recordset(?::jsonb) AS v(post_id uuid, delta BIGINT)) v
 				WHERE p.id = v.post_id AND p.deleted = 0`
 			jsonBytes, _ := json.Marshal(rows)
