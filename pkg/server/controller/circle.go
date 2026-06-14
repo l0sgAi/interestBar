@@ -729,10 +729,10 @@ func (ctrl *CircleController) GetMyCircles(c *gin.Context) {
 
 // GetCirclePostsRequest 圈内帖子列表请求结构
 type GetCirclePostsRequest struct {
-	CircleID    uuid.UUID `form:"circle_id" binding:"required"`
-	Type        int       `form:"type" binding:"required,min=1,max=3"`
-	Size        int       `form:"size"`
-	SearchAfter string    `form:"search_after"`
+	CircleID    string `form:"circle_id" binding:"required,uuid"`
+	Type        int    `form:"type" binding:"required,min=1,max=3"`
+	Size        int    `form:"size"`
+	SearchAfter string `form:"search_after"`
 }
 
 // GetCirclePosts 获取圈内帖子列表（支持3种排序模式）
@@ -742,6 +742,12 @@ func (ctrl *CircleController) GetCirclePosts(c *gin.Context) {
 	if err := c.ShouldBindQuery(&req); err != nil {
 		logger.Log.Error("Invalid request parameters: " + err.Error())
 		response.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	circleID, err := uuid.Parse(req.CircleID)
+	if err != nil {
+		response.BadRequest(c, "Invalid circle_id")
 		return
 	}
 
@@ -759,7 +765,7 @@ func (ctrl *CircleController) GetCirclePosts(c *gin.Context) {
 	}
 
 	// 调用 Elasticsearch 搜索
-	result, err := elasticsearch.SearchCirclePosts(req.CircleID, req.Type, size, searchAfter)
+	result, err := elasticsearch.SearchCirclePosts(circleID, req.Type, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search circle posts: " + err.Error())
 		response.InternalError(c, "Failed to search circle posts")
@@ -783,12 +789,12 @@ func (ctrl *CircleController) GetCirclePosts(c *gin.Context) {
 
 	// 批量查询用户信息、圈子信息、帖子媒体
 	userMap, _ := model.GetUsersByIDs(pgsql.DB, userIDs)
-	circleMap, _ := model.GetCirclesByIDs(pgsql.DB, []uuid.UUID{req.CircleID})
+	circleMap, _ := model.GetCirclesByIDs(pgsql.DB, []uuid.UUID{circleID})
 	mediaMap, _ := model.GetPostsMediaByIDs(pgsql.DB, postIDs)
 
 	// 获取圈子信息（所有帖子属于同一圈子）
 	var circleName, circleAvatar string
-	if circle, ok := circleMap[req.CircleID]; ok {
+	if circle, ok := circleMap[circleID]; ok {
 		circleName = circle.Name
 		circleAvatar = circle.AvatarURL
 	}

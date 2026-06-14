@@ -179,9 +179,9 @@ type CommentVO struct {
 
 // GetCommentsRequest 获取顶层评论列表的请求结构
 type GetCommentsRequest struct {
-	PostID uuid.UUID `form:"post_id" binding:"required"`
-	Sort   int       `form:"sort" binding:"omitempty,oneof=0 1"` // 0=点赞倒序(默认), 1=时间倒序
-	Cursor string    `form:"cursor"`                             // 游标，首页不传
+	PostID string `form:"post_id" binding:"required,uuid"`
+	Sort   int    `form:"sort" binding:"omitempty,oneof=0 1"` // 0=点赞倒序(默认), 1=时间倒序
+	Cursor string `form:"cursor"`                             // 游标，首页不传
 }
 
 // GetComments 获取帖子的顶层评论列表（游标分页）
@@ -193,7 +193,13 @@ func (ctrl *CommentController) GetComments(c *gin.Context) {
 		return
 	}
 
-	comments, nextCursor, hasMore, err := model.GetRootCommentsByCursor(pgsql.DB, req.PostID, 20, req.Sort, req.Cursor)
+	postID, err := uuid.Parse(req.PostID)
+	if err != nil {
+		response.BadRequest(c, "Invalid post_id")
+		return
+	}
+
+	comments, nextCursor, hasMore, err := model.GetRootCommentsByCursor(pgsql.DB, postID, 20, req.Sort, req.Cursor)
 	if err != nil {
 		response.InternalError(c, "Failed to get comments")
 		return
@@ -217,10 +223,10 @@ func (ctrl *CommentController) GetComments(c *gin.Context) {
 
 // GetRepliesRequest 获取回复列表的请求结构
 type GetRepliesRequest struct {
-	RootID uuid.UUID `form:"root_id" binding:"required"`
-	Sort   int       `form:"sort" binding:"omitempty,oneof=0 1"` // 0=时间倒序(默认), 1=点赞倒序
-	Cursor string    `form:"cursor"`
-	Limit  int       `form:"limit" binding:"omitempty,min=1,max=50"` // 每页条数，默认10
+	RootID string `form:"root_id" binding:"required,uuid"`
+	Sort   int    `form:"sort" binding:"omitempty,oneof=0 1"` // 0=时间倒序(默认), 1=点赞倒序
+	Cursor string `form:"cursor"`
+	Limit  int    `form:"limit" binding:"omitempty,min=1,max=50"` // 每页条数，默认10
 }
 
 // GetReplies 获取某条评论的子回复列表（游标分页）
@@ -232,8 +238,14 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 		return
 	}
 
+	rootID, err := uuid.Parse(req.RootID)
+	if err != nil {
+		response.BadRequest(c, "Invalid root_id")
+		return
+	}
+
 	// 校验根评论存在且是顶层评论
-	rootComment, err := model.GetCommentByID(pgsql.DB, req.RootID)
+	rootComment, err := model.GetCommentByID(pgsql.DB, rootID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			response.NotFound(c, "Root comment not found")
@@ -252,7 +264,7 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 		limit = 10
 	}
 
-	comments, nextCursor, hasMore, err := model.GetRepliesByCursor(pgsql.DB, req.RootID, limit, req.Sort, req.Cursor)
+	comments, nextCursor, hasMore, err := model.GetRepliesByCursor(pgsql.DB, rootID, limit, req.Sort, req.Cursor)
 	if err != nil {
 		response.InternalError(c, "Failed to get replies")
 		return

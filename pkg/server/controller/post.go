@@ -332,10 +332,10 @@ func (ctrl *PostController) GetPostDetail(c *gin.Context) {
 
 // GetPostsRequest 获取帖子列表的请求结构
 type GetPostsRequest struct {
-	Keyword     string    `form:"keyword"`      // 搜索关键字
-	CircleID    uuid.UUID `form:"circle_id"`    // 圈子ID，为零值时搜索所有圈子
-	Size        int       `form:"size"`         // 每页数量，默认20
-	SearchAfter string    `form:"search_after"` // 上一页返回的search_after值（JSON字符串）
+	Keyword     string `form:"keyword"`                            // 搜索关键字
+	CircleID    string `form:"circle_id" binding:"omitempty,uuid"` // 圈子ID，为空时搜索所有圈子
+	Size        int    `form:"size"`                               // 每页数量，默认20
+	SearchAfter string `form:"search_after"`                       // 上一页返回的search_after值（JSON字符串）
 }
 
 // GetPosts 获取帖子列表
@@ -347,6 +347,17 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 		logger.Log.Error("Invalid request parameters: " + err.Error())
 		response.BadRequest(c, "Invalid request parameters")
 		return
+	}
+
+	// 解析圈子ID（为空表示搜索所有圈子，保持 uuid.Nil 语义）
+	circleID := uuid.Nil
+	if req.CircleID != "" {
+		var err error
+		circleID, err = uuid.Parse(req.CircleID)
+		if err != nil {
+			response.BadRequest(c, "Invalid circle_id")
+			return
+		}
 	}
 
 	// 设置默认每页数量
@@ -365,7 +376,7 @@ func (ctrl *PostController) GetPosts(c *gin.Context) {
 	}
 
 	// 调用 Elasticsearch 搜索
-	result, err := elasticsearch.SearchPosts(req.Keyword, req.CircleID, size, searchAfter)
+	result, err := elasticsearch.SearchPosts(req.Keyword, circleID, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search posts: " + err.Error())
 		response.InternalError(c, "Failed to search posts")
