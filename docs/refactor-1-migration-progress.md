@@ -1,6 +1,6 @@
 # 重构一：DDD 单体改良 —— 搬迁进度跟踪
 
-> 最后更新：2026-06-15
+> 最后更新：2026-06-15（批次 B 完成）
 
 ## 已完成的基建（可复用）
 
@@ -16,6 +16,7 @@
 | 框架无关鉴权 | `pkg/composition/auth.go` | RequireLogin（stputil 直校验，替代 sagin.CheckLogin） |
 | DBHolder | `pkg/server/storage/db/pgsql/connect.go` | DB 依赖注入 holder |
 | **UserSessionStore 桥接器** | `pkg/composition/user_session_store_bridge.go` | auth↔user 跨领域通信的关键适配器 |
+| **Facade 桥接器集合** | `pkg/composition/facade_bridges.go` | user→(circle,post)、circle→post、post→circle 的字段级 Facade 适配器 |
 
 ## 已搬迁领域
 
@@ -25,13 +26,13 @@
 | ✅ storage | 完成 | `pkg/domains/storage/` | 文件上传（S3），无跨域依赖 |
 | ✅ user | 完成 | `pkg/domains/user/` | 含 UserFacade 接口（供 post/circle 等领域调用） |
 | ✅ auth | 完成 | `pkg/domains/auth/` | login/register/oauth，通过 UserSessionStore 桥接 user 领域 |
+| ✅ circle | 完成（批次B） | `pkg/domains/circle/` | 最大领域，含统计计数/成员/圈内帖子组装 |
+| ✅ post | 完成（批次B） | `pkg/domains/post/` | 依赖 user/circle Facade，含点赞状态/浏览量异步累加 |
 
-## 待搬迁领域（建议顺序）
+## 待搬迁领域（批次 C）
 
 | 领域 | 依赖 | 预计工时 | 备注 |
 |---|---|---|---|
-| ⬜ circle | user facade | 1 天 | 含统计计数/成员，最大领域（860 行 controller） |
-| ⬜ post | user/circle facade | 1 天 | 依赖较多，含点赞状态查询 |
 | ⬜ comment | user/post facade | 0.5 天 | 树形结构 + 游标分页 |
 | ⬜ like | post/comment facade | 0.5 天 | 横跨 post/comment，Redis lua |
 
@@ -44,6 +45,8 @@
 5. **路由自注册**：每个领域 `interfaces/http/routes.go` 提供 `RegisterRoutes(rg, svc, mw)`
 6. **BaseModel 共享内核**：`pkg/shared/domain/base.go`，所有领域实体内嵌（不再用 model.BaseModel）
 7. **UserSessionStore 模式**：auth 领域需要读写用户数据时，通过 composition 层桥接器调用 user 领域，避免领域间直接依赖
+8. **Facade 字段级桥接**：各领域定义自己的 Brief VO（如 `circle.application.UserBrief` vs `post.application.UserBrief`），结构相同但类型独立。composition 层的 `facade_bridges.go` 做字段级转换，保持领域间零类型耦合
+9. **互注模式**：post 和 circle 互相依赖（post 需 CircleFacade/MemberChecker，circle 的 GetCirclePosts 需 PostMediaFetcher）。composition 先构造两个 Service，再通过 setter 互注 Facade，打破构造期循环
 
 ## 行为变更说明
 
@@ -67,11 +70,13 @@
 - `pkg/server/controller/login.go`（→ `pkg/domains/auth/`）
 - `pkg/server/controller/register.go`（→ `pkg/domains/auth/`）
 - `pkg/server/controller/oauth.go`（→ `pkg/domains/auth/`）
+- `pkg/server/controller/circle.go`（→ `pkg/domains/circle/`，批次B）
+- `pkg/server/controller/post.go`（→ `pkg/domains/post/`，批次B）
 
-## 待清理（批次 B/C 完成后）
+## 待清理（批次 C 完成后）
 
-- `pkg/server/controller/`（circle/post/comment/like 搬完后整个删除）
+- `pkg/server/controller/`（comment/like 搬完后整个删除）
 - `pkg/server/model/`（所有领域搬完后删除，BaseModel 已迁至 shared kernel）
 - `pkg/server/router/routers.go`（所有领域搬完后删除）
-- `pkg/server/utils/sa_token_util.go`（circle/post/comment/like 搬完后删除）
-- `pkg/server/auth/`（OAuth provider 适配器已在新架构中包装，旧代码待批次 B/C 后评估是否内联）
+- `pkg/server/utils/sa_token_util.go`（comment/like 搬完后删除）
+- `pkg/server/auth/`（OAuth provider 适配器已在新架构中包装，旧代码待批次 C 后评估是否内联）
