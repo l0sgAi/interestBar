@@ -184,6 +184,17 @@ type PostService interface {
 	// GetMediaByPostIDs 批量获取帖子图片（供 circle 领域 GetCirclePosts 调用）。
 	GetMediaByPostIDs(ctx context.Context, postIDs []string) (map[string][]string, error)
 
+	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
+	// 未找到返回 nil, nil。
+	GetPostMeta(ctx context.Context, postID uuid.UUID) (*PostMeta, error)
+	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
+	// 然后递增帖子评论计数（Redis Hash + Redpanda 异步持久化）。
+	// 供 comment 领域发评论后调用。
+	RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error
+	// RestoreStats 恢复帖子统计缓存（如果不存在）。
+	// 供 like 领域点赞前确保 Redis stats Hash 存在。
+	RestoreStats(ctx context.Context, postID uuid.UUID) error
+
 	// SetUserFacade 注入 user Facade（组装作者信息用）。
 	SetUserFacade(f UserFacade)
 	// SetCircleFacade 注入 circle Facade（组装圈子信息用）。
@@ -194,6 +205,15 @@ type PostService interface {
 	SetStatusChecker(c CircleStatusChecker)
 	// SetPostCountPort 注入圈子帖子计数端口（发帖后递增计数用）。
 	SetPostCountPort(p CirclePostCountPort)
+}
+
+// PostMeta 帖子元信息（供 comment/like 领域校验用）。
+//
+// 字段刻意精简：comment/like 只关心"帖子是否存在 + 是否可评论/可点赞"。
+type PostMeta struct {
+	ID     uuid.UUID
+	Status int16 // 帖子状态
+	IsLock int16 // 是否锁定
 }
 
 type postServiceImpl struct {
@@ -609,6 +629,67 @@ func (s *postServiceImpl) GetMediaByPostIDs(ctx context.Context, postIDs []strin
 		result[pid.String()] = []string(m)
 	}
 	return result, nil
+}
+
+// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
+//
+// 直接读 Post 实体的 Status / IsLock 字段，不做权限过滤
+// （comment/like 调用方自己判断"是否可评论/可点赞"）。
+func (s *postServiceImpl) GetPostMeta(ctx context.Context, postID uuid.UUID) (*PostMeta, error) {
+	post, err := s.repo.GetByID(ctx, postID)
+	if err != nil {
+		if err == domain.ErrPostNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &PostMeta{
+		ID:     post.ID,
+		Status: post.Status,
+		IsLock: post.IsLock,
+	}, nil
+}
+
+// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
+// 然后递增帖子评论计数（Redis Hash + Redpanda 异步持久化）。
+//
+// 与旧 controller/comment.go 中的 restorePostStatsIfNeed + IncrementPostCommentCount +
+// PublishPostCommentCount 三步逻辑等价。供 comment 领域发评论后调用。
+func (s *postServiceImpl) RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error {
+	// 1. 缓存恢复（如果统计 Hash 不存在，先从 DB 恢复）
+	exists, err := s.statsCache.Exists(ctx, postID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		s.restorePostStats(postID)
+	}
+
+	// 2. 实时递增帖子评论计数（Redis Hash）
+	if err := s.statsCache.IncrCommentCount(ctx, postID); err != nil {
+		return err
+	}
+
+	// 3. 发送 MQ 消息用于异步持久化到数据库
+	return s.publisher.PublishCommentCount(ctx, postID, 1)
+}
+
+// RestoreStats 恢复帖子统计缓存（如果不存在）。
+//
+// 与旧 controller.restorePostStatsIfNeed 行为一致：检查 stats Hash 是否存在，
+// 不存在则从 DB 读取 Post 的计数字段写入 Redis。
+// 供 like 领域点赞前确保 stats Hash 存在，避免 Lua 脚本读到空 stats。
+func (s *postServiceImpl) RestoreStats(ctx context.Context, postID uuid.UUID) error {
+	exists, err := s.statsCache.Exists(ctx, postID)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	// restorePostStats 内部用 context.Background()（保持与异步路径一致）
+	s.restorePostStats(postID)
+	return nil
 }
 
 // ===== 辅助函数 =====

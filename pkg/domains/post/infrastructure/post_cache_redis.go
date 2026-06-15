@@ -50,6 +50,10 @@ func (c *postStatsCacheRedis) IncrViewCount(ctx context.Context, postID, userID 
 	return redispkg.IncrementPostViewCount(postID, userID)
 }
 
+func (c *postStatsCacheRedis) IncrCommentCount(ctx context.Context, postID uuid.UUID) error {
+	return redispkg.IncrementPostCommentCount(postID)
+}
+
 // postLikeCacheRedis 基于 Redis ZSET 的 PostLikeCache 实现。
 type postLikeCacheRedis struct{}
 

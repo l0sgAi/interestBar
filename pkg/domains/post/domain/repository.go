@@ -29,6 +29,9 @@ type PostStatsCache interface {
 	Set(ctx context.Context, postID uuid.UUID, stats *PostStatistics) error
 	// IncrViewCount 增加浏览量（带去重），返回新计数值。
 	IncrViewCount(ctx context.Context, postID, userID uuid.UUID) (int64, error)
+	// IncrCommentCount 递增帖子评论计数（Hash 字段 comment_count +1）。
+	// 供 comment 领域发评论后调用。
+	IncrCommentCount(ctx context.Context, postID uuid.UUID) error
 }
 
 // PostLikeCache 帖子点赞状态缓存（Redis ZSET）。
@@ -44,6 +47,9 @@ type PostLikeCache interface {
 type PostEventPublisher interface {
 	// PublishViewCount 发布浏览量变化事件。
 	PublishViewCount(ctx context.Context, postID uuid.UUID) error
+	// PublishCommentCount 发布帖子评论数变化事件。
+	// delta: 1=新评论, -1=删除评论。
+	PublishCommentCount(ctx context.Context, postID uuid.UUID, delta int64) error
 }
 
 // PostStatistics 帖子统计信息。

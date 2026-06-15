@@ -3,6 +3,7 @@ package pgsql
 import (
 	"fmt"
 	"interestBar/pkg/conf"
+	commentdomain "interestBar/pkg/domains/comment/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
 	"os"
@@ -54,8 +55,12 @@ func InitDB() {
 	sqlDB.SetMaxOpenConns(p.MaxOpenConns)
 
 	// Auto Migrate
+	// 注意：SysUser 仍在 pkg/server/model 中（auth OAuth provider 依赖它）。
+	// Comment 已迁移到 comment 领域（pkg/domains/comment/domain）。
+	// 其余领域（post/circle/user/like）由各自领域包自行管理迁移（或通过
+	// 对应的 infrastructure 层调用），这里只保留启动时必须迁移的核心表。
 	db.AutoMigrate(&model.SysUser{})
-	db.AutoMigrate(&model.Comment{})
+	db.AutoMigrate(&commentdomain.Comment{})
 
 	DB = db
 	if logger.Log != nil {

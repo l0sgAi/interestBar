@@ -21,3 +21,8 @@ func NewPostEventPublisher() domain.PostEventPublisher {
 func (p *postEventPublisherRedpanda) PublishViewCount(ctx context.Context, postID uuid.UUID) error {
 	return redpanda.PublishPostViewCount(postID)
 }
+
+// PublishCommentCount 发布帖子评论数变化事件。
+func (p *postEventPublisherRedpanda) PublishCommentCount(ctx context.Context, postID uuid.UUID, delta int64) error {
+	return redpanda.PublishPostCommentCount(postID, delta)
+}

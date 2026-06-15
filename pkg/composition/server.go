@@ -13,6 +13,12 @@ import (
 	circledomain "interestBar/pkg/domains/circle/domain"
 	circlehttp "interestBar/pkg/domains/circle/interfaces/http"
 	circleinfra "interestBar/pkg/domains/circle/infrastructure"
+	commentapp "interestBar/pkg/domains/comment/application"
+	commenthttp "interestBar/pkg/domains/comment/interfaces/http"
+	commentinfra "interestBar/pkg/domains/comment/infrastructure"
+	likeapp "interestBar/pkg/domains/like/application"
+	likehttp "interestBar/pkg/domains/like/interfaces/http"
+	likeinfra "interestBar/pkg/domains/like/infrastructure"
 	postapp "interestBar/pkg/domains/post/application"
 	posthttp "interestBar/pkg/domains/post/interfaces/http"
 	postinfra "interestBar/pkg/domains/post/infrastructure"
@@ -42,6 +48,9 @@ func RegisterDomainRoutes(e *gin.Engine) {
 
 	postSvc := newPostService(deps)
 
+	commentSvc := newCommentService(deps)
+	likeSvc := newLikeService(deps)
+
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
 	circleSvc.SetUserFacade(&circleUserFacade{delegate: userFacade})
@@ -54,6 +63,14 @@ func RegisterDomainRoutes(e *gin.Engine) {
 	postSvc.SetStatusChecker(&circleStatusCheckerForPost{circleRepo: circleRepo})
 	postSvc.SetPostCountPort(&circlePostCountPortForPost{svc: circleSvc})
 
+	// comment 需要 user Facade + post 查询端口（帖子校验 + 评论计数）
+	commentSvc.SetUserFacade(&commentUserFacade{delegate: userFacade})
+	commentSvc.SetPostLookup(&commentPostLookup{delegate: postSvc})
+
+	// like 需要 post 查询端口 + comment 查询端口（目标存在性校验 + 统计缓存恢复）
+	likeSvc.SetPostTarget(&likePostTarget{delegate: postSvc})
+	likeSvc.SetCommentTarget(&likeCommentTarget{delegate: commentSvc})
+
 	// 注册路由
 	registerCategory(root, deps, authCheck)
 	registerStorage(root, deps, authCheck)
@@ -61,6 +78,8 @@ func RegisterDomainRoutes(e *gin.Engine) {
 	registerAuth(root, deps, authCheck)
 	registerCircle(root, circleSvc, authCheck)
 	registerPost(root, postSvc, authCheck)
+	registerComment(root, commentSvc, authCheck)
+	registerLike(root, likeSvc, authCheck)
 }
 
 // registerCategory 装配 category 领域。
@@ -104,6 +123,16 @@ func registerPost(root routing.RouterGroup, svc postapp.PostService, authCheck r
 	posthttp.RegisterRoutes(root, svc, authCheck)
 }
 
+// registerComment 装配 comment 领域。
+func registerComment(root routing.RouterGroup, svc commentapp.CommentService, authCheck routing.HandlerFunc) {
+	commenthttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerLike 装配 like 领域。
+func registerLike(root routing.RouterGroup, svc likeapp.LikeService, authCheck routing.HandlerFunc) {
+	likehttp.RegisterRoutes(root, svc, authCheck)
+}
+
 // ===== Service 构造函数 =====
 
 func newUserService(deps *Deps) userapp.UserService {
@@ -136,4 +165,25 @@ func newPostService(deps *Deps) postapp.PostService {
 	searcher := postinfra.NewPostSearcher()
 	publisher := postinfra.NewPostEventPublisher()
 	return postapp.NewPostService(repo, statsCache, likeCache, searcher, publisher)
+}
+
+// newCommentService 构造 CommentService。
+//
+// user/post 跨领域依赖通过 setter 注入（见 RegisterDomainRoutes）。
+func newCommentService(deps *Deps) commentapp.CommentService {
+	repo := commentinfra.NewCommentRepository(deps.DB.Get())
+	statsCache := commentinfra.NewCommentStatsCache()
+	likeCache := commentinfra.NewCommentLikeCache()
+	publisher := commentinfra.NewCommentEventPublisher()
+	return commentapp.NewCommentService(repo, statsCache, likeCache, publisher)
+}
+
+// newLikeService 构造 LikeService。
+//
+// post/comment 跨领域依赖通过 setter 注入（见 RegisterDomainRoutes）。
+func newLikeService(deps *Deps) likeapp.LikeService {
+	postCache := likeinfra.NewPostLikeCache()
+	commentCache := likeinfra.NewCommentLikeCache()
+	publisher := likeinfra.NewLikeEventPublisher()
+	return likeapp.NewLikeService(postCache, commentCache, publisher)
 }

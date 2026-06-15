@@ -1,6 +1,6 @@
 # 重构一：DDD 单体改良 —— 搬迁进度跟踪
 
-> 最后更新：2026-06-15（批次 B 完成）
+> 最后更新：2026-06-15（批次 C 完成，所有领域搬迁完毕）
 
 ## 已完成的基建（可复用）
 
@@ -16,7 +16,7 @@
 | 框架无关鉴权 | `pkg/composition/auth.go` | RequireLogin（stputil 直校验，替代 sagin.CheckLogin） |
 | DBHolder | `pkg/server/storage/db/pgsql/connect.go` | DB 依赖注入 holder |
 | **UserSessionStore 桥接器** | `pkg/composition/user_session_store_bridge.go` | auth↔user 跨领域通信的关键适配器 |
-| **Facade 桥接器集合** | `pkg/composition/facade_bridges.go` | user→(circle,post)、circle→post、post→circle 的字段级 Facade 适配器 |
+| **Facade 桥接器集合** | `pkg/composition/facade_bridges.go` | user→(circle,post,comment)、post→comment、post→like、comment→like 的字段级 Facade 适配器 |
 
 ## 已搬迁领域
 
@@ -28,13 +28,12 @@
 | ✅ auth | 完成 | `pkg/domains/auth/` | login/register/oauth，通过 UserSessionStore 桥接 user 领域 |
 | ✅ circle | 完成（批次B） | `pkg/domains/circle/` | 最大领域，含统计计数/成员/圈内帖子组装 |
 | ✅ post | 完成（批次B） | `pkg/domains/post/` | 依赖 user/circle Facade，含点赞状态/浏览量异步累加 |
+| ✅ comment | 完成（批次C） | `pkg/domains/comment/` | 树形结构 + 游标分页；依赖 user Facade + post 查询端口 |
+| ✅ like | 完成（批次C） | `pkg/domains/like/` | 横跨 post/comment，Redis Lua 原子切换；依赖 post/comment 查询端口 |
 
 ## 待搬迁领域（批次 C）
 
-| 领域 | 依赖 | 预计工时 | 备注 |
-|---|---|---|---|
-| ⬜ comment | user/post facade | 0.5 天 | 树形结构 + 游标分页 |
-| ⬜ like | post/comment facade | 0.5 天 | 横跨 post/comment，Redis lua |
+> ✅ 全部完成。所有业务领域已搬迁到 `pkg/domains/`，无遗留待迁移领域。
 
 ## 关键设计决策（搬迁时遵循）
 
@@ -47,6 +46,9 @@
 7. **UserSessionStore 模式**：auth 领域需要读写用户数据时，通过 composition 层桥接器调用 user 领域，避免领域间直接依赖
 8. **Facade 字段级桥接**：各领域定义自己的 Brief VO（如 `circle.application.UserBrief` vs `post.application.UserBrief`），结构相同但类型独立。composition 层的 `facade_bridges.go` 做字段级转换，保持领域间零类型耦合
 9. **互注模式**：post 和 circle 互相依赖（post 需 CircleFacade/MemberChecker，circle 的 GetCirclePosts 需 PostMediaFetcher）。composition 先构造两个 Service，再通过 setter 互注 Facade，打破构造期循环
+10. **横跨聚合的领域**：like 领域横跨 post + comment 两个聚合。它不持有独立聚合根表（PostLike/CommentLike 表分别属于 post/comment 领域），但统一管理"点赞/取消点赞"用例。通过 `PostTarget` / `CommentTarget` 端口接口分别依赖 post 和 comment 领域，在 composition 层桥接
+11. **恢复型缓存端口**：comment/like 在写入统计缓存前需先确保 stats Hash 存在（否则 Redis Lua 脚本读到空 stats）。通过 `RestoreStats` / `RestoreStatsAndIncrCommentCount` 端口委托给 post/comment 领域，复用各自的 `restoreXxxStatsIfNeed` 逻辑（DB 回源 → 写 Redis）
+12. **消费者解耦**：`pkg/server/storage/redpanda/like_consumer.go` 原本依赖 `model.CommentLike`/`model.PostLike`，批次 C 改为 import `comment.domain.CommentLike` / `post.domain.PostLike`，解除对 `pkg/server/model` 的依赖，使 model 包可瘦身
 
 ## 行为变更说明
 
@@ -72,11 +74,17 @@
 - `pkg/server/controller/oauth.go`（→ `pkg/domains/auth/`）
 - `pkg/server/controller/circle.go`（→ `pkg/domains/circle/`，批次B）
 - `pkg/server/controller/post.go`（→ `pkg/domains/post/`，批次B）
+- `pkg/server/controller/comment.go`（→ `pkg/domains/comment/`，批次C）
+- `pkg/server/controller/like.go`（→ `pkg/domains/like/`，批次C）
+- `pkg/server/controller/controller.go`、`hello.go`（死代码，批次C 删除）
+- `pkg/server/controller/` 整个目录（空目录删除，批次C）
+- `pkg/server/router/routers.go`（所有领域已搬完，批次C 删除）
+- `pkg/server/utils/sa_token_util.go`（死代码，批次C 删除）
+- `pkg/server/model/comment.go`、`comment_like.go`、`post.go`、`post_like.go`、`circle.go`、`circle_member.go`、`hello.go`（已迁移到各领域，批次C 删除）
 
-## 待清理（批次 C 完成后）
+## 待清理（批次 C 后评估）
 
-- `pkg/server/controller/`（comment/like 搬完后整个删除）
-- `pkg/server/model/`（所有领域搬完后删除，BaseModel 已迁至 shared kernel）
-- `pkg/server/router/routers.go`（所有领域搬完后删除）
-- `pkg/server/utils/sa_token_util.go`（comment/like 搬完后删除）
-- `pkg/server/auth/`（OAuth provider 适配器已在新架构中包装，旧代码待批次 C 后评估是否内联）
+- `pkg/server/model/user.go`（仅剩 `SysUser` 实体，仍被 `pkg/server/auth/*` OAuth provider 和 `pgsql/connect.go` AutoMigrate 使用。待 auth 领域内联 OAuth provider 后可整体删除）
+- `pkg/server/model/base.go`（BaseModel 别名存根，指向 `pkg/shared/domain/base.go`。随 `model/user.go` 一起删除）
+- `pkg/server/auth/`（OAuth provider 适配器已在新架构中包装，旧代码待后续 refactor 评估是否内联到 `pkg/domains/auth/infrastructure/`）
+- `pkg/server/response/`（仅被 `pkg/server/router/middleware/csrf.go` 使用，后者本身未注册到路由。可考虑迁移到 `httputil` 或删除）
