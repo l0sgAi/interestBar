@@ -2,6 +2,8 @@ package redis
 
 import (
 	"fmt"
+
+	"github.com/google/uuid"
 )
 
 const viewIncrScript = `
@@ -51,7 +53,7 @@ func InitViewLuaScripts() error {
 
 // IncrementPostViewCountWithDedup 原子递增帖子浏览量（带去重和上限检查）
 // 返回值：>0=新浏览量, 0=去重跳过, -1=已达上限
-func IncrementPostViewCountWithDedup(postID, userID int64) (int64, error) {
+func IncrementPostViewCountWithDedup(postID, userID uuid.UUID) (int64, error) {
 	statsKey := GetPostStatsKey(postID)
 	dedupeKey := GetPostViewDedupeKey(postID, userID)
 	statsTTLSec := int64(postStatsTTL.Seconds())

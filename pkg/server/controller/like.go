@@ -5,11 +5,12 @@ import (
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
 	"interestBar/pkg/server/storage/db/pgsql"
-	redpanda "interestBar/pkg/server/storage/redpanda"
 	redispkg "interestBar/pkg/server/storage/redis"
+	redpanda "interestBar/pkg/server/storage/redpanda"
 	"interestBar/pkg/server/utils"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -23,8 +24,8 @@ func NewLikeController() *LikeController {
 
 // ToggleLikeRequest 点赞/取消点赞请求
 type ToggleLikeRequest struct {
-	Type     string `json:"type" binding:"required,oneof=comment post"` // "comment" 或 "post"
-	TargetID int64  `json:"target_id" binding:"required,min=1"`
+	Type     string    `json:"type" binding:"required,oneof=comment post"` // "comment" 或 "post"
+	TargetID uuid.UUID `json:"target_id" binding:"required"`
 }
 
 // ToggleLike 点赞/取消点赞（幂等操作）
@@ -43,7 +44,7 @@ func (ctrl *LikeController) ToggleLike(c *gin.Context) {
 
 	var result redispkg.ToggleLikeResult
 	var err error
-	var postID int64
+	var postID uuid.UUID
 	var comment *model.Comment
 
 	switch req.Type {
@@ -64,7 +65,7 @@ func (ctrl *LikeController) ToggleLike(c *gin.Context) {
 			logger.Log.Error("Failed to restore comment stats cache: " + err.Error())
 		}
 
-		result, err = redispkg.ToggleCommentLike(int64(userID), req.TargetID)
+		result, err = redispkg.ToggleCommentLike(userID, req.TargetID)
 
 	case "post":
 		_, err = model.GetPostByID(pgsql.DB, req.TargetID)
@@ -82,7 +83,7 @@ func (ctrl *LikeController) ToggleLike(c *gin.Context) {
 			logger.Log.Error("Failed to restore post stats cache: " + err.Error())
 		}
 
-		result, err = redispkg.TogglePostLike(int64(userID), req.TargetID)
+		result, err = redispkg.TogglePostLike(userID, req.TargetID)
 	}
 
 	if err != nil {
@@ -94,11 +95,11 @@ func (ctrl *LikeController) ToggleLike(c *gin.Context) {
 	amount := int64(result)
 	switch req.Type {
 	case "comment":
-		if err := redpanda.PublishCommentLikeEvent(int64(userID), req.TargetID, postID, amount); err != nil {
+		if err := redpanda.PublishCommentLikeEvent(userID, req.TargetID, postID, amount); err != nil {
 			logger.Log.Error("Failed to publish comment like event: " + err.Error())
 		}
 	case "post":
-		if err := redpanda.PublishPostLikeEvent(int64(userID), req.TargetID, amount); err != nil {
+		if err := redpanda.PublishPostLikeEvent(userID, req.TargetID, amount); err != nil {
 			logger.Log.Error("Failed to publish post like event: " + err.Error())
 		}
 	}
@@ -111,7 +112,7 @@ func (ctrl *LikeController) ToggleLike(c *gin.Context) {
 }
 
 // restoreCommentStatsIfNeed 恢复评论统计信息到Redis缓存（如果缓存不存在）
-func restoreCommentStatsIfNeed(commentID int64) error {
+func restoreCommentStatsIfNeed(commentID uuid.UUID) error {
 	exists, err := redispkg.CommentStatisticsExists(commentID)
 	if err != nil || exists {
 		return err

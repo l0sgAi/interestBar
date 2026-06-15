@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/click33/sa-token-go/stputil"
+	"github.com/gin-gonic/gin"
 )
 
 const (

@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo \"--- redis build exit: $? ---\")",
+      "Bash(echo \"--- es build exit: $? ---\")",
+      "Bash(go mod *)",
+      "Bash(gofmt -l pkg/ cmd/)",
+      "Bash(gofmt -w pkg/ cmd/)",
+      "Bash(go vet *)",
+      "Bash(echo \"VET_EXIT=$?\")"
+    ]
+  }
+}

@@ -6,17 +6,18 @@ import (
 	"fmt"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
+	"github.com/google/uuid"
 )
 
 // CircleDocument 圈子文档结构
 type CircleDocument struct {
-	ID          int64  `json:"id"`
+	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Slug        string `json:"slug,omitempty"`
 	AvatarURL   string `json:"avatar_url,omitempty"`
 	Description string `json:"description"`
 	Hot         int    `json:"hot"`
-	CategoryID  int    `json:"category_id"`
+	CategoryID  string `json:"category_id"`
 	MemberCount int    `json:"member_count"`
 	PostCount   int    `json:"post_count"`
 	CreateTime  string `json:"create_time"` // 使用ISO 8601格式字符串
@@ -193,7 +194,7 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 // size: 每页数量，默认 20
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
 // 返回：圈子列表响应（包含圈子列表、总数、分页信息）
-func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []interface{}) (*CircleListResponse, error) {
+func SearchMyCircles(circleIDs []uuid.UUID, keyword string, size int, searchAfter []interface{}) (*CircleListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
@@ -220,10 +221,10 @@ func SearchMyCircles(circleIDs []int64, keyword string, size int, searchAfter []
 		},
 	}
 
-	// 将 circleIDs 转换为 []interface{} 供ES查询使用
+	// 将 circleIDs 转换为 []interface{} 供ES查询使用 (UUID 字符串)
 	circleIDInterface := make([]interface{}, len(circleIDs))
 	for i, id := range circleIDs {
-		circleIDInterface[i] = id
+		circleIDInterface[i] = id.String()
 	}
 
 	if keyword == "" {
@@ -407,13 +408,13 @@ func parseCircleSearchResponse(res *esapi.Response, size int) (*CircleListRespon
 		}
 
 		doc := CircleDocument{
-			ID:          int64(sourceMap["id"].(float64)),
-			Name:        sourceMap["name"].(string),
+			ID:          getString("id"),
+			Name:        getString("name"),
 			Slug:        getString("slug"),
 			AvatarURL:   getString("avatar_url"),
 			Description: getString("description"),
 			Hot:         getInt("hot"),
-			CategoryID:  getInt("category_id"),
+			CategoryID:  getString("category_id"),
 			MemberCount: getInt("member_count"),
 			PostCount:   getInt("post_count"),
 			CreateTime:  getString("create_time"),

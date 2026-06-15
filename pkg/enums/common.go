@@ -13,7 +13,7 @@ type Deleted int8
 
 const (
 	DeletedNormal Deleted = 0 // 正常/未删除
-	DeletedYes   Deleted = 1 // 已删除
+	DeletedYes    Deleted = 1 // 已删除
 )
 
 // Bool 布尔枚举 (用于数据库 SMALLINT 类型)

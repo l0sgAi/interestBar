@@ -16,14 +16,14 @@ import (
 
 // GithubUser represents the structure of user data returned by GitHub
 type GithubUser struct {
-	Login     string `json:"login"`
-	ID        int64  `json:"id"`
-	NodeID    string `json:"node_id"`
-	AvatarURL string `json:"avatar_url"`
+	Login      string `json:"login"`
+	ID         int64  `json:"id"`
+	NodeID     string `json:"node_id"`
+	AvatarURL  string `json:"avatar_url"`
 	GravatarID string `json:"gravatar_id"`
-	Name      string `json:"name"`
-	Email     string `json:"email"`
-	Bio       string `json:"bio"`
+	Name       string `json:"name"`
+	Email      string `json:"email"`
+	Bio        string `json:"bio"`
 }
 
 // GithubProvider implements Provider for GitHub OAuth2.
@@ -68,9 +68,9 @@ func (p *GithubProvider) FrontendRedirectURL() string {
 
 // GithubEmail represents the structure of email data returned by GitHub
 type GithubEmail struct {
-	Email    string `json:"email"`
-	Primary  bool   `json:"primary"`
-	Verified bool   `json:"verified"`
+	Email      string `json:"email"`
+	Primary    bool   `json:"primary"`
+	Verified   bool   `json:"verified"`
 	Visibility string `json:"visibility"`
 }
 

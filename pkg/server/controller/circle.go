@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -27,14 +28,14 @@ func NewCircleController() *CircleController {
 
 // CreateCircleRequest 创建圈子的请求结构
 type CreateCircleRequest struct {
-	Name        string `json:"name" binding:"required,min=1,max=50"`
-	Slug        string `json:"slug" binding:"omitempty,max=60"`
-	AvatarURL   string `json:"avatar_url" binding:"omitempty,url"`
-	CoverURL    string `json:"cover_url" binding:"omitempty,url"`
-	Description string `json:"description" binding:"required,min=1,max=2000"`
-	Rule        string `json:"rule" binding:"omitempty,max=2000"` // 圈子规则/公告，最多5000字符
-	CategoryID  int    `json:"category_id" binding:"required,min=0"`
-	JoinType    int16  `json:"join_type" binding:"omitempty,min=0,max=2"`
+	Name        string    `json:"name" binding:"required,min=1,max=50"`
+	Slug        string    `json:"slug" binding:"omitempty,max=60"`
+	AvatarURL   string    `json:"avatar_url" binding:"omitempty,url"`
+	CoverURL    string    `json:"cover_url" binding:"omitempty,url"`
+	Description string    `json:"description" binding:"required,min=1,max=2000"`
+	Rule        string    `json:"rule" binding:"omitempty,max=2000"` // 圈子规则/公告，最多5000字符
+	CategoryID  uuid.UUID `json:"category_id" binding:"required"`
+	JoinType    int16     `json:"join_type" binding:"omitempty,min=0,max=2"`
 }
 
 // CreateCircle 创建兴趣圈
@@ -90,6 +91,7 @@ func (ctrl *CircleController) CreateCircle(c *gin.Context) {
 	}
 
 	// 构建圈子数据模型
+	categoryID := req.CategoryID
 	circle := model.Circle{
 		Name:        strings.TrimSpace(req.Name),
 		Slug:        strings.TrimSpace(req.Slug),
@@ -97,8 +99,8 @@ func (ctrl *CircleController) CreateCircle(c *gin.Context) {
 		CoverURL:    req.CoverURL,
 		Description: strings.TrimSpace(req.Description),
 		Rule:        strings.TrimSpace(req.Rule),
-		CreatorID:   int64(userID),
-		CategoryID:  req.CategoryID,
+		CreatorID:   userID,
+		CategoryID:  &categoryID,
 		Hot:         0,
 		MemberCount: 1, // 创建者自动成为第一个成员
 		PostCount:   0,
@@ -181,23 +183,23 @@ func (ctrl *CircleController) GetCircles(c *gin.Context) {
 // CircleDetailVO 兴趣圈详情VO（包含Circle所有字段 + 用户成员信息）
 type CircleDetailVO struct {
 	// Circle 所有字段
-	ID          int64     `json:"id"`
-	Name        string    `json:"name"`
-	Slug        string    `json:"slug,omitempty"`
-	AvatarURL   string    `json:"avatar_url,omitempty"`
-	CoverURL    string    `json:"cover_url,omitempty"`
-	Description string    `json:"description"`
-	Rule        string    `json:"rule,omitempty"`
-	CreatorID   int64     `json:"creator_id"`
-	CategoryID  int       `json:"category_id"`
-	Hot         int       `json:"hot"`
-	MemberCount int       `json:"member_count"`
-	PostCount   int       `json:"post_count"`
-	JoinType    int16     `json:"join_type"`
-	Status      int16     `json:"status"`
-	Deleted     int16     `json:"deleted"`
-	CreateTime  time.Time `json:"create_time"`
-	UpdateTime  time.Time `json:"update_time"`
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Slug        string     `json:"slug,omitempty"`
+	AvatarURL   string     `json:"avatar_url,omitempty"`
+	CoverURL    string     `json:"cover_url,omitempty"`
+	Description string     `json:"description"`
+	Rule        string     `json:"rule,omitempty"`
+	CreatorID   uuid.UUID  `json:"creator_id"`
+	CategoryID  *uuid.UUID `json:"category_id,omitempty"`
+	Hot         int        `json:"hot"`
+	MemberCount int        `json:"member_count"`
+	PostCount   int        `json:"post_count"`
+	JoinType    int16      `json:"join_type"`
+	Status      int16      `json:"status"`
+	Deleted     int16      `json:"deleted"`
+	CreateTime  time.Time  `json:"create_time"`
+	UpdateTime  time.Time  `json:"update_time"`
 
 	// 用户在圈子的成员信息
 	IsJoined          bool       `json:"is_joined"`                      // 是否已加入圈子
@@ -217,10 +219,9 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 		return
 	}
 
-	// 获取circle_id参数
-	circleIDStr := c.Param("id")
-	var circleID int64
-	if _, err := fmt.Sscanf(circleIDStr, "%d", &circleID); err != nil || circleID <= 0 {
+	// 获取circle_id参数 (UUIDv7)
+	circleID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
 		response.BadRequest(c, "Invalid circle id")
 		return
 	}
@@ -229,7 +230,7 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 
 	// 1. 尝试从 Redis 获取圈子基础信息缓存（使用 Zstd 压缩）
 	redisKey := redispkg.GetCircleInfoKey(circleID)
-	err := redispkg.GetJSONCompressed(redisKey, &circleBase)
+	err = redispkg.GetJSONCompressed(redisKey, &circleBase)
 	if err != nil {
 		// 缓存不存在或出错，从数据库查询完整信息
 		circle, err := model.GetCircleByID(pgsql.DB, circleID)
@@ -278,7 +279,7 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 	}
 
 	// 3. 查询用户在圈子的成员信息
-	member, err := model.GetMember(pgsql.DB, circleID, int64(userID))
+	member, err := model.GetMember(pgsql.DB, circleID, userID)
 	if err != nil && err != gorm.ErrRecordNotFound {
 		logger.Log.Error("Failed to get member info: " + err.Error())
 		response.InternalError(c, "Failed to get member info")
@@ -323,7 +324,7 @@ func (ctrl *CircleController) GetCircleDetail(c *gin.Context) {
 
 // JoinCircleRequest 加入圈子的请求结构
 type JoinCircleRequest struct {
-	CircleID int64 `json:"circle_id" binding:"required,min=1"`
+	CircleID uuid.UUID `json:"circle_id" binding:"required"`
 }
 
 // JoinCircle 加入兴趣圈
@@ -361,7 +362,7 @@ func (ctrl *CircleController) JoinCircle(c *gin.Context) {
 	}
 
 	// 3. 加入圈子
-	member, err := model.JoinCircle(pgsql.DB, req.CircleID, int64(userID), circle.JoinType)
+	member, err := model.JoinCircle(pgsql.DB, req.CircleID, userID, circle.JoinType)
 	if err != nil {
 		logger.Log.Error("Failed to join circle: " + err.Error())
 		if err.Error() == "user is already a member of this circle" {
@@ -391,7 +392,7 @@ func (ctrl *CircleController) JoinCircle(c *gin.Context) {
 		}
 
 		// 4.3 删除用户已加入圈子缓存（旁路缓存）
-		userJoinedKey := redispkg.GetUserJoinedCirclesKey(int64(userID))
+		userJoinedKey := redispkg.GetUserJoinedCirclesKey(userID)
 		if err := redispkg.Del(userJoinedKey); err != nil {
 			logger.Log.Error("Failed to delete user joined circles cache: " + err.Error())
 		}
@@ -407,11 +408,11 @@ func (ctrl *CircleController) JoinCircle(c *gin.Context) {
 
 // LeaveCircleRequest 退出圈子的请求结构
 type LeaveCircleRequest struct {
-	CircleID int64 `json:"circle_id" binding:"required,min=1"`
+	CircleID uuid.UUID `json:"circle_id" binding:"required"`
 }
 
 // incrementCircleMemberCount 递增圈子成员计数（含缓存恢复逻辑）
-func incrementCircleMemberCount(circleID int64) error {
+func incrementCircleMemberCount(circleID uuid.UUID) error {
 	// 先检查统计信息Hash是否存在
 	exists, err := redispkg.CircleStatisticsExists(circleID)
 	if err != nil {
@@ -424,7 +425,7 @@ func incrementCircleMemberCount(circleID int64) error {
 		circle, err := model.GetCircleByID(pgsql.DB, circleID)
 		if err != nil {
 			// 数据库查询失败，记录日志但仍尝试递增（Redis会从0开始）
-			logger.Log.Error(fmt.Sprintf("Failed to load circle %d from DB for cache recovery: %s", circleID, err.Error()))
+			logger.Log.Error(fmt.Sprintf("Failed to load circle %s from DB for cache recovery: %s", circleID.String(), err.Error()))
 		} else {
 			// 将数据库的统计数据设置到 Redis Hash
 			statistics := &redispkg.CircleStatistics{
@@ -447,7 +448,7 @@ func incrementCircleMemberCount(circleID int64) error {
 }
 
 // decrementCircleMemberCount 递减圈子成员计数（含缓存恢复逻辑）
-func decrementCircleMemberCount(circleID int64) error {
+func decrementCircleMemberCount(circleID uuid.UUID) error {
 	// 先检查统计信息Hash是否存在
 	exists, err := redispkg.CircleStatisticsExists(circleID)
 	if err != nil {
@@ -460,7 +461,7 @@ func decrementCircleMemberCount(circleID int64) error {
 		circle, err := model.GetCircleByID(pgsql.DB, circleID)
 		if err != nil {
 			// 数据库查询失败，记录日志但仍尝试递减（Redis会从0开始变成-1然后重置为0）
-			logger.Log.Error(fmt.Sprintf("Failed to load circle %d from DB for cache recovery: %s", circleID, err.Error()))
+			logger.Log.Error(fmt.Sprintf("Failed to load circle %s from DB for cache recovery: %s", circleID.String(), err.Error()))
 		} else {
 			// 将数据库的统计数据设置到 Redis Hash
 			statistics := &redispkg.CircleStatistics{
@@ -511,7 +512,7 @@ func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
 	}
 
 	// 2. 检查是否是成员
-	member, err := model.GetMember(pgsql.DB, req.CircleID, int64(userID))
+	member, err := model.GetMember(pgsql.DB, req.CircleID, userID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			response.NotFound(c, "Not a member of this circle")
@@ -523,7 +524,7 @@ func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
 	}
 
 	// 3. 退出圈子
-	if err := model.LeaveCircle(pgsql.DB, req.CircleID, int64(userID)); err != nil {
+	if err := model.LeaveCircle(pgsql.DB, req.CircleID, userID); err != nil {
 		logger.Log.Error("Failed to leave circle: " + err.Error())
 		if err.Error() == "circle owner cannot leave the circle" {
 			response.Forbidden(c, "Circle owner cannot leave the circle")
@@ -548,7 +549,7 @@ func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
 		}
 
 		// 4.3 删除用户已加入圈子缓存（旁路缓存）
-		userJoinedKey := redispkg.GetUserJoinedCirclesKey(int64(userID))
+		userJoinedKey := redispkg.GetUserJoinedCirclesKey(userID)
 		if err := redispkg.Del(userJoinedKey); err != nil {
 			logger.Log.Error("Failed to delete user joined circles cache: " + err.Error())
 		}
@@ -559,7 +560,7 @@ func (ctrl *CircleController) LeaveCircle(c *gin.Context) {
 
 // getCircleStatistics 从Redis获取圈子统计信息
 // 如果任一计数器不存在，则从数据库恢复所有计数器
-func getCircleStatistics(circleID int64) (memberCount, postCount, hot int, err error) {
+func getCircleStatistics(circleID uuid.UUID) (memberCount, postCount, hot int, err error) {
 	// 从Hash读取统计信息
 	stats, err := redispkg.GetCircleStatistics(circleID)
 	if err != nil {
@@ -569,7 +570,7 @@ func getCircleStatistics(circleID int64) (memberCount, postCount, hot int, err e
 
 	// 如果统计信息不存在，从数据库恢复
 	if stats == nil {
-		logger.Log.Debug(fmt.Sprintf("Circle statistics cache missing for circle %d, restoring from database", circleID))
+		logger.Log.Debug(fmt.Sprintf("Circle statistics cache missing for circle %s, restoring from database", circleID.String()))
 		return restoreAllCounters(circleID)
 	}
 
@@ -577,12 +578,12 @@ func getCircleStatistics(circleID int64) (memberCount, postCount, hot int, err e
 }
 
 // restoreAllCounters 从数据库重新加载并重建Hash中的所有统计字段
-func restoreAllCounters(circleID int64) (memberCount, postCount, hot int, err error) {
+func restoreAllCounters(circleID uuid.UUID) (memberCount, postCount, hot int, err error) {
 	// 从数据库查询完整circle记录
 	circle, err := model.GetCircleByID(pgsql.DB, circleID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
-			return 0, 0, 0, fmt.Errorf("circle not found: %d", circleID)
+			return 0, 0, 0, fmt.Errorf("circle not found: %s", circleID.String())
 		}
 		return 0, 0, 0, fmt.Errorf("failed to get circle from database: %w", err)
 	}
@@ -597,15 +598,15 @@ func restoreAllCounters(circleID int64) (memberCount, postCount, hot int, err er
 		logger.Log.Error("Failed to restore circle statistics cache: " + err.Error())
 	}
 
-	logger.Log.Debug(fmt.Sprintf("Successfully restored circle statistics cache for circle %d: member_count=%d, post_count=%d, hot=%d",
-		circleID, circle.MemberCount, circle.PostCount, circle.Hot))
+	logger.Log.Debug(fmt.Sprintf("Successfully restored circle statistics cache for circle %s: member_count=%d, post_count=%d, hot=%d",
+		circleID.String(), circle.MemberCount, circle.PostCount, circle.Hot))
 
 	return int(circle.MemberCount), int(circle.PostCount), int(circle.Hot), nil
 }
 
 // MyCircleVO 我加入的圈子VO（简化版，只包含基本信息）
 type MyCircleVO struct {
-	ID          int64  `json:"id"`
+	ID          string `json:"id"`
 	Name        string `json:"name"`
 	AvatarURL   string `json:"avatar_url,omitempty"`
 	MemberCount int    `json:"member_count"`
@@ -650,14 +651,14 @@ func (ctrl *CircleController) GetMyCircles(c *gin.Context) {
 		}
 	}
 
-	var circleIDs []int64
-	redisKey := redispkg.GetUserJoinedCirclesKey(int64(userID))
+	var circleIDs []uuid.UUID
+	redisKey := redispkg.GetUserJoinedCirclesKey(userID)
 
 	if req.Keyword == "" {
 		// 浏览模式：使用缓存，仅加载前500个最新加入的圈子
 		err := redispkg.GetJSON(redisKey, &circleIDs)
 		if err != nil {
-			circleIDs, err = model.GetJoinedCircleIDsByUserID(pgsql.DB, int64(userID), 500)
+			circleIDs, err = model.GetJoinedCircleIDsByUserID(pgsql.DB, userID, 500)
 			if err != nil {
 				logger.Log.Error("Failed to get joined circles: " + err.Error())
 				response.InternalError(c, "Failed to get joined circles")
@@ -671,7 +672,7 @@ func (ctrl *CircleController) GetMyCircles(c *gin.Context) {
 	} else {
 		// 搜索模式：绕过缓存，查询全量加入的圈子ID，确保搜索不遗漏
 		var err error
-		circleIDs, err = model.GetJoinedCircleIDsByUserID(pgsql.DB, int64(userID), 0)
+		circleIDs, err = model.GetJoinedCircleIDsByUserID(pgsql.DB, userID, 0)
 		if err != nil {
 			logger.Log.Error("Failed to get all joined circles for search: " + err.Error())
 			response.InternalError(c, "Failed to get joined circles")
@@ -728,7 +729,7 @@ func (ctrl *CircleController) GetMyCircles(c *gin.Context) {
 
 // GetCirclePostsRequest 圈内帖子列表请求结构
 type GetCirclePostsRequest struct {
-	CircleID    int64  `form:"circle_id" binding:"required,min=1"`
+	CircleID    string `form:"circle_id" binding:"required,uuid"`
 	Type        int    `form:"type" binding:"required,min=1,max=3"`
 	Size        int    `form:"size"`
 	SearchAfter string `form:"search_after"`
@@ -741,6 +742,12 @@ func (ctrl *CircleController) GetCirclePosts(c *gin.Context) {
 	if err := c.ShouldBindQuery(&req); err != nil {
 		logger.Log.Error("Invalid request parameters: " + err.Error())
 		response.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	circleID, err := uuid.Parse(req.CircleID)
+	if err != nil {
+		response.BadRequest(c, "Invalid circle_id")
 		return
 	}
 
@@ -758,34 +765,36 @@ func (ctrl *CircleController) GetCirclePosts(c *gin.Context) {
 	}
 
 	// 调用 Elasticsearch 搜索
-	result, err := elasticsearch.SearchCirclePosts(req.CircleID, req.Type, size, searchAfter)
+	result, err := elasticsearch.SearchCirclePosts(circleID, req.Type, size, searchAfter)
 	if err != nil {
 		logger.Log.Error("Failed to search circle posts: " + err.Error())
 		response.InternalError(c, "Failed to search circle posts")
 		return
 	}
 
-	// 收集所有用户ID和帖子ID
-	userIDs := make([]int64, 0, len(result.Posts))
-	postIDs := make([]int64, 0, len(result.Posts))
-	userIDSet := make(map[int64]struct{})
+	// 收集所有用户ID和帖子ID (ES 文档中 ID 为字符串，需解析为 uuid.UUID)
+	userIDs := make([]uuid.UUID, 0, len(result.Posts))
+	postIDs := make([]uuid.UUID, 0, len(result.Posts))
+	userIDSet := make(map[uuid.UUID]struct{})
 
 	for _, doc := range result.Posts {
-		postIDs = append(postIDs, doc.ID)
-		if _, exists := userIDSet[doc.UserID]; !exists {
-			userIDSet[doc.UserID] = struct{}{}
-			userIDs = append(userIDs, doc.UserID)
+		postID, _ := uuid.Parse(doc.ID)
+		postIDs = append(postIDs, postID)
+		uid, _ := uuid.Parse(doc.UserID)
+		if _, exists := userIDSet[uid]; !exists {
+			userIDSet[uid] = struct{}{}
+			userIDs = append(userIDs, uid)
 		}
 	}
 
 	// 批量查询用户信息、圈子信息、帖子媒体
 	userMap, _ := model.GetUsersByIDs(pgsql.DB, userIDs)
-	circleMap, _ := model.GetCirclesByIDs(pgsql.DB, []int64{req.CircleID})
+	circleMap, _ := model.GetCirclesByIDs(pgsql.DB, []uuid.UUID{circleID})
 	mediaMap, _ := model.GetPostsMediaByIDs(pgsql.DB, postIDs)
 
 	// 获取圈子信息（所有帖子属于同一圈子）
 	var circleName, circleAvatar string
-	if circle, ok := circleMap[req.CircleID]; ok {
+	if circle, ok := circleMap[circleID]; ok {
 		circleName = circle.Name
 		circleAvatar = circle.AvatarURL
 	}
@@ -793,8 +802,12 @@ func (ctrl *CircleController) GetCirclePosts(c *gin.Context) {
 	// 构建帖子列表
 	posts := make([]PostListVO, 0, len(result.Posts))
 	for _, doc := range result.Posts {
+		postID, _ := uuid.Parse(doc.ID)
+		uid, _ := uuid.Parse(doc.UserID)
+		cid, _ := uuid.Parse(doc.CircleID)
+
 		var authorName, authorAvatar string
-		if author, ok := userMap[doc.UserID]; ok {
+		if author, ok := userMap[uid]; ok {
 			authorName = author.Username
 			authorAvatar = author.AvatarURL
 		}
@@ -802,14 +815,14 @@ func (ctrl *CircleController) GetCirclePosts(c *gin.Context) {
 		createTime, _ := time.Parse(time.RFC3339Nano, doc.CreateTime)
 
 		var images []string
-		if media, ok := mediaMap[doc.ID]; ok {
+		if media, ok := mediaMap[postID]; ok {
 			images = media
 		}
 
 		posts = append(posts, PostListVO{
-			ID:           doc.ID,
-			CircleID:     doc.CircleID,
-			UserID:       doc.UserID,
+			ID:           postID,
+			CircleID:     cid,
+			UserID:       uid,
 			Type:         doc.Type,
 			Title:        doc.Title,
 			Summary:      doc.Summary,

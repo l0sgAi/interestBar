@@ -2,7 +2,6 @@ package controller
 
 import (
 	"fmt"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -39,7 +38,7 @@ func (uc *UploadController) UploadImage(c *gin.Context) {
 		return
 	}
 
-	loginIDStr := strconv.FormatUint(userID, 10)
+	loginIDStr := userID.String()
 
 	// 获取上传的文件
 	file, err := c.FormFile("file")
@@ -145,7 +144,7 @@ func (uc *UploadController) UploadPostImages(c *gin.Context) {
 		}
 
 		// 生成 S3 对象键名
-		key := s3storage.GenerateKeyWithUUID(fmt.Sprintf("posts/%s", strconv.FormatUint(userID, 10)), file.Filename)
+		key := s3storage.GenerateKeyWithUUID(fmt.Sprintf("posts/%s", userID.String()), file.Filename)
 
 		// 上传到 S3
 		fileURL, err := s3Client.UploadFile(c.Request.Context(), key, file, "public-read")

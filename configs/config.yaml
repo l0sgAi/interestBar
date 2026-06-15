@@ -81,18 +81,8 @@ mailtrap:
 # Elasticsearch 配置
 elasticsearch:
   url: "http://127.0.0.1:9200" # ES 地址
-  index_prefix: "pg.public" # ES 索引前缀（用于构建完整索引名）
-  refresh_interval: "30s" # 索引刷新间隔，提升性能
-
-# RabbitMQ 配置
-rabbitmq:
-  host: "127.0.0.1"
-  port: 5672
-  username: "admin"
-  password: "admin"
-  vhost: "/" # virtual-host
-  retry:
-    max_attempts: 3 # 最大重试次数
+  index_prefix: "pg.domains" # ES 索引前缀（用于构建完整索引名）
+  refresh_interval: "5s" # 索引刷新间隔，提升性能
 
 # Redpanda 配置 (Kafka兼容)
 redpanda:

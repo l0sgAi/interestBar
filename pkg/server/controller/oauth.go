@@ -8,9 +8,7 @@ import (
 	"interestBar/pkg/server/storage/db/pgsql"
 	"interestBar/pkg/server/utils"
 	"net/http"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/click33/sa-token-go/stputil"
 	"github.com/gin-gonic/gin"
@@ -93,14 +91,12 @@ func (ctrl *OAuthController) Callback(providerName string) gin.HandlerFunc {
 				}
 
 				newUser := model.SysUser{
-					Username:   username,
-					Email:      userInfo.Email,
-					AvatarURL:  userInfo.AvatarURL,
-					Role:       0,
-					Status:     1,
-					Deleted:    0,
-					CreateTime: time.Now(),
-					UpdateTime: time.Now(),
+					Username:  username,
+					Email:     userInfo.Email,
+					AvatarURL: userInfo.AvatarURL,
+					Role:      0,
+					Status:    1,
+					Deleted:   0,
 				}
 				p.ApplyProviderID(&newUser, userInfo.ProviderID)
 
@@ -122,7 +118,7 @@ func (ctrl *OAuthController) Callback(providerName string) gin.HandlerFunc {
 			pgsql.DB.Save(&user)
 		}
 
-		userIDStr := strconv.FormatUint(uint64(user.ID), 10)
+		userIDStr := user.ID.String()
 
 		// 清理同设备的旧 token（直接删除 key，避免 KICK_OUT 残留）
 		_ = stputil.Logout(userIDStr, device)

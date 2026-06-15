@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 	"gorm.io/gorm"
 )
@@ -18,8 +19,8 @@ import (
 // StatisticsAggregator 统计聚合器
 type StatisticsAggregator struct {
 	mu           sync.Mutex
-	circleCounts map[int64]int64 // circle_id -> 累计成员变化量
-	postCounts   map[int64]int64 // circle_id -> 累计帖子变化量
+	circleCounts map[uuid.UUID]int64 // circle_id -> 累计成员变化量
+	postCounts   map[uuid.UUID]int64 // circle_id -> 累计帖子变化量
 	ticker       *time.Ticker
 	stopChan     chan struct{}
 	stopped      bool
@@ -63,8 +64,8 @@ func StartStatisticsConsumer() error {
 
 	// 创建聚合器
 	aggregator := &StatisticsAggregator{
-		circleCounts: make(map[int64]int64),
-		postCounts:   make(map[int64]int64),
+		circleCounts: make(map[uuid.UUID]int64),
+		postCounts:   make(map[uuid.UUID]int64),
 		ticker:       time.NewTicker(time.Duration(conf.Config.Redpanda.FlushInterval) * time.Minute),
 		stopChan:     make(chan struct{}),
 	}
@@ -158,8 +159,8 @@ func (a *StatisticsAggregator) flush() {
 
 	circleCounts := a.circleCounts
 	postCounts := a.postCounts
-	a.circleCounts = make(map[int64]int64)
-	a.postCounts = make(map[int64]int64)
+	a.circleCounts = make(map[uuid.UUID]int64)
+	a.postCounts = make(map[uuid.UUID]int64)
 	a.mu.Unlock()
 
 	// 统计消息数量
@@ -181,12 +182,12 @@ func (a *StatisticsAggregator) flush() {
 }
 
 // batchUpdateMemberCounts 批量更新圈子成员计数到数据库
-func (a *StatisticsAggregator) batchUpdateMemberCounts(deltas map[int64]int64) error {
+func (a *StatisticsAggregator) batchUpdateMemberCounts(deltas map[uuid.UUID]int64) error {
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
 		// 构造更新数据
 		type updateRow struct {
-			CircleID int64 `json:"circle_id"`
-			Delta    int64 `json:"delta"`
+			CircleID uuid.UUID `json:"circle_id"`
+			Delta    int64     `json:"delta"`
 		}
 
 		rows := make([]updateRow, 0, len(deltas))
@@ -202,12 +203,12 @@ func (a *StatisticsAggregator) batchUpdateMemberCounts(deltas map[int64]int64) e
 
 		// 使用JSON批量更新
 		sql := `
-		UPDATE circle c
+		UPDATE domains.circle c
 		SET member_count = GREATEST(c.member_count + v.delta, 0),
 		    update_time = CURRENT_TIMESTAMP
 		FROM (
 			SELECT * FROM jsonb_to_recordset(?::jsonb)
-			AS v(circle_id BIGINT, delta BIGINT)
+			AS v(circle_id uuid, delta BIGINT)
 		) v
 		WHERE c.id = v.circle_id AND c.deleted = 0
 		`
@@ -227,12 +228,12 @@ func (a *StatisticsAggregator) batchUpdateMemberCounts(deltas map[int64]int64) e
 }
 
 // batchUpdatePostCounts 批量更新圈子帖子计数到数据库
-func (a *StatisticsAggregator) batchUpdatePostCounts(deltas map[int64]int64) error {
+func (a *StatisticsAggregator) batchUpdatePostCounts(deltas map[uuid.UUID]int64) error {
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
 		// 构造更新数据
 		type updateRow struct {
-			CircleID int64 `json:"circle_id"`
-			Delta    int64 `json:"delta"`
+			CircleID uuid.UUID `json:"circle_id"`
+			Delta    int64     `json:"delta"`
 		}
 
 		rows := make([]updateRow, 0, len(deltas))
@@ -248,12 +249,12 @@ func (a *StatisticsAggregator) batchUpdatePostCounts(deltas map[int64]int64) err
 
 		// 使用JSON批量更新
 		sql := `
-		UPDATE circle c
+		UPDATE domains.circle c
 		SET post_count = GREATEST(c.post_count + v.delta, 0),
 		    update_time = CURRENT_TIMESTAMP
 		FROM (
 			SELECT * FROM jsonb_to_recordset(?::jsonb)
-			AS v(circle_id BIGINT, delta BIGINT)
+			AS v(circle_id uuid, delta BIGINT)
 		) v
 		WHERE c.id = v.circle_id AND c.deleted = 0
 		`
@@ -327,7 +328,7 @@ type postStatDelta struct {
 // PostStatisticsAggregator 帖子统计聚合器
 type PostStatisticsAggregator struct {
 	mu       sync.Mutex
-	deltas   map[int64]*postStatDelta // post_id -> 累计变化量
+	deltas   map[uuid.UUID]*postStatDelta // post_id -> 累计变化量
 	ticker   *time.Ticker
 	stopChan chan struct{}
 	stopped  bool
@@ -358,7 +359,7 @@ func StartPostStatisticsConsumer() error {
 		conf.Config.Redpanda.PostTopic, conf.Config.Redpanda.PostConsumerGroup))
 
 	aggregator := &PostStatisticsAggregator{
-		deltas:   make(map[int64]*postStatDelta),
+		deltas:   make(map[uuid.UUID]*postStatDelta),
 		ticker:   time.NewTicker(time.Duration(conf.Config.Redpanda.PostFlushInterval) * time.Minute),
 		stopChan: make(chan struct{}),
 	}
@@ -449,7 +450,7 @@ func (a *PostStatisticsAggregator) flush() {
 	}
 
 	deltas := a.deltas
-	a.deltas = make(map[int64]*postStatDelta)
+	a.deltas = make(map[uuid.UUID]*postStatDelta)
 	a.mu.Unlock()
 
 	logger.Log.Info(fmt.Sprintf("Flushing %d post statistics updates", len(deltas)))
@@ -460,14 +461,14 @@ func (a *PostStatisticsAggregator) flush() {
 }
 
 // batchUpdatePostStats 批量更新帖子统计计数到数据库
-func (a *PostStatisticsAggregator) batchUpdatePostStats(deltas map[int64]*postStatDelta) error {
+func (a *PostStatisticsAggregator) batchUpdatePostStats(deltas map[uuid.UUID]*postStatDelta) error {
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
 		type updateRow struct {
-			PostID       int64 `json:"post_id"`
-			ViewDelta    int64 `json:"view_delta"`
-			CommentDelta int64 `json:"comment_delta"`
-			LikeDelta    int64 `json:"like_delta"`
-			CollectDelta int64 `json:"collect_delta"`
+			PostID       uuid.UUID `json:"post_id"`
+			ViewDelta    int64     `json:"view_delta"`
+			CommentDelta int64     `json:"comment_delta"`
+			LikeDelta    int64     `json:"like_delta"`
+			CollectDelta int64     `json:"collect_delta"`
 		}
 
 		rows := make([]updateRow, 0, len(deltas))
@@ -489,7 +490,7 @@ func (a *PostStatisticsAggregator) batchUpdatePostStats(deltas map[int64]*postSt
 
 		// 使用JSON批量更新所有统计字段
 		sql := `
-		UPDATE post p
+		UPDATE domains.post p
 		SET view_count = LEAST(GREATEST(p.view_count + v.view_delta, 0), 1000000000),
 		    comment_count = GREATEST(p.comment_count + v.comment_delta, 0),
 		    like_count = GREATEST(p.like_count + v.like_delta, 0),
@@ -497,7 +498,7 @@ func (a *PostStatisticsAggregator) batchUpdatePostStats(deltas map[int64]*postSt
 		    update_time = CURRENT_TIMESTAMP
 		FROM (
 		    SELECT * FROM jsonb_to_recordset(?::jsonb)
-		    AS v(post_id BIGINT, view_delta BIGINT, comment_delta BIGINT, like_delta BIGINT, collect_delta BIGINT)
+		    AS v(post_id uuid, view_delta BIGINT, comment_delta BIGINT, like_delta BIGINT, collect_delta BIGINT)
 		) v
 		WHERE p.id = v.post_id AND p.deleted = 0
 		`

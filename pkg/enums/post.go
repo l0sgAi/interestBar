@@ -13,11 +13,11 @@ const (
 type PostStatus int8
 
 const (
-	PostStatusDraft      PostStatus = 0 // 草稿
-	PostStatusPublished  PostStatus = 1 // 发布(正常)
-	PostStatusReviewing  PostStatus = 2 // 审核中
-	PostStatusRejected   PostStatus = 3 // 审核失败
-	PostStatusBlocked    PostStatus = 4 // 被屏蔽(软删/违规)
+	PostStatusDraft     PostStatus = 0 // 草稿
+	PostStatusPublished PostStatus = 1 // 发布(正常)
+	PostStatusReviewing PostStatus = 2 // 审核中
+	PostStatusRejected  PostStatus = 3 // 审核失败
+	PostStatusBlocked   PostStatus = 4 // 被屏蔽(软删/违规)
 )
 
 // String 返回帖子类型的字符串表示

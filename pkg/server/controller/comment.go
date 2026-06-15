@@ -2,7 +2,6 @@ package controller
 
 import (
 	"encoding/json"
-	"fmt"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
@@ -12,6 +11,7 @@ import (
 	"interestBar/pkg/server/utils"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -24,11 +24,11 @@ func NewCommentController() *CommentController {
 
 // CreateCommentRequest 发评论/回复的请求结构
 type CreateCommentRequest struct {
-	PostID    int64           `json:"post_id" binding:"required,min=1"`
+	PostID    uuid.UUID       `json:"post_id" binding:"required"`
 	Content   string          `json:"content" binding:"required,min=1,max=10000"`
-	ExtraData json.RawMessage `json:"extra_data" binding:"omitempty"`        // 扩展数据（JSON格式，如图片URL数组等）
-	RootID    int64           `json:"root_id" binding:"omitempty,min=1"`     // 根评论ID，0或不传=顶层评论
-	ReplyToID int64           `json:"reply_to_id" binding:"omitempty,min=1"` // 被回复的评论ID
+	ExtraData json.RawMessage `json:"extra_data" binding:"omitempty"`  // 扩展数据（JSON格式，如图片URL数组等）
+	RootID    *uuid.UUID      `json:"root_id" binding:"omitempty"`     // 根评论ID，nil或不传=顶层评论
+	ReplyToID *uuid.UUID      `json:"reply_to_id" binding:"omitempty"` // 被回复的评论ID
 }
 
 // CreateComment 发评论（支持顶层评论和回复）
@@ -71,10 +71,11 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 	}
 
 	// 2. 如果是回复，校验 root_id 和 reply_to_id，并获取被回复用户ID
-	var replyToUserID int64 = 0
-	if req.RootID > 0 {
+	var replyToUserID *uuid.UUID
+	if req.RootID != nil {
+		rootID := *req.RootID
 		// 校验根评论存在且属于同一帖子
-		rootComment, err := model.GetCommentByID(pgsql.DB, req.RootID)
+		rootComment, err := model.GetCommentByID(pgsql.DB, rootID)
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
 				response.NotFound(c, "Root comment not found")
@@ -89,8 +90,8 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 		}
 
 		// 如果指定了 reply_to_id，校验被回复的评论存在并获取被回复用户ID
-		if req.ReplyToID > 0 {
-			replyToComment, err := model.GetCommentByID(pgsql.DB, req.ReplyToID)
+		if req.ReplyToID != nil {
+			replyToComment, err := model.GetCommentByID(pgsql.DB, *req.ReplyToID)
 			if err != nil {
 				if err == gorm.ErrRecordNotFound {
 					response.NotFound(c, "Reply target comment not found")
@@ -100,35 +101,48 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 				return
 			}
 			// 被回复的评论必须属于同一个根评论下
-			if replyToComment.RootID != req.RootID && replyToComment.ID != req.RootID {
+			// (要么是被回复评论本身就是根评论，要么其 root_id 等于当前根评论ID)
+			valid := replyToComment.ID == rootID ||
+				(replyToComment.RootID != nil && *replyToComment.RootID == rootID)
+			if !valid {
 				response.BadRequest(c, "Reply target does not belong to the same thread")
 				return
 			}
 			// 获取被回复用户ID
-			replyToUserID = replyToComment.UserID
+			uid := replyToComment.UserID
+			replyToUserID = &uid
 		}
 	}
 
-	// 3. 构建评论数据
+	// 3. 清洗 PostgreSQL text 字段不接受的字符（NULL 字节 U+0000 及其它无效
+	// UTF-8 字节序列），避免写入时报 "invalid byte sequence for encoding UTF8"
+	// (SQLSTATE 22021)。这些字节常来自富文本/Markdown 粘贴残留。
+	content := utils.SanitizeForPg(req.Content)
+	if content == "" {
+		response.BadRequest(c, "Comment content is empty")
+		return
+	}
+
+	// 4. 构建评论数据
 	comment := model.Comment{
 		PostID:        req.PostID,
-		UserID:        int64(userID),
+		UserID:        userID,
 		RootID:        req.RootID,
 		ReplyToID:     req.ReplyToID,
 		ReplyToUserID: replyToUserID,
-		Content:       req.Content,
+		Content:       content,
 		ExtraData:     req.ExtraData,
 		Status:        model.CommentStatusNormal,
 		Deleted:       0,
 	}
 
-	// 4. 创建评论（事务：插入评论 + 更新根评论回复计数）
+	// 5. 创建评论（事务：插入评论 + 更新根评论回复计数）
 	if err := model.CreateComment(pgsql.DB, &comment); err != nil {
 		response.InternalError(c, "Failed to create comment")
 		return
 	}
 
-	// 5. 实时更新帖子评论计数（Redis Hash）
+	// 6. 实时更新帖子评论计数（Redis Hash）
 	if err := restorePostStatsIfNeed(req.PostID); err != nil {
 		logger.Log.Error("Failed to restore post stats cache: " + err.Error())
 	}
@@ -136,7 +150,7 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 		logger.Log.Error("Failed to increment post comment count in Redis: " + err.Error())
 	}
 
-	// 6. 发送Kafka消息用于持久化到数据库
+	// 7. 发送Kafka消息用于持久化到数据库
 	if err := redpanda.PublishPostCommentCount(req.PostID, 1); err != nil {
 		logger.Log.Error("Failed to publish post comment count message: " + err.Error())
 	}
@@ -146,16 +160,16 @@ func (ctrl *CommentController) CreateComment(c *gin.Context) {
 
 // CommentVO 评论VO（包含评论信息 + 评论者信息）
 type CommentVO struct {
-	ID         int64  `json:"id"`
-	PostID     int64  `json:"post_id"`
-	UserID     int64  `json:"user_id"`
-	RootID     int64  `json:"root_id"`
-	ReplyToID  int64  `json:"reply_to_id"`
-	Content    string `json:"content"`
-	LikeCount  int    `json:"like_count"`
-	ReplyCount int    `json:"reply_count"`
-	Status     int16  `json:"status"`
-	CreateTime string `json:"create_time"`
+	ID         uuid.UUID  `json:"id"`
+	PostID     uuid.UUID  `json:"post_id"`
+	UserID     uuid.UUID  `json:"user_id"`
+	RootID     *uuid.UUID `json:"root_id,omitempty"`
+	ReplyToID  *uuid.UUID `json:"reply_to_id,omitempty"`
+	Content    string     `json:"content"`
+	LikeCount  int        `json:"like_count"`
+	ReplyCount int        `json:"reply_count"`
+	Status     int16      `json:"status"`
+	CreateTime string     `json:"create_time"`
 
 	// 扩展数据（JSON格式，包含图片URL数组等）
 	ExtraData json.RawMessage `json:"extra_data,omitempty"`
@@ -165,8 +179,8 @@ type CommentVO struct {
 	AuthorAvatar string `json:"author_avatar"`
 
 	// 被回复人信息（仅回复时有值）
-	ReplyToUserID int64  `json:"reply_to_user_id,omitempty"`
-	ReplyToName   string `json:"reply_to_name,omitempty"`
+	ReplyToUserID *uuid.UUID `json:"reply_to_user_id,omitempty"`
+	ReplyToName   string     `json:"reply_to_name,omitempty"`
 
 	// 用户交互状态
 	Liked bool `json:"liked"` // 当前用户是否点赞了该评论
@@ -174,7 +188,7 @@ type CommentVO struct {
 
 // GetCommentsRequest 获取顶层评论列表的请求结构
 type GetCommentsRequest struct {
-	PostID int64  `form:"post_id" binding:"required,min=1"`
+	PostID string `form:"post_id" binding:"required,uuid"`
 	Sort   int    `form:"sort" binding:"omitempty,oneof=0 1"` // 0=点赞倒序(默认), 1=时间倒序
 	Cursor string `form:"cursor"`                             // 游标，首页不传
 }
@@ -188,7 +202,13 @@ func (ctrl *CommentController) GetComments(c *gin.Context) {
 		return
 	}
 
-	comments, nextCursor, hasMore, err := model.GetRootCommentsByCursor(pgsql.DB, req.PostID, 20, req.Sort, req.Cursor)
+	postID, err := uuid.Parse(req.PostID)
+	if err != nil {
+		response.BadRequest(c, "Invalid post_id")
+		return
+	}
+
+	comments, nextCursor, hasMore, err := model.GetRootCommentsByCursor(pgsql.DB, postID, 20, req.Sort, req.Cursor)
 	if err != nil {
 		response.InternalError(c, "Failed to get comments")
 		return
@@ -196,9 +216,9 @@ func (ctrl *CommentController) GetComments(c *gin.Context) {
 
 	// 获取当前用户点赞状态
 	userID, _ := utils.GetUserIDFromRequest(c)
-	var likedMap map[int64]bool
-	if userID > 0 && len(comments) > 0 {
-		likedMap = getCommentLikedStatus(int64(userID), comments)
+	var likedMap map[uuid.UUID]bool
+	if userID != uuid.Nil && len(comments) > 0 {
+		likedMap = getCommentLikedStatus(userID, comments)
 	}
 
 	vos := buildCommentVOs(comments, likedMap)
@@ -212,7 +232,7 @@ func (ctrl *CommentController) GetComments(c *gin.Context) {
 
 // GetRepliesRequest 获取回复列表的请求结构
 type GetRepliesRequest struct {
-	RootID int64  `form:"root_id" binding:"required,min=1"`
+	RootID string `form:"root_id" binding:"required,uuid"`
 	Sort   int    `form:"sort" binding:"omitempty,oneof=0 1"` // 0=时间倒序(默认), 1=点赞倒序
 	Cursor string `form:"cursor"`
 	Limit  int    `form:"limit" binding:"omitempty,min=1,max=50"` // 每页条数，默认10
@@ -227,8 +247,14 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 		return
 	}
 
+	rootID, err := uuid.Parse(req.RootID)
+	if err != nil {
+		response.BadRequest(c, "Invalid root_id")
+		return
+	}
+
 	// 校验根评论存在且是顶层评论
-	rootComment, err := model.GetCommentByID(pgsql.DB, req.RootID)
+	rootComment, err := model.GetCommentByID(pgsql.DB, rootID)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			response.NotFound(c, "Root comment not found")
@@ -237,7 +263,7 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 		response.InternalError(c, "Failed to check root comment")
 		return
 	}
-	if rootComment.RootID != 0 {
+	if rootComment.RootID != nil {
 		response.BadRequest(c, "Not a root comment")
 		return
 	}
@@ -247,7 +273,7 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 		limit = 10
 	}
 
-	comments, nextCursor, hasMore, err := model.GetRepliesByCursor(pgsql.DB, req.RootID, limit, req.Sort, req.Cursor)
+	comments, nextCursor, hasMore, err := model.GetRepliesByCursor(pgsql.DB, rootID, limit, req.Sort, req.Cursor)
 	if err != nil {
 		response.InternalError(c, "Failed to get replies")
 		return
@@ -255,9 +281,9 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 
 	// 获取当前用户点赞状态
 	userID, _ := utils.GetUserIDFromRequest(c)
-	var likedMap map[int64]bool
-	if userID > 0 && len(comments) > 0 {
-		likedMap = getCommentLikedStatus(int64(userID), comments)
+	var likedMap map[uuid.UUID]bool
+	if userID != uuid.Nil && len(comments) > 0 {
+		likedMap = getCommentLikedStatus(userID, comments)
 	}
 
 	vos := buildCommentVOs(comments, likedMap)
@@ -270,19 +296,19 @@ func (ctrl *CommentController) GetReplies(c *gin.Context) {
 }
 
 // buildCommentVOs 批量构建 CommentVO（包含评论者信息和被回复人信息）
-func buildCommentVOs(comments []model.Comment, likedMap map[int64]bool) []CommentVO {
+func buildCommentVOs(comments []model.Comment, likedMap map[uuid.UUID]bool) []CommentVO {
 	// 收集所有需要查询用户信息的用户ID
-	userIDSet := make(map[int64]struct{})
+	userIDSet := make(map[uuid.UUID]struct{})
 	for _, cm := range comments {
 		userIDSet[cm.UserID] = struct{}{}
 		// 收集被回复用户ID（直接从模型中的 ReplyToUserID 获取）
-		if cm.ReplyToUserID > 0 {
-			userIDSet[cm.ReplyToUserID] = struct{}{}
+		if cm.ReplyToUserID != nil {
+			userIDSet[*cm.ReplyToUserID] = struct{}{}
 		}
 	}
 
 	// 批量查询所有用户信息
-	userIDs := make([]int64, 0, len(userIDSet))
+	userIDs := make([]uuid.UUID, 0, len(userIDSet))
 	for id := range userIDSet {
 		userIDs = append(userIDs, id)
 	}
@@ -312,9 +338,9 @@ func buildCommentVOs(comments []model.Comment, likedMap map[int64]bool) []Commen
 		}
 
 		// 填充被回复人信息（直接从模型中的 ReplyToUserID 获取）
-		if cm.ReplyToUserID > 0 {
+		if cm.ReplyToUserID != nil {
 			vo.ReplyToUserID = cm.ReplyToUserID
-			if replyUser, exists := userMap[cm.ReplyToUserID]; exists {
+			if replyUser, exists := userMap[*cm.ReplyToUserID]; exists {
 				vo.ReplyToName = replyUser.Username
 			}
 		}
@@ -328,9 +354,8 @@ func buildCommentVOs(comments []model.Comment, likedMap map[int64]bool) []Commen
 // GetCommentDetail 获取单条评论详情
 // GET /comment/detail/:id
 func (ctrl *CommentController) GetCommentDetail(c *gin.Context) {
-	commentIDStr := c.Param("id")
-	var commentID int64
-	if _, err := fmt.Sscanf(commentIDStr, "%d", &commentID); err != nil || commentID <= 0 {
+	commentID, err := uuid.Parse(c.Param("id"))
+	if err != nil {
 		response.BadRequest(c, "Invalid comment id")
 		return
 	}
@@ -361,16 +386,16 @@ func (ctrl *CommentController) GetCommentDetail(c *gin.Context) {
 
 	// 获取当前用户点赞状态
 	curUserID, _ := utils.GetUserIDFromRequest(c)
-	if curUserID > 0 {
-		likedMap, cacheErr := redispkg.BatchCheckCommentLiked(int64(curUserID), []int64{commentID})
+	if curUserID != uuid.Nil {
+		likedMap, cacheErr := redispkg.BatchCheckCommentLiked(curUserID, []uuid.UUID{commentID})
 		if cacheErr == nil && likedMap[commentID] {
 			vo.Liked = true
 		} else if cacheErr == nil && !likedMap[commentID] {
-			isLiked, dbErr := model.IsCommentLiked(pgsql.DB, int64(curUserID), commentID)
+			isLiked, dbErr := model.IsCommentLiked(pgsql.DB, curUserID, commentID)
 			if dbErr == nil {
 				vo.Liked = isLiked
 				if isLiked {
-					redispkg.BackfillCommentLikes(int64(curUserID), []int64{commentID})
+					redispkg.BackfillCommentLikes(curUserID, []uuid.UUID{commentID})
 				}
 			}
 		}
@@ -383,9 +408,9 @@ func (ctrl *CommentController) GetCommentDetail(c *gin.Context) {
 	}
 
 	// 填充被回复人信息（直接从模型中的 ReplyToUserID 获取）
-	if comment.ReplyToUserID > 0 {
+	if comment.ReplyToUserID != nil {
 		vo.ReplyToUserID = comment.ReplyToUserID
-		if replyUser, err := model.GetUserByID(pgsql.DB, comment.ReplyToUserID); err == nil {
+		if replyUser, err := model.GetUserByID(pgsql.DB, *comment.ReplyToUserID); err == nil {
 			vo.ReplyToName = replyUser.Username
 		}
 	}
@@ -394,8 +419,8 @@ func (ctrl *CommentController) GetCommentDetail(c *gin.Context) {
 }
 
 // getCommentLikedStatus 批量获取评论点赞状态（先查Redis ZSET，miss时回源DB）
-func getCommentLikedStatus(userID int64, comments []model.Comment) map[int64]bool {
-	commentIDs := make([]int64, len(comments))
+func getCommentLikedStatus(userID uuid.UUID, comments []model.Comment) map[uuid.UUID]bool {
+	commentIDs := make([]uuid.UUID, len(comments))
 	for i, cm := range comments {
 		commentIDs[i] = cm.ID
 	}
@@ -404,11 +429,11 @@ func getCommentLikedStatus(userID int64, comments []model.Comment) map[int64]boo
 	likedMap, err := redispkg.BatchCheckCommentLiked(userID, commentIDs)
 	if err != nil {
 		logger.Log.Error("Failed to batch check comment liked from Redis: " + err.Error())
-		likedMap = make(map[int64]bool)
+		likedMap = make(map[uuid.UUID]bool)
 	}
 
 	// 2. Find cache misses
-	var missIDs []int64
+	var missIDs []uuid.UUID
 	for _, id := range commentIDs {
 		if !likedMap[id] {
 			missIDs = append(missIDs, id)
@@ -426,7 +451,7 @@ func getCommentLikedStatus(userID int64, comments []model.Comment) map[int64]boo
 				likedMap[id] = liked
 			}
 			// Backfill ZSET for DB-confirmed likes
-			var backfillIDs []int64
+			var backfillIDs []uuid.UUID
 			for _, id := range missIDs {
 				if dbLiked[id] {
 					backfillIDs = append(backfillIDs, id)
@@ -444,7 +469,7 @@ func getCommentLikedStatus(userID int64, comments []model.Comment) map[int64]boo
 }
 
 // restorePostStatsIfNeed 恢复帖子统计信息到Redis缓存（如果缓存不存在）
-func restorePostStatsIfNeed(postID int64) error {
+func restorePostStatsIfNeed(postID uuid.UUID) error {
 	exists, err := redispkg.PostStatisticsExists(postID)
 	if err != nil || exists {
 		return err

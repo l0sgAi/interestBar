@@ -4,11 +4,11 @@ import (
 	"interestBar/pkg/conf"
 	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/response"
-	"strconv"
 	"time"
 
 	"github.com/click33/sa-token-go/stputil"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 const (
@@ -47,19 +47,19 @@ func GetLoginIDFromRequest(c *gin.Context) (string, bool) {
 	return loginID, true
 }
 
-// GetUserIDFromRequest 从请求中获取当前登录用户的 ID (uint 类型)
+// GetUserIDFromRequest 从请求中获取当前登录用户的 ID (UUIDv7)
 // 如果获取失败，会直接返回错误响应给客户端
-func GetUserIDFromRequest(c *gin.Context) (uint64, bool) {
+func GetUserIDFromRequest(c *gin.Context) (uuid.UUID, bool) {
 	loginID, ok := GetLoginIDFromRequest(c)
 	if !ok {
-		return 0, false
+		return uuid.Nil, false
 	}
 
-	// 将 login_id 转换为 uint
-	userID, err := strconv.ParseUint(loginID, 10, 32)
+	// 将 login_id (UUID 字符串) 转换为 uuid.UUID
+	userID, err := uuid.Parse(loginID)
 	if err != nil {
 		response.BadRequest(c, "Invalid user ID")
-		return 0, false
+		return uuid.Nil, false
 	}
 
 	return userID, true
@@ -108,8 +108,11 @@ func GetUserFromSession(c *gin.Context) (*model.SysUser, bool) {
 	case map[string]interface{}:
 		// 从 map 中手动提取字段
 		user = &model.SysUser{}
-		if id, ok := v["id"].(float64); ok {
-			user.ID = int64(id)
+		// id 为 UUIDv7 字符串
+		if idStr, ok := v["id"].(string); ok {
+			if id, err := uuid.Parse(idStr); err == nil {
+				user.ID = id
+			}
 		}
 		if username, ok := v["username"].(string); ok {
 			user.Username = username

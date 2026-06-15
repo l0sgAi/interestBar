@@ -6,13 +6,14 @@ import (
 	"fmt"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
+	"github.com/google/uuid"
 )
 
 // PostDocument 帖子文档结构
 type PostDocument struct {
-	ID            int64  `json:"id"`
-	CircleID      int64  `json:"circle_id"`
-	UserID        int64  `json:"user_id"`
+	ID            string `json:"id"`
+	CircleID      string `json:"circle_id"`
+	UserID        string `json:"user_id"`
 	Type          int16  `json:"type"`
 	Title         string `json:"title"`
 	Summary       string `json:"summary"`
@@ -48,7 +49,7 @@ type PostListResponse struct {
 // size: 每页数量，默认 20
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
 // 返回：帖子列表响应（包含帖子列表、总数、分页信息）
-func SearchPosts(keyword string, circleID int64, size int, searchAfter []interface{}) (*PostListResponse, error) {
+func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
@@ -81,10 +82,10 @@ func SearchPosts(keyword string, circleID int64, size int, searchAfter []interfa
 	}
 
 	// 如果指定了圈子ID，添加圈子过滤
-	if circleID > 0 {
+	if circleID != uuid.Nil {
 		mustConditions = append(mustConditions, map[string]interface{}{
 			"term": map[string]interface{}{
-				"circle_id": circleID,
+				"circle_id": circleID.String(),
 			},
 		})
 	}
@@ -227,20 +228,10 @@ func parsePostSearchResponse(res *esapi.Response, size int) (*PostListResponse, 
 			return 0
 		}
 
-		// 辅助函数：安全地从map中获取int64值
-		getInt64 := func(key string) int64 {
-			if val, ok := sourceMap[key]; ok && val != nil {
-				if num, ok := val.(float64); ok {
-					return int64(num)
-				}
-			}
-			return 0
-		}
-
 		doc := PostDocument{
-			ID:            getInt64("id"),
-			CircleID:      getInt64("circle_id"),
-			UserID:        getInt64("user_id"),
+			ID:            getString("id"),
+			CircleID:      getString("circle_id"),
+			UserID:        getString("user_id"),
 			Type:          getInt16("type"),
 			Title:         getString("title"),
 			Summary:       getString("summary"),
@@ -280,7 +271,7 @@ func parsePostSearchResponse(res *esapi.Response, size int) (*PostListResponse, 
 // sortType: 排序类型 1=近期热点 2=最新 3=精华
 // size: 每页数量，默认 20
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
-func SearchCirclePosts(circleID int64, sortType int, size int, searchAfter []interface{}) (*PostListResponse, error) {
+func SearchCirclePosts(circleID uuid.UUID, sortType int, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
@@ -289,7 +280,7 @@ func SearchCirclePosts(circleID int64, sortType int, size int, searchAfter []int
 	mustConditions := []map[string]interface{}{
 		{"term": map[string]interface{}{"deleted": 0}},
 		{"term": map[string]interface{}{"status": 1}},
-		{"term": map[string]interface{}{"circle_id": circleID}},
+		{"term": map[string]interface{}{"circle_id": circleID.String()}},
 	}
 
 	var sortRules []map[string]interface{}

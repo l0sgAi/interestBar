@@ -54,7 +54,7 @@
 
 ## 项目结构
 
-```
+```bash
 interestBar/
 ├── cmd/                    # 应用入口
 │   ├── main.go             # 主程序启动文件
@@ -92,8 +92,8 @@ interestBar/
 ### 环境要求
 
 - Go 1.25.4+
-- PostgreSQL 17
-- Redis 6+
+- PostgreSQL 18
+- Redis 8.2
 
 ### 1. 克隆项目
 
@@ -169,7 +169,7 @@ APP_ENV=dev ./interestBar -c configs/config.yaml -b configs/bootstrap.yaml
 go run cmd/main.go -c configs/config.yaml -b ""
 ```
 
-服务将在 http://localhost:8888 启动
+服务将在 <http://localhost:8888> 启动
 
 ## API 端点
 

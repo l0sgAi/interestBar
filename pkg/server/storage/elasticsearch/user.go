@@ -10,7 +10,7 @@ import (
 
 // UserDocument 用户文档结构
 type UserDocument struct {
-	ID         int64  `json:"id"`
+	ID         string `json:"id"`
 	Username   string `json:"username"`
 	Email      string `json:"email"`
 	AvatarURL  string `json:"avatar_url"`
@@ -24,10 +24,10 @@ type UserDocument struct {
 
 // UserListResponse 用户列表响应
 type UserListResponse struct {
-	Users       []UserDocument  `json:"users"`
-	Total       int64           `json:"total"`
-	Size        int             `json:"size"`
-	SearchAfter []interface{}   `json:"search_after,omitempty"` // 用于获取下一页
+	Users       []UserDocument `json:"users"`
+	Total       int64          `json:"total"`
+	Size        int            `json:"size"`
+	SearchAfter []interface{}  `json:"search_after,omitempty"` // 用于获取下一页
 }
 
 // SearchUsers 搜索用户
@@ -44,7 +44,7 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserList
 	// 构建搜索查询
 	var searchQuery map[string]interface{}
 
-	// 定义排序规则：按id倒序（最新的用户id最大，在前），避免日期精度和范围问题
+	// 定义排序规则：按id倒序(UUIDv7 字典序 == 时间序)，避免日期精度和范围问题
 	sortRules := []map[string]interface{}{
 		{
 			"id": map[string]interface{}{
@@ -68,7 +68,7 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserList
 	}
 
 	if keyword == "" {
-		// 无关键字时，返回所有符合条件的用户，按创建时间倒序
+		// 无关键字时，返回所有符合条件的用户，按id倒序
 		searchQuery = map[string]interface{}{
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
@@ -78,45 +78,45 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserList
 			"size": size,
 			"sort": sortRules,
 		}
-		} else {
-			// 有关键字时，使用 multi_match 进行加权搜索
-			// username 权重是 email 的 3 倍，按_score排序
-			sortWithScore := []map[string]interface{}{
-				{
-					"_score": map[string]interface{}{
-						"order": "desc",
-					},
+	} else {
+		// 有关键字时，使用 multi_match 进行加权搜索
+		// username 权重是 email 的 3 倍，按_score排序
+		sortWithScore := []map[string]interface{}{
+			{
+				"_score": map[string]interface{}{
+					"order": "desc",
 				},
-				{
-					"id": map[string]interface{}{
-						"order": "desc",
-					},
+			},
+			{
+				"id": map[string]interface{}{
+					"order": "desc",
 				},
-			}
-
-			// 添加关键字搜索条件
-			searchConditions := []map[string]interface{}{
-				{
-					"multi_match": map[string]interface{}{
-						"query":    keyword,
-						"fields":   []string{"username^3", "email^1"},
-						"type":     "best_fields",
-						"operator": "or",
-					},
-				},
-			}
-			searchConditions = append(searchConditions, mustConditions...)
-
-			searchQuery = map[string]interface{}{
-				"query": map[string]interface{}{
-					"bool": map[string]interface{}{
-						"must": searchConditions,
-					},
-				},
-				"size": size,
-				"sort": sortWithScore,
-			}
+			},
 		}
+
+		// 添加关键字搜索条件
+		searchConditions := []map[string]interface{}{
+			{
+				"multi_match": map[string]interface{}{
+					"query":    keyword,
+					"fields":   []string{"username^3", "email^1"},
+					"type":     "best_fields",
+					"operator": "or",
+				},
+			},
+		}
+		searchConditions = append(searchConditions, mustConditions...)
+
+		searchQuery = map[string]interface{}{
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": searchConditions,
+				},
+			},
+			"size": size,
+			"sort": sortWithScore,
+		}
+	}
 
 	// 添加 search_after 参数（如果提供）
 	if len(searchAfter) > 0 {
@@ -168,12 +168,12 @@ func parseUserSearchResponse(res *esapi.Response, size int) (*UserListResponse, 
 		source := hitMap["_source"]
 		sourceMap := source.(map[string]interface{})
 
-			// 获取排序值（用于下一页）
-			if sortArr, ok := hitMap["sort"].([]interface{}); ok {
-				if len(sortArr) > 0 {
-					nextSearchAfter = sortArr
-				}
+		// 获取排序值（用于下一页）
+		if sortArr, ok := hitMap["sort"].([]interface{}); ok {
+			if len(sortArr) > 0 {
+				nextSearchAfter = sortArr
 			}
+		}
 
 		// 辅助函数：安全地从map中获取字符串值
 		getString := func(key string) string {
@@ -195,18 +195,8 @@ func parseUserSearchResponse(res *esapi.Response, size int) (*UserListResponse, 
 			return 0
 		}
 
-		// 辅助函数：安全地从map中获取int64值
-		getInt64 := func(key string) int64 {
-			if val, ok := sourceMap[key]; ok && val != nil {
-				if num, ok := val.(float64); ok {
-					return int64(num)
-				}
-			}
-			return 0
-		}
-
 		doc := UserDocument{
-			ID:         getInt64("id"),
+			ID:         getString("id"),
 			Username:   getString("username"),
 			Email:      getString("email"),
 			AvatarURL:  getString("avatar_url"),
