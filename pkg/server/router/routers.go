@@ -98,13 +98,7 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		comment.GET("/detail/:id", sagin.CheckLogin(), commentCtrl.GetCommentDetail)
 	}
 
-	// Category routes
-	categoryCtrl := controller.NewCategoryController()
-	category := r.Group("category")
-	{
-		// 获取分类列表
-		category.GET("/get", sagin.CheckLogin(), categoryCtrl.GetCategories)
-	}
+	// Category routes —— 已迁移至 pkg/domains/category，由 composition.RegisterDomainRoutes 注册
 
 	// Like routes (需要登录鉴权)
 	likeCtrl := controller.NewLikeController()
