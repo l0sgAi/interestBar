@@ -1,57 +1,17 @@
 package router
 
 import (
-	"interestBar/pkg/logger"
 	"interestBar/pkg/server/controller"
 
 	sagin "github.com/click33/sa-token-go/integrations/gin"
 	"github.com/gin-gonic/gin"
 )
 
+// RegisterRoutes 注册尚未迁移到 domains/ 的领域路由。
+//
+// 已迁移的领域（category/storage/user/auth）由 composition.RegisterDomainRoutes
+// 注册，不在此处出现。待所有领域搬迁完成后，本文件将被删除。
 func RegisterRoutes(r *gin.RouterGroup) {
-	// Auth routes (公开访问，不需要鉴权)
-	auth := r.Group("auth")
-	{
-		oauthCtrl := controller.NewOAuthController()
-		auth.GET("google/login", oauthCtrl.Login("google"))
-		auth.GET("google/callback", oauthCtrl.Callback("google"))
-		auth.GET("github/login", oauthCtrl.Login("github"))
-		auth.GET("github/callback", oauthCtrl.Callback("github"))
-		auth.GET("azure/login", oauthCtrl.Login("azure"))
-		auth.GET("azure/callback", oauthCtrl.Callback("azure"))
-
-		regCtrl := controller.NewRegisterController()
-		auth.POST("register/send-code", regCtrl.SendCode)
-		auth.POST("register/verify", regCtrl.VerifyCode)
-		auth.POST("register/complete", regCtrl.CompleteRegistration)
-
-		loginCtrl := controller.NewLoginController()
-		auth.POST("login", loginCtrl.Login)
-
-		userCtrl := controller.NewUserController()
-		// logout 和 me 需要登录
-		auth.POST("logout", sagin.CheckLogin(), userCtrl.Logout)
-		auth.GET("me", sagin.CheckLogin(), userCtrl.GetCurrentUser)
-	}
-
-	// User routes (需要登录)
-	userCtrl := controller.NewUserController()
-	user := r.Group("user")
-	{
-		user.GET("get", sagin.CheckLogin(), userCtrl.GetUser)
-		user.PUT("update", sagin.CheckLogin(), userCtrl.UpdateProfile)
-		user.GET("search", sagin.CheckLogin(), userCtrl.SearchUsers)
-		user.GET("detail/:id", sagin.CheckLogin(), userCtrl.GetUserDetail)
-	}
-
-	// Upload routes (需要登录鉴权)
-	uploadCtrl := controller.NewUploadController(logger.Log)
-	upload := r.Group("upload")
-	{
-		// 上传图片接口 - 使用 sagin.CheckLogin() 进行鉴权
-		upload.POST("/image", sagin.CheckLogin(), uploadCtrl.UploadImage)
-	}
-
 	// Circle routes (需要登录鉴权)
 	circleCtrl := controller.NewCircleController()
 	circle := r.Group("circle")
@@ -99,6 +59,9 @@ func RegisterRoutes(r *gin.RouterGroup) {
 	}
 
 	// Category routes —— 已迁移至 pkg/domains/category，由 composition.RegisterDomainRoutes 注册
+	// Storage (upload) routes —— 已迁移至 pkg/domains/storage
+	// User routes —— 已迁移至 pkg/domains/user
+	// Auth routes —— 已迁移至 pkg/domains/auth
 
 	// Like routes (需要登录鉴权)
 	likeCtrl := controller.NewLikeController()
@@ -107,5 +70,4 @@ func RegisterRoutes(r *gin.RouterGroup) {
 		// 点赞/取消点赞 - 需要登录
 		like.POST("/toggle", sagin.CheckLogin(), likeCtrl.ToggleLike)
 	}
-
 }

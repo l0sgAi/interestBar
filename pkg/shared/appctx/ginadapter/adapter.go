@@ -7,6 +7,7 @@ package ginadapter
 
 import (
 	"context"
+	"mime/multipart"
 	"net/http"
 
 	"interestBar/pkg/shared/appctx"
@@ -39,6 +40,16 @@ func (g *ginAppContext) Query(name string) string { return g.c.Query(name) }
 func (g *ginAppContext) Header(name string) string { return g.c.GetHeader(name) }
 func (g *ginAppContext) PostForm(name string) string { return g.c.PostForm(name) }
 
+// FormFile 读取 multipart 上传的单个文件，映射到 gin.Context.FormFile。
+func (g *ginAppContext) FormFile(name string) (*multipart.FileHeader, error) {
+	return g.c.FormFile(name)
+}
+
+// MultipartForm 读取整个 multipart 表单，映射到 gin.Context.MultipartForm。
+func (g *ginAppContext) MultipartForm() (*multipart.Form, error) {
+	return g.c.MultipartForm()
+}
+
 // ---- 请求体绑定 ----
 
 func (g *ginAppContext) BindJSON(v any) error {
@@ -53,6 +64,11 @@ func (g *ginAppContext) BindQuery(v any) error {
 
 func (g *ginAppContext) JSON(code int, v any) {
 	g.c.JSON(code, v)
+}
+
+// Redirect 发送 HTTP 重定向，映射到 gin.Context.Redirect。
+func (g *ginAppContext) Redirect(code int, url string) {
+	g.c.Redirect(code, url)
 }
 
 func (g *ginAppContext) SetHeader(key, value string) {

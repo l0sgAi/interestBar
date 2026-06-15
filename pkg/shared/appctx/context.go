@@ -12,6 +12,7 @@ package appctx
 
 import (
 	"context"
+	"mime/multipart"
 
 	"github.com/google/uuid"
 )
@@ -37,6 +38,11 @@ type AppContext interface {
 	Header(name string) string
 	// PostForm 读取表单字段（multipart 或 application/x-www-form-urlencoded）。
 	PostForm(name string) string
+	// FormFile 读取 multipart 上传的单个文件。
+	// 返回的是标准库 *multipart.FileHeader，不绑定任何 Web 框架类型。
+	FormFile(name string) (*multipart.FileHeader, error)
+	// MultipartForm 读取整个 multipart 表单（含多文件）。
+	MultipartForm() (*multipart.Form, error)
 
 	// ---- 请求体绑定 ----
 
@@ -49,6 +55,9 @@ type AppContext interface {
 
 	// JSON 写入 HTTP 响应：状态码 + JSON 序列化的 v。
 	JSON(code int, v any)
+	// Redirect 发送 HTTP 重定向（302/307 等）到给定 URL。
+	// 用于 OAuth 回调等"需要跳转前端"的场景。
+	Redirect(code int, url string)
 	// SetHeader 设置响应头。
 	SetHeader(key, value string)
 	// Abort 终止后续中间件/handler 的执行。
