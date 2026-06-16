@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"interestBar/pkg/domains/circle/domain"
+	sharedomain "interestBar/pkg/shared/domain"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -81,6 +82,9 @@ func (r *circleRepoPG) ExistsBySlug(ctx context.Context, slug string) (bool, err
 // Create 创建圈子并自动将创建者设为圈主（事务），与旧 model.CreateCircle 一致。
 func (r *circleRepoPG) Create(ctx context.Context, circle *domain.Circle) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if circle.ID == uuid.Nil {
+			circle.ID = sharedomain.NewID()
+		}
 		if err := tx.Create(circle).Error; err != nil {
 			return err
 		}
@@ -91,6 +95,9 @@ func (r *circleRepoPG) Create(ctx context.Context, circle *domain.Circle) error 
 			Status:   domain.MemberStatusNormal,
 			IsTop:    0,
 			IsDisturb: 0,
+		}
+		if member.ID == uuid.Nil {
+			member.ID = sharedomain.NewID()
 		}
 		if err := tx.Create(&member).Error; err != nil {
 			return err
@@ -175,6 +182,9 @@ func (r *memberRepoPG) JoinCircle(ctx context.Context, circleID, userID uuid.UUI
 		Status:   status,
 		IsTop:    0,
 		IsDisturb: 0,
+	}
+	if member.ID == uuid.Nil {
+		member.ID = sharedomain.NewID()
 	}
 	if err := r.db.WithContext(ctx).Create(&member).Error; err != nil {
 		return nil, err

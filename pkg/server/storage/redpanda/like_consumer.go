@@ -9,6 +9,7 @@ import (
 	postdomain "interestBar/pkg/domains/post/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/storage/db/pgsql"
+	sharedomain "interestBar/pkg/shared/domain"
 	"strings"
 	"sync"
 	"time"
@@ -182,6 +183,7 @@ func batchUpdateCommentLikes(deltas []*likeEventDelta) error {
 				err := tx.Where("user_id = ? AND comment_id = ?", d.UserID, d.TargetID).First(&existing).Error
 				if err == gorm.ErrRecordNotFound {
 					if err := tx.Create(&commentdomain.CommentLike{
+						ID:        sharedomain.NewID(),
 						UserID:    d.UserID,
 						CommentID: d.TargetID,
 						PostID:    &d.PostID,
@@ -240,6 +242,7 @@ func batchUpdatePostLikes(deltas []*likeEventDelta) error {
 				err := tx.Where("user_id = ? AND post_id = ?", d.UserID, d.TargetID).First(&existing).Error
 				if err == gorm.ErrRecordNotFound {
 					if err := tx.Create(&postdomain.PostLike{
+						ID:      sharedomain.NewID(),
 						UserID:  d.UserID,
 						PostID:  d.TargetID,
 						Deleted: postdomain.PostLikeActive,

@@ -9,6 +9,7 @@ import (
 	"fmt"
 
 	"interestBar/pkg/domains/comment/domain"
+	sharedomain "interestBar/pkg/shared/domain"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -31,6 +32,9 @@ func NewCommentRepository(db *gorm.DB) domain.CommentRepository {
 func (r *commentRepoPG) Create(ctx context.Context, comment *domain.Comment) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// 1. 插入评论
+		if comment.ID == uuid.Nil {
+			comment.ID = sharedomain.NewID()
+		}
 		if err := tx.Create(comment).Error; err != nil {
 			return err
 		}

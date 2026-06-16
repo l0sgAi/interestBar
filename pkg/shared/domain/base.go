@@ -38,11 +38,21 @@ type BaseModel struct {
 	UpdateTime time.Time `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
 }
 
+// NewID 生成新的 UUIDv7 主键。
+//
+// 供各领域 repository 在 Create 前为实体预分配主键：内联字段（未内嵌
+// BaseModel）的领域实体没有 BeforeCreate 钩子，需在 repo 层显式调用，
+// 否则 GORM 会把 uuid.UUID 零值（uuid.Nil）当作有效值发送，覆盖 DB 的
+// DEFAULT uuidv7()。
+func NewID() uuid.UUID {
+	return uuid.Must(uuid.NewV7())
+}
+
 // BeforeCreate 在插入前为未设置主键的记录生成 UUIDv7。
 // 仅当 ID 为零值（uuid.Nil）时生成，允许外部显式指定（如种子数据）。
 func (b *BaseModel) BeforeCreate(tx *gorm.DB) error {
 	if b.ID == uuid.Nil {
-		b.ID = uuid.Must(uuid.NewV7())
+		b.ID = NewID()
 	}
 	return nil
 }

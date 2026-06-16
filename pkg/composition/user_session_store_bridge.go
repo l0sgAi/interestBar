@@ -15,6 +15,7 @@ import (
 
 	authdomain "interestBar/pkg/domains/auth/domain"
 	userdomain "interestBar/pkg/domains/user/domain"
+	sharedomain "interestBar/pkg/shared/domain"
 
 	"gorm.io/gorm"
 )
@@ -48,6 +49,7 @@ func (b *userSessionStoreBridge) GetByEmail(email string) (*authdomain.LoginUser
 // Create 创建用户（邮箱注册流程）。
 func (b *userSessionStoreBridge) Create(input authdomain.CreateUserInput) (*authdomain.LoginUser, error) {
 	u := userdomain.SysUser{
+		ID:       sharedomain.NewID(),
 		Username: input.Username,
 		Email:    input.Email,
 		Pwd:      input.Pwd,
@@ -88,6 +90,7 @@ func (b *userSessionStoreBridge) FindOrCreateForOAuth(lookup authdomain.OAuthUse
 			username = strings.Split(lookup.Email, "@")[0]
 		}
 		newUser := userdomain.SysUser{
+			ID:        sharedomain.NewID(),
 			Username:  username,
 			Email:     lookup.Email,
 			AvatarURL: lookup.AvatarURL,

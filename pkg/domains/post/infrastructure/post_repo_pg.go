@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"interestBar/pkg/domains/post/domain"
+	sharedomain "interestBar/pkg/shared/domain"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -34,6 +35,9 @@ func (r *postRepoPG) GetByID(ctx context.Context, postID uuid.UUID) (*domain.Pos
 }
 
 func (r *postRepoPG) Create(ctx context.Context, post *domain.Post) error {
+	if post.ID == uuid.Nil {
+		post.ID = sharedomain.NewID()
+	}
 	return r.db.WithContext(ctx).Create(post).Error
 }
 

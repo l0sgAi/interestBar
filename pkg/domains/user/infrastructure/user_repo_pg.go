@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"interestBar/pkg/domains/user/domain"
+	sharedomain "interestBar/pkg/shared/domain"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -74,6 +75,9 @@ func (r *userRepoPG) GetByIDs(ctx context.Context, userIDs []uuid.UUID) (map[uui
 
 // Create 创建用户。
 func (r *userRepoPG) Create(ctx context.Context, user *domain.SysUser) error {
+	if user.ID == uuid.Nil {
+		user.ID = sharedomain.NewID()
+	}
 	return r.db.WithContext(ctx).Create(user).Error
 }
 
