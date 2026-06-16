@@ -358,6 +358,12 @@ func (s *circleServiceImpl) CreateCircle(ctx context.Context, userID uuid.UUID, 
 	if err := s.repo.Create(ctx, circle); err != nil {
 		return err
 	}
+
+	// repo.Create 在事务内把创建者设为圈主成员（status=normal），创建者的已加入圈子列表
+	// 已变化，清除旁路缓存，避免 /circle/my 浏览模式读到旧列表。
+	if err := s.joinedCache.InvalidateJoined(ctx, userID); err != nil {
+		logger.Log.Error("Failed to delete user joined circles cache: " + err.Error())
+	}
 	return nil
 }
 
