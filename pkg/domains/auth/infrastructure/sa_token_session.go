@@ -10,7 +10,7 @@ package infrastructure
 import (
 	"interestBar/pkg/domains/auth/domain"
 
-	"github.com/click33/sa-token-go/stputil"
+	"github.com/sa-tokens/sa-token-go/stputil"
 )
 
 // SessionKeyForUser session 中存储用户信息的 key（与旧 utils.SessionKeyForUser 一致）。

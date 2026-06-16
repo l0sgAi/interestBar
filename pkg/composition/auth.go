@@ -5,7 +5,7 @@ import (
 	"interestBar/pkg/shared/appctx"
 	"interestBar/pkg/shared/httputil"
 
-	"github.com/click33/sa-token-go/stputil"
+	"github.com/sa-tokens/sa-token-go/stputil"
 )
 
 // RequireLogin 是一个框架无关的"需要登录"中间件（routing.HandlerFunc）。

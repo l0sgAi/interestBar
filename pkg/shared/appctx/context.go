@@ -6,8 +6,7 @@
 //   - AppContext 同时承载"HTTP 请求/响应"与"业务上下文"（当前登录用户 ID 等），
 //     避免把 *gin.Context 这类框架类型泄漏到业务层。
 //
-// 实现方：pkg/shared/appctx/ginadapter 提供 gin 版实现；
-// 未来 pkg/shared/appctx/hertzadapter 将提供 hertz 版实现。
+// 实现方：pkg/shared/appctx/hertzadapter 提供 hertz 版实现。
 package appctx
 
 import (
@@ -63,7 +62,7 @@ type AppContext interface {
 	// Abort 终止后续中间件/handler 的执行。
 	//
 	// 通常在鉴权中间件写完错误响应后调用，防止链上后续 handler 再次写响应。
-	// gin 实现映射到 gin.Context.Abort()；hertz 实现映射到 RequestContext.Abort()。
+	// hertz 实现映射到 RequestContext.Abort()。
 	Abort()
 
 	// ---- 业务上下文（由鉴权中间件填充）----
@@ -81,28 +80,6 @@ type AppContext interface {
 	Device() string
 	// SetDevice 设置登录设备标识。
 	SetDevice(device string)
-
-	// ---- 过渡期：访问底层 Web 框架对象 ----
-	//
-	// 以下方法仅供 composition 层的"框架中间件适配器"使用，让 gin 版
-	// 中间件（如 sagin.CheckLogin）能在被包装成 routing.HandlerFunc 后，
-	// 仍然拿到 *gin.Context 完成鉴权流程。
-	//
-	// 业务层（领域 service/handler）禁止使用这些方法。
-	// 迁移 hertz 完成后，这些方法会被移除。
-
-	// GinContext 返回底层的 *gin.Context。
-	// 仅 gin 实现可用；hertz 实现会 panic。
-	// 调用方应通过类型断言或 capabilities 检查。
-	GinContext() any
-}
-
-// Capabilities 描述 AppContext 实现所绑定的底层框架。
-//
-// 用于 composition 层决定走哪条适配路径（gin / hertz）。
-type Capabilities struct {
-	HasGin bool // 实现底层是 gin.Context
-	// 未来：HasHertz bool
 }
 
 // contextKey 是 AppContext 内部用于在框架 context 里存取业务值的 key 类型。

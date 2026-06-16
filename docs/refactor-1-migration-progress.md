@@ -87,4 +87,4 @@
 - `pkg/server/model/user.go`（仅剩 `SysUser` 实体，仍被 `pkg/server/auth/*` OAuth provider 和 `pgsql/connect.go` AutoMigrate 使用。待 auth 领域内联 OAuth provider 后可整体删除）
 - `pkg/server/model/base.go`（BaseModel 别名存根，指向 `pkg/shared/domain/base.go`。随 `model/user.go` 一起删除）
 - `pkg/server/auth/`（OAuth provider 适配器已在新架构中包装，旧代码待后续 refactor 评估是否内联到 `pkg/domains/auth/infrastructure/`）
-- `pkg/server/response/`（仅被 `pkg/server/router/middleware/csrf.go` 使用，后者本身未注册到路由。可考虑迁移到 `httputil` 或删除）
+- ~~`pkg/server/response/`~~ ✅ **已在重构二（gin→hertz 迁移，2026-06-16）删除**（连同死代码 `pkg/server/router/middleware/csrf.go`、`cache.go`，业务侧早已改用 `pkg/shared/httputil`）

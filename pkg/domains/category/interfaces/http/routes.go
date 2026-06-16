@@ -10,8 +10,8 @@ import (
 // 注意：调用方需保证传入的 rg 已经挂了全局中间件（CORS/log 等），
 // 但**不需要**预先挂鉴权——category 路由的鉴权由本函数内部按需添加。
 //
-// 参数 authCheck 是"需要登录"的中间件（对应 sagin.CheckLogin()），
-// 由 composition 层注入，避免领域包 import gin 版 sa-token。
+// 参数 authCheck 是"需要登录"的中间件（对应 composition.RequireLogin），
+// 由 composition 层注入，避免领域包 import sa-token 集成。
 func RegisterRoutes(
 	rg routing.RouterGroup,
 	svc application.CategoryService,

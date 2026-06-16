@@ -1,26 +1,36 @@
 package router
 
 import (
-	"interestBar/pkg/composition"
-	"interestBar/pkg/logger"
-	"interestBar/pkg/server/router/middleware"
+	"fmt"
 
-	"github.com/gin-gonic/gin"
+	"interestBar/pkg/composition"
+	"interestBar/pkg/composition/hertzadapter"
+	"interestBar/pkg/composition/middleware"
+	"interestBar/pkg/conf"
+	"interestBar/pkg/logger"
+
+	"github.com/cloudwego/hertz/pkg/app/server"
 )
 
-func InitRouter() *gin.Engine {
-	r := gin.New()
+// InitRouter 创建并装配 hertz server，返回 *server.Hertz。
+//
+// 不在这里调用 Spin/Run（阻塞），由调用方决定运行方式，便于资源清理编排。
+// server.Default() 已自带 Recovery；这里额外挂 Logger 和 CORS。
+func InitRouter() *server.Hertz {
+	h := server.Default(
+		server.WithHostPorts(fmt.Sprintf(":%d", conf.Config.Server.Port)),
+	)
 
 	// Middleware
-	r.Use(middleware.Logger())
-	r.Use(gin.Recovery())
-	r.Use(middleware.CORS()) // 添加 CORS 中间件
+	h.Use(middleware.Logger())
+	h.Use(middleware.CORS())
 
 	// Register Domain Routes（所有领域已搬迁到 pkg/domains/）
-	composition.RegisterDomainRoutes(r)
+	// 入口层做 engine→RouterGroup 的框架无关包装。
+	composition.RegisterDomainRoutes(hertzadapter.ForEngine(h))
 
 	if logger.Log != nil {
 		logger.Log.Info("router register success")
 	}
-	return r
+	return h
 }

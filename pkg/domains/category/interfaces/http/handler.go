@@ -2,8 +2,7 @@
 //
 // 这是 category 领域与外部 Web 框架接触的唯一层。
 // handler 只做：解析请求 → 调用 application.Service → 用 httputil 写响应。
-// 它通过 appctx.AppContext 与具体框架解耦，迁移 hertz 时只需替换
-// ginadapter 为 hertzadapter，本文件不动。
+// 它通过 appctx.AppContext 与具体框架解耦，底层框架（hertz）切换时本文件不动。
 package http
 
 import (
@@ -24,7 +23,7 @@ func NewHandler(svc application.CategoryService) *Handler {
 
 // GetCategories GET /category/get
 //
-// 获取分类列表（带缓存）。需登录鉴权（由路由层挂 sagin.CheckLogin()）。
+// 获取分类列表（带缓存）。需登录鉴权（由路由层挂 composition.RequireLogin）。
 func (h *Handler) GetCategories(c appctx.AppContext) {
 	categories, err := h.svc.GetCategories(c)
 	if err != nil {

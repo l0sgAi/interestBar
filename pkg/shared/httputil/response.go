@@ -1,10 +1,9 @@
 // Package httputil 提供与 Web 框架无关的 HTTP 响应工具。
 //
-// 原 pkg/server/response 包直接依赖 *gin.Context，这里重写为依赖
-// appctx.AppContext。这样业务代码（领域 handler / service）在响应时
-// 不再绑定 gin，为 DDD 改良（领域代码框架无关）和后续 hertz 迁移铺路。
+// 它依赖 appctx.AppContext（而非具体框架的 Context），这样业务代码
+// （领域 handler / service）在响应时不绑定 hertz，实现 DDD"领域代码框架无关"。
 //
-// 响应结构与错误码与原 pkg/server/response 完全一致，保证行为零变化。
+// 响应结构与错误码稳定，迁移 hertz 时本包零改动。
 package httputil
 
 import (

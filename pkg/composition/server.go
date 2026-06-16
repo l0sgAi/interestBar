@@ -2,7 +2,6 @@
 package composition
 
 import (
-	"interestBar/pkg/composition/ginadapter"
 	authapp "interestBar/pkg/domains/auth/application"
 	authhttp "interestBar/pkg/domains/auth/interfaces/http"
 	authinfra "interestBar/pkg/domains/auth/infrastructure"
@@ -29,14 +28,14 @@ import (
 	userhttp "interestBar/pkg/domains/user/interfaces/http"
 	userinfra "interestBar/pkg/domains/user/infrastructure"
 	"interestBar/pkg/shared/routing"
-
-	"github.com/gin-gonic/gin"
 )
 
-// RegisterDomainRoutes 把所有"已搬迁到 domains/"的领域路由挂到 gin engine 上。
-func RegisterDomainRoutes(e *gin.Engine) {
+// RegisterDomainRoutes 把所有"已搬迁到 domains/"的领域路由挂到 Web server 上。
+//
+// root 是框架无关的 RouterGroup（由入口层用 composition/hertzadapter.ForEngine
+// 从 *server.Hertz 包装而来）。这样本函数彻底不感知底层框架。
+func RegisterDomainRoutes(root routing.RouterGroup) {
 	deps := NewDeps()
-	root := ginadapter.ForEngine(e)
 	authCheck := RequireLogin
 
 	// 先构造各领域 Service（不立即注册路由，因为要互注 Facade）

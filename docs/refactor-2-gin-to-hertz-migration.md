@@ -1,11 +1,42 @@
 # 重构二：Gin → Hertz 框架迁移方案
 
-> 状态：**计划文档（待评审）** · 日期：2026-06-15
-> 适用代码基线：`feature/hertz-ddd-port-20260615`（Gin v1.11.0）
+> 状态：**已完成（2026-06-16）** · 原计划日期：2026-06-15
+> 适用代码基线：`feature/hertz-ddd-port-20260615`
+
+---
+
+## 零、执行结果（2026-06-16，覆盖下方原计划）
+
+迁移已落地。**关键方案调整：原计划假设"sa-token-go 无官方 hertz 适配，需自写 ~100 行 adapter"——经查证 sa-token-go v0.2.x 已官方提供 `integrations/hertz`，本次直接采用官方集成，省去自写 adapter。**
+
+### 实际落地的改动
+
+| 维度 | 决策 | 说明 |
+|---|---|---|
+| **sa-token 集成** | ✅ 采用官方 `integrations/hertz`（v0.2.2） | 不再自写 adapter。顶层函数 `DefaultConfig/NewManager/SetManager` 在 gin/hertz 集成包签名一致；`stputil` API 在 v0.2.x 无 breaking change，鉴权代码零改动。 |
+| **import 路径迁移** | `click33/sa-token-go` → `sa-tokens/sa-token-go` | v0.2.x 子模块 go.mod 声明的模块路径是 `github.com/sa-tokens/...`，click33 为别名。 |
+| **AppContext 接口** | 删除过渡期方法 `GinContext() any` 及 `Capabilities` | 接口彻底框架无关，不再需要"暴露底层框架对象"的逃生舱。 |
+| **adapter 包** | 新增 `pkg/shared/appctx/hertzadapter` + `pkg/composition/hertzadapter` | 镜像原 ginadapter 结构。`composition/server.go` 入参改为 `routing.RouterGroup`，彻底不感知框架。 |
+| **中间件** | 新建 `pkg/composition/middleware/`（hertz 版 CORS + Logger） | 删除原 `pkg/server/router/middleware/`（含死代码 csrf/cache）。 |
+| **入口** | `router.InitRouter() → *server.Hertz`，`server.Default()` 自带 Recovery，`r.Spin()` 阻塞 + 优雅关停 | 移除 cmd/apps 里手写的 signal.Notify。 |
+| **死代码清理** | 删除 `pkg/server/response/`、`pkg/server/router/middleware/{csrf,cache}.go` | 原计划未明确，本次一并清除。 |
+
+### 架构守卫验证（全部通过）
+
+- `pkg/` 全局零 `gin-gonic/gin` import、零 `integrations/gin` import
+- `pkg/domains/` 零 gin/hertz 框架依赖（业务层框架无关）
+- `pkg/shared/` 仅 `appctx/hertzadapter` 接触 hertz（合法适配层）
+- `pkg/composition/` 核心文件（server.go/auth.go）框架无关
+- `go build` / `go vet` / `go test` 全部通过
+- `go.mod` 无 gin-gonic/gin-contrib/click33 残留
+
+> 下方保留原计划文档作为设计历史记录。
 
 ---
 
 ## 一、结论先行（TL;DR）
+
+> ⚠️ 本节为 2026-06-15 的原计划评估，其中"需自写 sa-token hertz adapter"的假设已被执行结果推翻（见上方第零章）。
 
 | 评估项 | 结论 |
 |---|---|

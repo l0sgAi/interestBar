@@ -19,10 +19,8 @@ import (
 //     本适配器只暴露 domain.OAuthProvider 这一层抽象。
 //
 // 注意：auth.Provider.Exchange/FetchUser 接收的 ctx 是 context.Context，
-// 但旧 Provider 接口签名里 Exchange(ctx, code) 把 ctx 传给了 oauth2.Exchange，
-// 实际上原签名是 Exchange(ctx interface{...}, code string)。原代码用的是
-// (*oauth2.Config).Exchange(c, code)，其中 c 是 *gin.Context（实现了 context.Context）。
-// 适配器这里统一接收标准库 context.Context。
+// 适配器这里统一接收标准库 context.Context，满足 oauth2.Config.Exchange 的要求，
+// 不依赖任何 Web 框架（旧版曾透传 *gin.Context，但 oauth2 只把它当 context.Context 用）。
 type oauthProviderAdapter struct {
 	legacy auth.Provider
 }

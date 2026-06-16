@@ -12,10 +12,7 @@ import (
 	redpanda "interestBar/pkg/server/storage/redpanda"
 	s3storage "interestBar/pkg/server/storage/s3"
 	emailutil "interestBar/pkg/util/email"
-	"os"
-	"os/signal"
 	"strings"
-	"syscall"
 )
 
 func Run(configPath, bootstrapPath string) {
@@ -110,19 +107,11 @@ func Run(configPath, bootstrapPath string) {
 	addr := fmt.Sprintf(":%d", conf.Config.Server.Port)
 	logger.Log.Info("Server starting on " + addr)
 
-	go func() {
-		if err := r.Run(addr); err != nil {
-			logger.Log.Fatal("Server start failed: " + err.Error())
-		}
-	}()
+	// Spin() 内部处理 SIGINT/SIGTERM 并优雅关停（阻塞直到收到信号）。
+	r.Spin()
 
-	// Wait for interrupt signal to gracefully shutdown the server
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	// 收到信号后 Spin 返回，执行资源清理。
 	logger.Log.Info("Shutdown Server ...")
-
-	// Close resources
 	redis.CloseRedis()
 	auth.CloseSaToken()
 	redpanda.CloseRedpandaProducer()
