@@ -53,9 +53,9 @@ type UpdateProfileRequest struct {
 
 // SearchUsersRequest 搜索用户的请求结构。
 type SearchUsersRequest struct {
-	Keyword     string `form:"keyword"`
-	Size        int    `form:"size"`
-	SearchAfter string `form:"search_after"`
+	Keyword     string `query:"keyword"`
+	Size        int    `query:"size"`
+	SearchAfter string `query:"search_after"`
 }
 
 // UpdateProfile PUT /user/update —— 修改用户自身资料。

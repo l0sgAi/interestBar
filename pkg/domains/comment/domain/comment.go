@@ -83,4 +83,9 @@ var (
 	ErrReplyTargetNotInThread = errors.New("reply target does not belong to the same thread")
 	// ErrEmptyContent 评论内容为空（清洗后）。
 	ErrEmptyContent = errors.New("comment content is empty")
+	// ErrInvalidCursor 游标格式非法（缺失字段、类型错误或 base64 损坏）。
+	//
+	// 由 infrastructure 层 decode 游标时返回，handler 据此映射 400 而非 500。
+	// 防御点：游标来自用户可控的 query 参数，必须防御性解析，避免 panic。
+	ErrInvalidCursor = errors.New("invalid cursor")
 )

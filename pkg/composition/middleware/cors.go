@@ -39,32 +39,7 @@ func CORS() app.HandlerFunc {
 		}
 
 		// 检查 Origin 是否在允许列表中
-		allowed := false
-		for _, allowedOrigin := range allowedOrigins {
-			// 支持通配符匹配
-			if allowedOrigin == "*" {
-				allowed = true
-				break
-			}
-			// 精确匹配
-			if allowedOrigin == origin {
-				allowed = true
-				break
-			}
-			// 支持通配符前缀匹配 (如 http://localhost:* 匹配所有 localhost 端口)
-			if strings.HasSuffix(allowedOrigin, ":*") {
-				prefix := strings.TrimSuffix(allowedOrigin, ":*")
-				if strings.HasPrefix(origin, prefix) {
-					allowed = true
-					break
-				}
-			}
-			// 支持路径前缀匹配 (如 https://example.com 匹配 https://example.com/foo)
-			if strings.HasPrefix(origin, allowedOrigin+"/") {
-				allowed = true
-				break
-			}
-		}
+		allowed := isOriginAllowed(origin, allowedOrigins)
 
 		// 设置 CORS 头
 		if allowed {
@@ -87,4 +62,57 @@ func CORS() app.HandlerFunc {
 
 		c.Next(ctx)
 	}
+}
+
+// isOriginAllowed 检查 origin 是否命中允许列表。
+//
+// 匹配规则（与旧逻辑等价，仅修复 :* 通配的边界缺陷）：
+//   - "*"：通配所有 origin；
+//   - 精确匹配：allowedOrigin == origin；
+//   - ":*" 端口通配：allowedOrigin 形如 "scheme://host:*"，匹配 "scheme://host:<端口>"，
+//     要求端口必须是纯数字，避免 "http://localhost:*" 误匹配 "http://localhost.evil.com"
+//     （旧实现用 HasPrefix(prefix) 会把后者也放行）；
+//   - 路径前缀：origin == allowedOrigin + "/..."。
+func isOriginAllowed(origin string, allowedOrigins []string) bool {
+	for _, allowedOrigin := range allowedOrigins {
+		// 通配符匹配所有
+		if allowedOrigin == "*" {
+			return true
+		}
+		// 精确匹配
+		if allowedOrigin == origin {
+			return true
+		}
+		// 端口通配：scheme://host:*  →  scheme://host:<digits>
+		if strings.HasSuffix(allowedOrigin, ":*") {
+			prefix := strings.TrimSuffix(allowedOrigin, ":*")
+			// 要求 origin 形如 prefix + ":" + 纯数字端口
+			if strings.HasPrefix(origin, prefix+":") {
+				rest := origin[len(prefix)+1:]
+				if isAllDigits(rest) {
+					return true
+				}
+			}
+			continue
+		}
+		// 路径前缀匹配 (如 https://example.com 匹配 https://example.com/foo)
+		if strings.HasPrefix(origin, allowedOrigin+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// isAllDigits 判断 s 是否非空且全为 ASCII 数字。
+// 用于 :* 端口通配时校验端口部分，防止 "localhost:*" 匹配 "localhost.evil.com"。
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }

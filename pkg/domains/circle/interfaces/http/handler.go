@@ -63,9 +63,9 @@ func (h *Handler) CreateCircle(c appctx.AppContext) {
 
 // GetCirclesRequest 获取圈子列表请求。
 type GetCirclesRequest struct {
-	Keyword     string `form:"keyword"`
-	Size        int    `form:"size"`
-	SearchAfter string `form:"search_after"`
+	Keyword     string `query:"keyword"`
+	Size        int    `query:"size"`
+	SearchAfter string `query:"search_after"`
 }
 
 // GetCircles GET /circle/list
@@ -177,9 +177,9 @@ func (h *Handler) LeaveCircle(c appctx.AppContext) {
 
 // GetMyCirclesRequest 我加入圈子列表请求。
 type GetMyCirclesRequest struct {
-	Keyword     string `form:"keyword"`
-	Size        int    `form:"size"`
-	SearchAfter string `form:"search_after"`
+	Keyword     string `query:"keyword"`
+	Size        int    `query:"size"`
+	SearchAfter string `query:"search_after"`
 }
 
 // GetMyCircles GET /circle/my
@@ -213,10 +213,10 @@ func (h *Handler) GetMyCircles(c appctx.AppContext) {
 
 // GetCirclePostsRequest 圈内帖子列表请求。
 type GetCirclePostsRequest struct {
-	CircleID    string `form:"circle_id" binding:"required,uuid"`
-	Type        int    `form:"type" binding:"required,min=1,max=3"`
-	Size        int    `form:"size"`
-	SearchAfter string `form:"search_after"`
+	CircleID    string `query:"circle_id" binding:"required,uuid"`
+	Type        int    `query:"type" binding:"required,min=1,max=3"`
+	Size        int    `query:"size"`
+	SearchAfter string `query:"search_after"`
 }
 
 // GetCirclePosts GET /circle/posts

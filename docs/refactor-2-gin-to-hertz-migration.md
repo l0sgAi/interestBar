@@ -29,6 +29,7 @@
 - `pkg/composition/` 核心文件（server.go/auth.go）框架无关
 - `go build` / `go vet` / `go test` 全部通过
 - `go.mod` 无 gin-gonic/gin-contrib/click33 残留
+- `AppContext.BindQuery` 对 query string 绑定行为等价 gin ShouldBindQuery（用 hertz 原生 `BindQuery`，已加单测覆盖：query 读取、body 不污染、form tag 被忽略）。**迁移注意**：调用方 Request struct 字段必须打 `query:` tag（gin 时代用 `form:`，hertz `BindQuery` 只认 `query` tag）
 
 > 下方保留原计划文档作为设计历史记录。
 
@@ -401,8 +402,8 @@ func CheckLogin() app.HandlerFunc {
 | Query | `c.Query("k")` | `string(c.Query("k"))` |
 | Header | `c.GetHeader("k")` (string) | `string(c.GetHeader("k"))` (**[]byte**) |
 | JSON | `c.JSON(200, gin.H{})` | `c.JSON(200, h.H{})` / `resp.Json` |
-| 绑定 JSON | `c.ShouldBindJSON(&x)` | `c.Bind(&x, binding.JSON)` |
-| 绑定 Query | `c.ShouldBindQuery(&x)` | `c.Bind(&x, goquery.Tag("form"))` |
+| 绑定 JSON | `c.ShouldBindJSON(&x)` | `c.BindJSON(&x)`（注意：hertz 的 BindJSON **不含 validator**，需另调 `c.Validate` 或用 `c.BindAndValidate`） |
+| 绑定 Query | `c.ShouldBindQuery(&x)` | `c.BindQuery(&x)`（只认 `query` tag，不认 `form` tag；本项目 AppContext.BindQuery 即转发此方法） |
 | 状态码 | `c.Status(204)` | `c.SetStatusCode(204)` |
 | 中止 | `c.AbortWithStatus(401)` | `c.AbortWithStatus(consts.StatusUnauthorized)` |
 | Client IP | `c.ClientIP()` | `c.RemoteIP()`（配合 `clientip` 中间件） |

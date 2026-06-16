@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"interestBar/pkg/domains/comment/domain"
 
@@ -196,38 +197,67 @@ func buildNextCursor(comment *domain.Comment, sort int) string {
 }
 
 // applyCursorCondition 根据游标和排序方式添加 WHERE 条件。
+//
+// 游标来自用户可控的 query 参数，必须防御性解析：所有类型断言用 comma-ok，
+// 任何字段缺失/类型错误都返回包装了 ErrInvalidCursor 的错误（而非 panic）。
 func applyCursorCondition(query *gorm.DB, cursor string, sort int) (*gorm.DB, error) {
 	if cursor == "" {
 		return query, nil
 	}
 
-	values, err := decodeCursor(cursor)
+	likeCount, id, err := parseCursorValues(cursor, sort)
 	if err != nil {
 		return nil, err
 	}
 
 	switch sort {
 	case 0: // 按点赞倒序：keyset (like_count, id)
-		likeCount := int64(values["like_count"].(float64))
-		idStr, _ := values["id"].(string)
-		id, err := uuid.Parse(idStr)
-		if err != nil {
-			return nil, err
-		}
 		query = query.Where(
 			"(like_count < ?) OR (like_count = ? AND id < ?)",
 			likeCount, likeCount, id,
 		)
 	case 1: // 按时间倒序：id DESC
-		idStr, _ := values["id"].(string)
-		id, err := uuid.Parse(idStr)
-		if err != nil {
-			return nil, err
-		}
 		query = query.Where("id < ?", id)
 	}
 
 	return query, nil
+}
+
+// parseCursorValues 解码并校验游标，返回 (likeCount, id, err)。
+//
+// 抽成纯函数便于单测（无需 gorm）。sort==0 需要 like_count + id，
+// sort==1 只需要 id。所有类型断言用 comma-ok，绝不 panic。
+// 错误统一用 fmt.Errorf("%w: ...", domain.ErrInvalidCursor, ...) 包装。
+func parseCursorValues(cursor string, sort int) (likeCount int64, id uuid.UUID, err error) {
+	values, derr := decodeCursor(cursor)
+	if derr != nil {
+		// base64 / JSON 解析失败统一归为非法游标
+		return 0, uuid.Nil, fmt.Errorf("%w: decode failed: %v", domain.ErrInvalidCursor, derr)
+	}
+
+	idStr, ok := values["id"].(string)
+	if !ok {
+		return 0, uuid.Nil, fmt.Errorf("%w: missing or invalid id", domain.ErrInvalidCursor)
+	}
+	id, perr := uuid.Parse(idStr)
+	if perr != nil {
+		return 0, uuid.Nil, fmt.Errorf("%w: invalid id: %v", domain.ErrInvalidCursor, perr)
+	}
+
+	if sort == 0 {
+		likeCountRaw, ok := values["like_count"]
+		if !ok {
+			return 0, uuid.Nil, fmt.Errorf("%w: missing like_count", domain.ErrInvalidCursor)
+		}
+		// JSON unmarshal 数字到 map[string]interface{} 会得到 float64
+		likeCountF, ok := likeCountRaw.(float64)
+		if !ok {
+			return 0, uuid.Nil, fmt.Errorf("%w: like_count has wrong type %T", domain.ErrInvalidCursor, likeCountRaw)
+		}
+		likeCount = int64(likeCountF)
+	}
+
+	return likeCount, id, nil
 }
 
 // applyOrderBy 根据排序方式添加 ORDER BY。

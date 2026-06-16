@@ -85,10 +85,10 @@ func (h *Handler) GetPostDetail(c appctx.AppContext) {
 
 // GetPostsRequest 帖子列表请求。
 type GetPostsRequest struct {
-	Keyword     string `form:"keyword"`
-	CircleID    string `form:"circle_id" binding:"omitempty,uuid"`
-	Size        int    `form:"size"`
-	SearchAfter string `form:"search_after"`
+	Keyword     string `query:"keyword"`
+	CircleID    string `query:"circle_id" binding:"omitempty,uuid"`
+	Size        int    `query:"size"`
+	SearchAfter string `query:"search_after"`
 }
 
 // GetPosts GET /post/list

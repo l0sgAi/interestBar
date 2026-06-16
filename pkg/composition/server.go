@@ -3,30 +3,31 @@ package composition
 
 import (
 	authapp "interestBar/pkg/domains/auth/application"
-	authhttp "interestBar/pkg/domains/auth/interfaces/http"
 	authinfra "interestBar/pkg/domains/auth/infrastructure"
+	authhttp "interestBar/pkg/domains/auth/interfaces/http"
 	categoryapp "interestBar/pkg/domains/category/application"
 	categoryinfra "interestBar/pkg/domains/category/infrastructure"
 	categoryhttp "interestBar/pkg/domains/category/interfaces/http"
 	circleapp "interestBar/pkg/domains/circle/application"
 	circledomain "interestBar/pkg/domains/circle/domain"
-	circlehttp "interestBar/pkg/domains/circle/interfaces/http"
 	circleinfra "interestBar/pkg/domains/circle/infrastructure"
+	circlehttp "interestBar/pkg/domains/circle/interfaces/http"
 	commentapp "interestBar/pkg/domains/comment/application"
-	commenthttp "interestBar/pkg/domains/comment/interfaces/http"
 	commentinfra "interestBar/pkg/domains/comment/infrastructure"
+	commenthttp "interestBar/pkg/domains/comment/interfaces/http"
 	likeapp "interestBar/pkg/domains/like/application"
-	likehttp "interestBar/pkg/domains/like/interfaces/http"
 	likeinfra "interestBar/pkg/domains/like/infrastructure"
+	likehttp "interestBar/pkg/domains/like/interfaces/http"
 	postapp "interestBar/pkg/domains/post/application"
-	posthttp "interestBar/pkg/domains/post/interfaces/http"
 	postinfra "interestBar/pkg/domains/post/infrastructure"
+	posthttp "interestBar/pkg/domains/post/interfaces/http"
 	storageapp "interestBar/pkg/domains/storage/application"
-	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
 	storageinfra "interestBar/pkg/domains/storage/infrastructure"
+	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
 	userapp "interestBar/pkg/domains/user/application"
-	userhttp "interestBar/pkg/domains/user/interfaces/http"
 	userinfra "interestBar/pkg/domains/user/infrastructure"
+	userhttp "interestBar/pkg/domains/user/interfaces/http"
+	"interestBar/pkg/logger"
 	"interestBar/pkg/shared/routing"
 )
 
@@ -69,6 +70,12 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	// like 需要 post 查询端口 + comment 查询端口（目标存在性校验 + 统计缓存恢复）
 	likeSvc.SetPostTarget(&likePostTarget{delegate: postSvc})
 	likeSvc.SetCommentTarget(&likeCommentTarget{delegate: commentSvc})
+
+	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
+	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
+	if logger.Log != nil {
+		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment")
+	}
 
 	// 注册路由
 	registerCategory(root, deps, authCheck)

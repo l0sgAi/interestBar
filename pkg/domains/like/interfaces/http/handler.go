@@ -2,6 +2,8 @@
 package http
 
 import (
+	"errors"
+
 	"interestBar/pkg/domains/like/application"
 	"interestBar/pkg/domains/like/domain"
 	"interestBar/pkg/logger"
@@ -70,11 +72,11 @@ func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
 // writeLikeError 把 service 层错误映射到 HTTP 响应。
 func writeLikeError(c appctx.AppContext, err error) {
 	switch {
-	case err == domain.ErrPostNotFound:
+	case errors.Is(err, domain.ErrPostNotFound):
 		httputil.NotFound(c, "Post not found")
-	case err == domain.ErrCommentNotFound:
+	case errors.Is(err, domain.ErrCommentNotFound):
 		httputil.NotFound(c, "Comment not found")
-	case err == domain.ErrInvalidTargetType:
+	case errors.Is(err, domain.ErrInvalidTargetType):
 		httputil.BadRequest(c, "Invalid target type")
 	default:
 		logger.Log.Error("like service error: " + err.Error())

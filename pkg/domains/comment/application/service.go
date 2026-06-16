@@ -39,9 +39,9 @@ type UserFacade interface {
 
 // PostInfo comment 领域需要的帖子信息（发评论时校验用）。
 type PostInfo struct {
-	ID      uuid.UUID
-	Status  int16 // 帖子状态（PostStatusPublished=1 表示可评论）
-	IsLock  int16 // 是否锁定（1=锁定）
+	ID     uuid.UUID
+	Status int16 // 帖子状态（PostStatusPublished=1 表示可评论）
+	IsLock int16 // 是否锁定（1=锁定）
 }
 
 // PostLookup comment 领域需要的帖子查询端口。
@@ -450,6 +450,13 @@ func (s *commentServiceImpl) buildCommentVOs(ctx context.Context, userID uuid.UU
 //
 // 与旧 controller.getCommentLikedStatus 行为一致。
 func (s *commentServiceImpl) batchLikedStatus(ctx context.Context, userID uuid.UUID, comments []domain.Comment) map[uuid.UUID]bool {
+	// 匿名访问（userID == uuid.Nil）直接返回空 map，避免对幽灵 key
+	// "user:like:comments:00000000-..." 发起无意义的 Redis ZMScore + DB 回源。
+	// 与 checkLiked 的 uuid.Nil 短路行为保持一致。
+	if userID == uuid.Nil {
+		return make(map[uuid.UUID]bool, len(comments))
+	}
+
 	commentIDs := make([]uuid.UUID, len(comments))
 	for i, cm := range comments {
 		commentIDs[i] = cm.ID
@@ -535,4 +542,3 @@ func (s *commentServiceImpl) checkLiked(ctx context.Context, userID, commentID u
 	}
 	return false
 }
-

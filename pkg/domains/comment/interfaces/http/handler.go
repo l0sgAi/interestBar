@@ -3,6 +3,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 
 	"interestBar/pkg/domains/comment/application"
 	"interestBar/pkg/domains/comment/domain"
@@ -61,9 +62,9 @@ func (h *Handler) CreateComment(c appctx.AppContext) {
 
 // GetCommentsRequest 获取顶层评论列表的请求结构。
 type GetCommentsRequest struct {
-	PostID string `form:"post_id" binding:"required,uuid"`
-	Sort   int    `form:"sort" binding:"omitempty,oneof=0 1"` // 0=点赞倒序(默认), 1=时间倒序
-	Cursor string `form:"cursor"`
+	PostID string `query:"post_id" binding:"required,uuid"`
+	Sort   int    `query:"sort" binding:"omitempty,oneof=0 1"` // 0=点赞倒序(默认), 1=时间倒序
+	Cursor string `query:"cursor"`
 }
 
 // GetComments GET /comment/list
@@ -84,6 +85,10 @@ func (h *Handler) GetComments(c appctx.AppContext) {
 
 	result, err := h.svc.GetRootComments(c, userID, postID, req.Sort, req.Cursor)
 	if err != nil {
+		if errors.Is(err, domain.ErrInvalidCursor) {
+			httputil.BadRequest(c, "Invalid cursor")
+			return
+		}
 		logger.Log.Error("Failed to get comments: " + err.Error())
 		httputil.InternalError(c, "Failed to get comments")
 		return
@@ -93,10 +98,10 @@ func (h *Handler) GetComments(c appctx.AppContext) {
 
 // GetRepliesRequest 获取回复列表的请求结构。
 type GetRepliesRequest struct {
-	RootID string `form:"root_id" binding:"required,uuid"`
-	Sort   int    `form:"sort" binding:"omitempty,oneof=0 1"` // 0=时间倒序(默认), 1=点赞倒序
-	Cursor string `form:"cursor"`
-	Limit  int    `form:"limit" binding:"omitempty,min=1,max=50"`
+	RootID string `query:"root_id" binding:"required,uuid"`
+	Sort   int    `query:"sort" binding:"omitempty,oneof=0 1"` // 0=时间倒序(默认), 1=点赞倒序
+	Cursor string `query:"cursor"`
+	Limit  int    `query:"limit" binding:"omitempty,min=1,max=50"`
 }
 
 // GetReplies GET /comment/replies
@@ -117,11 +122,15 @@ func (h *Handler) GetReplies(c appctx.AppContext) {
 
 	result, err := h.svc.GetReplies(c, userID, rootID, req.Limit, req.Sort, req.Cursor)
 	if err != nil {
+		if errors.Is(err, domain.ErrInvalidCursor) {
+			httputil.BadRequest(c, "Invalid cursor")
+			return
+		}
 		if application.IsNotRootCommentErr(err) {
 			httputil.BadRequest(c, "Not a root comment")
 			return
 		}
-		if err == domain.ErrCommentNotFound {
+		if errors.Is(err, domain.ErrCommentNotFound) {
 			httputil.NotFound(c, "Root comment not found")
 			return
 		}
@@ -144,7 +153,7 @@ func (h *Handler) GetCommentDetail(c appctx.AppContext) {
 
 	vo, err := h.svc.GetCommentDetail(c, userID, commentID)
 	if err != nil {
-		if err == domain.ErrCommentNotFound {
+		if errors.Is(err, domain.ErrCommentNotFound) {
 			httputil.NotFound(c, "Comment not found")
 			return
 		}
@@ -192,21 +201,21 @@ func requireUserIDAllowAnon(c appctx.AppContext) (uuid.UUID, bool) {
 // writeCommentError 把 service 层错误映射到 HTTP 响应。
 func writeCommentError(c appctx.AppContext, err error) {
 	switch {
-	case err == domain.ErrPostNotFound:
+	case errors.Is(err, domain.ErrPostNotFound):
 		httputil.NotFound(c, "Post not found")
-	case err == domain.ErrPostNotCommentable:
+	case errors.Is(err, domain.ErrPostNotCommentable):
 		httputil.Forbidden(c, "Cannot comment on this post")
-	case err == domain.ErrPostLocked:
+	case errors.Is(err, domain.ErrPostLocked):
 		httputil.Forbidden(c, "This post is locked, comments are not allowed")
-	case err == domain.ErrRootCommentNotFound:
+	case errors.Is(err, domain.ErrRootCommentNotFound):
 		httputil.NotFound(c, "Root comment not found")
-	case err == domain.ErrRootCommentMismatch:
+	case errors.Is(err, domain.ErrRootCommentMismatch):
 		httputil.BadRequest(c, "Root comment does not belong to this post")
-	case err == domain.ErrReplyTargetNotFound:
+	case errors.Is(err, domain.ErrReplyTargetNotFound):
 		httputil.NotFound(c, "Reply target comment not found")
-	case err == domain.ErrReplyTargetNotInThread:
+	case errors.Is(err, domain.ErrReplyTargetNotInThread):
 		httputil.BadRequest(c, "Reply target does not belong to the same thread")
-	case err == domain.ErrEmptyContent:
+	case errors.Is(err, domain.ErrEmptyContent):
 		httputil.BadRequest(c, "Comment content is empty")
 	default:
 		logger.Log.Error("comment service error: " + err.Error())

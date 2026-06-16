@@ -88,3 +88,16 @@
 - `pkg/server/model/base.go`（BaseModel 别名存根，指向 `pkg/shared/domain/base.go`。随 `model/user.go` 一起删除）
 - `pkg/server/auth/`（OAuth provider 适配器已在新架构中包装，旧代码待后续 refactor 评估是否内联到 `pkg/domains/auth/infrastructure/`）
 - ~~`pkg/server/response/`~~ ✅ **已在重构二（gin→hertz 迁移，2026-06-16）删除**（连同死代码 `pkg/server/router/middleware/csrf.go`、`cache.go`，业务侧早已改用 `pkg/shared/httputil`）
+
+## 批次 C 后修复（2026-06-16，代码 review 收尾）
+
+针对批次 C（comment/like）+ 重构二（hertz 迁移）落地后的 review 发现，做了如下正确性/健壮性修复：
+
+| 项 | 优先级 | 改动 |
+|---|---|---|
+| **BindQuery 语义 bug** | P0 | `appctx/hertzadapter` 的 `BindQuery` 原实现 `h.c.Bind(v)` 在 POST 带 body 时会用 JSON body 覆盖 query 字段。改为 hertz 原生 `h.c.BindQuery(v)`（只读 query string）。同步把 7 个 Request struct 的 tag 从 `form:` 改成 `query:`（hertz BindQuery 只认 `query` tag）。涉及 circle/comment/post/user 领域的列表查询接口。已加 `adapter_test.go` 回归。 |
+| **游标 decode panic** | P0 | `comment/infrastructure/comment_repo_pg.go` 的 `applyCursorCondition` 原用 `values["like_count"].(float64)` 无 comma-ok，攻击者构造缺 `like_count` 的游标即可触发**无鉴权远程 panic**（接口匿名可访问）。抽纯函数 `parseCursorValues` 防御性解析，新增 `domain.ErrInvalidCursor`，handler 据此返回 400。已加 `cursor_test.go` 回归。 |
+| **CORS `:*` 误匹配** | P1 | `composition/middleware/cors.go` 的端口通配 `http://localhost:*` 用 `HasPrefix(prefix)` 会误匹配 `http://localhost.evil.com`。改为要求 `prefix + ":" + 纯数字端口`，抽纯函数 `isOriginAllowed`。已加 `cors_test.go` 回归。 |
+| **匿名访问 IO 浪费** | P1 | `comment/application` 的 `batchLikedStatus` 缺 `uuid.Nil` 短路，匿名访问列表时会对幽灵 key 发起无意义 Redis + DB 查询。补短路，与 `checkLiked` 对齐。 |
+| **handler 错误比较** | P2 | comment/like handler 的 `err == domain.ErrXxx` 改为 `errors.Is`，避免未来 service/repo 加 `fmt.Errorf("%w")` 包装后 404 退化成 500。 |
+| **Facade 注入可观测性** | P2 | `composition/server.go` 注入完跨领域 Facade 后打一条启动日志，便于排查"漏注入导致 VO 字段全空"。 |

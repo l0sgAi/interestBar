@@ -38,11 +38,11 @@ func New(ctx context.Context, c *app.RequestContext) appctx.AppContext {
 
 // ---- 请求信息 ----
 
-func (h *hertzAppContext) Method() string        { return string(h.c.Method()) }
-func (h *hertzAppContext) Path() string          { return string(h.c.Request.URI().Path()) }
-func (h *hertzAppContext) Param(name string) string { return h.c.Param(name) }
-func (h *hertzAppContext) Query(name string) string { return string(h.c.Query(name)) }
-func (h *hertzAppContext) Header(name string) string { return string(h.c.GetHeader(name)) }
+func (h *hertzAppContext) Method() string              { return string(h.c.Method()) }
+func (h *hertzAppContext) Path() string                { return string(h.c.Request.URI().Path()) }
+func (h *hertzAppContext) Param(name string) string    { return h.c.Param(name) }
+func (h *hertzAppContext) Query(name string) string    { return string(h.c.Query(name)) }
+func (h *hertzAppContext) Header(name string) string   { return string(h.c.GetHeader(name)) }
 func (h *hertzAppContext) PostForm(name string) string { return string(h.c.PostForm(name)) }
 
 // FormFile 读取 multipart 上传的单个文件，映射到 RequestContext.FormFile。
@@ -61,10 +61,15 @@ func (h *hertzAppContext) BindJSON(v any) error {
 	return h.c.BindJSON(v)
 }
 
-// BindQuery 用 hertz 的 Bind 绑定 query（依赖 `form` tag）。
-// hertz 的 Bind 会同时尝试 query/form/path，对纯 query 绑定行为兼容 gin ShouldBindQuery。
+// BindQuery 只绑定 URL query string 到 v（依赖 `query` tag）。
+//
+// 用 hertz 原生 BindQuery：tag="query" != "" 时跳过 preBindBody，绝不碰请求体，
+// 且只认 `query` tag（不认 `form`/`header`/`path`）。语义等价 gin ShouldBindQuery。
+//
+// 注意：调用方的 Request struct 字段必须打 `query:"..."` tag，否则字段绑不到值。
+// （gin 时代用的是 `form:` tag，迁移后需统一改为 `query:`。）
 func (h *hertzAppContext) BindQuery(v any) error {
-	return h.c.Bind(v)
+	return h.c.BindQuery(v)
 }
 
 // ---- 响应 ----
