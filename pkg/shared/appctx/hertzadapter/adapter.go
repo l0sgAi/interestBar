@@ -13,10 +13,12 @@ import (
 	"context"
 	"mime/multipart"
 
+	"interestBar/pkg/logger"
 	"interestBar/pkg/shared/appctx"
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // hertzAppContext 把 *app.RequestContext 适配为 appctx.AppContext。
@@ -47,7 +49,30 @@ func (h *hertzAppContext) PostForm(name string) string { return string(h.c.PostF
 
 // FormFile 读取 multipart 上传的单个文件，映射到 RequestContext.FormFile。
 func (h *hertzAppContext) FormFile(name string) (*multipart.FileHeader, error) {
-	return h.c.FormFile(name)
+	fh, err := h.c.FormFile(name)
+	if err != nil {
+		// 临时诊断：gin→hertz 迁移后 /upload/image 报 400，真实 err 被上层吞掉。
+		// 打印 Content-Type / Content-Length / method / 真实错误，并枚举客户端实际发送的字段名，定位根因。
+		fileFields, valueFields := []string{}, []string{}
+		if form, ferr := h.c.MultipartForm(); ferr == nil && form != nil {
+			for k := range form.File {
+				fileFields = append(fileFields, k)
+			}
+			for k := range form.Value {
+				valueFields = append(valueFields, k)
+			}
+		}
+		logger.Log.Error("FormFile diag",
+			zap.String("field", name),
+			zap.String("content-type", string(h.c.GetHeader("Content-Type"))),
+			zap.Int("content-length", h.c.Request.Header.ContentLength()),
+			zap.String("method", string(h.c.Method())),
+			zap.Strings("file-fields-sent", fileFields),
+			zap.Strings("value-fields-sent", valueFields),
+			zap.Error(err),
+		)
+	}
+	return fh, err
 }
 
 // MultipartForm 读取整个 multipart 表单，映射到 RequestContext.MultipartForm。

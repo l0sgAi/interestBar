@@ -19,6 +19,9 @@ import (
 func InitRouter() *server.Hertz {
 	h := server.Default(
 		server.WithHostPorts(fmt.Sprintf(":%d", conf.Config.Server.Port)),
+		// hertz 默认 MaxRequestBodySize=4MB，会截断图片上传请求体导致 FormFile 报错返 400。
+		// 提到 50MB；具体文件大小仍由 service 层 ValidateFile 兜底校验。
+		server.WithMaxRequestBodySize(50<<20),
 	)
 
 	// Middleware
