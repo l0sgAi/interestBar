@@ -292,6 +292,11 @@ func (s *userServiceImpl) UpdateProfile(ctx context.Context, userID uuid.UUID, i
 		return nil, err
 	}
 
+	// 刷新用户缓存：用更新后的最新数据覆盖旧缓存，
+	// 避免后续 GetByID 回显到修改前的旧资料。
+	// 缓存刷新失败不影响更新结果（DB 已是最新，下次 TTL 到期会自愈）。
+	_ = s.cache.SetUser(ctx, userID, user)
+
 	return &UpdateProfileResult{
 		ID:        user.ID,
 		Username:  user.Username,
