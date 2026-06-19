@@ -11,6 +11,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"interestBar/pkg/domains/comment/domain"
@@ -71,7 +72,9 @@ type CommentVO struct {
 	CreateTime string     `json:"create_time"`
 
 	// 扩展数据（JSON格式，包含图片URL数组等）
-	ExtraData []byte `json:"extra_data,omitempty"`
+	// 用 json.RawMessage 而非 []byte：前者 MarshalJSON 原样透传嵌套 JSON，
+	// 后者会被 encoding/json 当 []byte 做 base64 编码，导致前端读不到 extra_data.images。
+	ExtraData json.RawMessage `json:"extra_data,omitempty"`
 
 	// 评论者信息
 	AuthorName   string `json:"author_name"`
