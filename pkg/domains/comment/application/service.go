@@ -51,7 +51,7 @@ type PostLookup interface {
 	// GetPost 返回帖子信息。未找到返回 nil, nil。
 	GetPost(ctx context.Context, postID uuid.UUID) (*PostInfo, error)
 	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
-	// 然后递增帖子评论计数（Redis Hash + Redpanda 异步持久化）。
+	// 然后递增帖子评论计数（Redis Hash 实时 + DB 同步持久化）。
 	RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error
 }
 
@@ -133,7 +133,6 @@ type commentServiceImpl struct {
 	repo       domain.CommentRepository
 	statsCache domain.CommentStatsCache
 	likeCache  domain.CommentLikeCache
-	publisher  domain.CommentEventPublisher
 	userFacade UserFacade
 	postLookup PostLookup
 }
@@ -145,13 +144,11 @@ func NewCommentService(
 	repo domain.CommentRepository,
 	statsCache domain.CommentStatsCache,
 	likeCache domain.CommentLikeCache,
-	publisher domain.CommentEventPublisher,
 ) CommentService {
 	return &commentServiceImpl{
 		repo:       repo,
 		statsCache: statsCache,
 		likeCache:  likeCache,
-		publisher:  publisher,
 	}
 }
 
@@ -166,7 +163,7 @@ func (s *commentServiceImpl) SetPostLookup(p PostLookup) { s.postLookup = p }
 //  2. 如果是回复，校验 root_id 属于同一帖子，校验 reply_to_id 在同一楼层，获取被回复用户ID；
 //  3. 清洗 content（SanitizeForPg，剔除 NULL 字节等非法 UTF8）；
 //  4. 创建评论（事务内：插入评论 + 如为回复则递增根评论 reply_count）；
-//  5. 实时递增帖子评论计数（Redis Hash），并发布 Redpanda 异步持久化事件。
+//  5. 实时递增帖子评论计数（Redis Hash + DB 同步持久化）。
 func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID, input CreateCommentInput) (uuid.UUID, error) {
 	// 1. 校验帖子
 	if s.postLookup == nil {
@@ -248,7 +245,7 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 		return uuid.Nil, err
 	}
 
-	// 5. 实时递增帖子评论计数（Redis Hash + 恢复缓存），并发布 Redpanda 异步持久化事件
+	// 5. 实时递增帖子评论计数（Redis Hash + 恢复缓存 + DB 同步持久化）
 	if err := s.postLookup.RestoreStatsAndIncrCommentCount(ctx, input.PostID); err != nil {
 		logger.Log.Error("Failed to increment post comment count: " + err.Error())
 	}

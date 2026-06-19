@@ -416,8 +416,6 @@ func (a *PostStatisticsAggregator) addMessage(msg PostStatisticsMessage) {
 	switch msg.Type {
 	case StatisticsTypePostView:
 		delta.ViewCount += msg.Value
-	case StatisticsTypePostComment:
-		delta.CommentCount += msg.Value
 	case StatisticsTypePostLike:
 		delta.LikeCount += msg.Value
 	case StatisticsTypePostCollect:

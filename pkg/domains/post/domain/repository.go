@@ -17,6 +17,9 @@ type PostRepository interface {
 	GetMediaByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]MediaExtraJSON, error)
 	// IsLiked 检查用户是否点赞了帖子（DB 回源用）。
 	IsLiked(ctx context.Context, userID, postID uuid.UUID) (bool, error)
+	// IncrCommentCount 同步递增帖子评论计数（DB UPDATE comment_count + 1）。
+	// 供 comment 领域发评论后调用，替代旧的 Redpanda 异步聚合。
+	IncrCommentCount(ctx context.Context, postID uuid.UUID) error
 }
 
 // PostStatsCache 帖子统计信息缓存（view_count/comment_count/like_count 等）。
@@ -47,9 +50,6 @@ type PostLikeCache interface {
 type PostEventPublisher interface {
 	// PublishViewCount 发布浏览量变化事件。
 	PublishViewCount(ctx context.Context, postID uuid.UUID) error
-	// PublishCommentCount 发布帖子评论数变化事件。
-	// delta: 1=新评论, -1=删除评论。
-	PublishCommentCount(ctx context.Context, postID uuid.UUID, delta int64) error
 }
 
 // PostStatistics 帖子统计信息。

@@ -180,8 +180,7 @@ func newCommentService(deps *Deps) commentapp.CommentService {
 	repo := commentinfra.NewCommentRepository(deps.DB.Get())
 	statsCache := commentinfra.NewCommentStatsCache()
 	likeCache := commentinfra.NewCommentLikeCache()
-	publisher := commentinfra.NewCommentEventPublisher()
-	return commentapp.NewCommentService(repo, statsCache, likeCache, publisher)
+	return commentapp.NewCommentService(repo, statsCache, likeCache)
 }
 
 // newLikeService 构造 LikeService。

@@ -64,3 +64,11 @@ func (r *postRepoPG) IsLiked(ctx context.Context, userID, postID uuid.UUID) (boo
 		Count(&count).Error
 	return count > 0, err
 }
+
+// IncrCommentCount 同步递增帖子评论计数（comment_count + 1）。
+// 实时持久化到 DB，替代旧的 Redpanda 异步聚合；GREATEST 防御性兜底，与批量聚合语义一致。
+func (r *postRepoPG) IncrCommentCount(ctx context.Context, postID uuid.UUID) error {
+	return r.db.WithContext(ctx).Model(&domain.Post{}).
+		Where("id = ? AND deleted = ?", postID, 0).
+		UpdateColumn("comment_count", gorm.Expr("GREATEST(comment_count + 1, 0)")).Error
+}

@@ -651,10 +651,11 @@ func (s *postServiceImpl) GetPostMeta(ctx context.Context, postID uuid.UUID) (*P
 }
 
 // RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
-// 然后递增帖子评论计数（Redis Hash + Redpanda 异步持久化）。
+// 然后递增帖子评论计数（Redis Hash 实时 + DB 同步持久化）。
 //
-// 与旧 controller/comment.go 中的 restorePostStatsIfNeed + IncrementPostCommentCount +
-// PublishPostCommentCount 三步逻辑等价。供 comment 领域发评论后调用。
+// 评论计数不再走 Redpanda 异步聚合：评论是低频、本就带 DB 事务的写入，
+// 同步 UPDATE 比批量聚合更简单且消除 DB 滞后导致的缓存回源少算问题。
+// view/like/collect 仍走聚合器（高频，需批量）。
 func (s *postServiceImpl) RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error {
 	// 1. 缓存恢复（如果统计 Hash 不存在，先从 DB 恢复）
 	exists, err := s.statsCache.Exists(ctx, postID)
@@ -670,8 +671,8 @@ func (s *postServiceImpl) RestoreStatsAndIncrCommentCount(ctx context.Context, p
 		return err
 	}
 
-	// 3. 发送 MQ 消息用于异步持久化到数据库
-	return s.publisher.PublishCommentCount(ctx, postID, 1)
+	// 3. 同步递增 DB 评论计数（实时持久化）
+	return s.repo.IncrCommentCount(ctx, postID)
 }
 
 // RestoreStats 恢复帖子统计缓存（如果不存在）。

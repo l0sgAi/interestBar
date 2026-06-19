@@ -41,12 +41,3 @@ type CommentLikeCache interface {
 	// Backfill 回填 DB 查询确认的点赞状态到 ZSET。
 	Backfill(ctx context.Context, userID uuid.UUID, likedCommentIDs []uuid.UUID) error
 }
-
-// CommentEventPublisher 评论相关事件发布（异步持久化统计到 DB）。
-//
-// 仅暴露"评论创建后发布帖子评论数增量事件"这一个能力，
-// 供 application 层在 CreateComment 成功后调用。
-type CommentEventPublisher interface {
-	// PublishPostCommentCount 发布帖子评论数变化事件。
-	PublishPostCommentCount(ctx context.Context, postID uuid.UUID, delta int64) error
-}
