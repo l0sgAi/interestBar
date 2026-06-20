@@ -172,18 +172,6 @@ func PublishPostViewCount(postID uuid.UUID) error {
 	})
 }
 
-// PublishPostCommentCount 发布帖子评论数变化消息
-func PublishPostCommentCount(postID uuid.UUID, value int64) error {
-	if postWriter == nil {
-		return fmt.Errorf("post stats writer is not initialized")
-	}
-	return publishPostMessage(PostStatisticsMessage{
-		Type:   StatisticsTypePostComment,
-		PostID: postID,
-		Value:  value,
-	})
-}
-
 // PublishPostLikeCount 发布帖子点赞数变化消息
 func PublishPostLikeCount(postID uuid.UUID, value int64) error {
 	if postWriter == nil {

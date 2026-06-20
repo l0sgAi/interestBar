@@ -13,7 +13,6 @@ const (
 
 	// 帖子统计类型常量
 	StatisticsTypePostView    = "post_view_count"
-	StatisticsTypePostComment = "post_comment_count"
 	StatisticsTypePostLike    = "post_like_count"
 	StatisticsTypePostCollect = "post_collect_count"
 )
