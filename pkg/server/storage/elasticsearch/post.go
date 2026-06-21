@@ -172,18 +172,22 @@ func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []int
 	return parsePostSearchResponse(res, size)
 }
 
-// SearchMyPosts 搜索指定用户自己的帖子（"我的发帖"）。
+// searchUserPostsInternal 按发帖人 user_id 过滤搜索帖子，供 SearchMyPosts /
+// SearchUserPosts 共用，避免重复查询体。
+//
 // userID: 发帖人ID（必传，核心过滤条件）
 // keyword: 搜索关键字，为空时返回该用户全部帖子，优先 title 检索，其次 summary
+// publishedOnly: true 时强制 status=1（仅已发布），用于查看「他人」发帖；
+//
+//	false 时不过滤 status（作者可见自己全部状态），用于「我的发帖」。
+//
 // size: 每页数量，默认 20
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
-// 返回：帖子列表响应（包含帖子列表、总数、分页信息）
 //
 // 与 SearchPosts 的差异：
 //   - 过滤条件用 user_id（而非 circle_id）；
-//   - 不强制 status=1，作者可见自己全部状态（草稿/审核/已发布/锁定），仅排除已删除；
 //   - 关键字 multi_match 增加 fuzziness=AUTO，容忍拼写错误。
-func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
+func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly bool, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
@@ -205,7 +209,7 @@ func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []int
 	mustConditions := []map[string]interface{}{
 		{
 			"term": map[string]interface{}{
-				"user_id": userID.String(), // 只返回该用户自己的帖子
+				"user_id": userID.String(), // 只返回该用户的帖子
 			},
 		},
 		{
@@ -214,9 +218,17 @@ func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []int
 			},
 		},
 	}
+	// 查看他人发帖时强制只返回已发布帖子（status=1）
+	if publishedOnly {
+		mustConditions = append(mustConditions, map[string]interface{}{
+			"term": map[string]interface{}{
+				"status": 1,
+			},
+		})
+	}
 
 	if keyword == "" {
-		// 无关键字时，返回该用户全部帖子，按id倒序
+		// 无关键字时，返回符合条件的全部帖子，按id倒序
 		searchQuery = map[string]interface{}{
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
@@ -296,6 +308,30 @@ func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []int
 	}
 
 	return parsePostSearchResponse(res, size)
+}
+
+// SearchMyPosts 搜索指定用户自己的帖子（"我的发帖"）。
+// userID: 发帖人ID（必传，核心过滤条件）
+// keyword: 搜索关键字，为空时返回该用户全部帖子，优先 title 检索，其次 summary
+// size: 每页数量，默认 20
+// searchAfter: 上一页返回的 search_after 值，用于获取下一页
+// 返回：帖子列表响应（包含帖子列表、总数、分页信息）
+//
+// 不过滤 status：作者可见自己全部状态（草稿/审核/已发布/拒绝/封禁），仅排除已删除。
+func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	return searchUserPostsInternal(userID, keyword, false, size, searchAfter)
+}
+
+// SearchUserPosts 搜索指定用户已发布的帖子（查看「他人」发帖记录用）。
+// userID: 发帖人ID（必传，核心过滤条件）
+// keyword: 搜索关键字，为空时返回该用户全部已发布帖子，优先 title 检索，其次 summary
+// size: 每页数量，默认 20
+// searchAfter: 上一页返回的 search_after 值，用于获取下一页
+// 返回：帖子列表响应（包含帖子列表、总数、分页信息）
+//
+// 与 SearchMyPosts 的差异：强制 status=1（仅已发布），他人不可见对方草稿/审核/拒绝/封禁帖。
+func SearchUserPosts(userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	return searchUserPostsInternal(userID, keyword, true, size, searchAfter)
 }
 
 // parsePostSearchResponse 解析帖子搜索响应

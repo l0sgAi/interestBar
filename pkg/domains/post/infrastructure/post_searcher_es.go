@@ -36,6 +36,15 @@ func (s *postSearcherES) SearchMy(ctx context.Context, userID uuid.UUID, keyword
 	return toRawPostSearchResult(result), nil
 }
 
+// SearchByUser 搜索指定用户已发布的帖子（查看「他人」发帖用，强制 status=1）。
+func (s *postSearcherES) SearchByUser(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*application.RawPostSearchResult, error) {
+	result, err := elasticsearch.SearchUserPosts(userID, keyword, size, searchAfter)
+	if err != nil {
+		return nil, err
+	}
+	return toRawPostSearchResult(result), nil
+}
+
 // toRawPostSearchResult 把 ES PostListResponse 转为 application.RawPostSearchResult。
 func toRawPostSearchResult(r *elasticsearch.PostListResponse) *application.RawPostSearchResult {
 	return &application.RawPostSearchResult{
