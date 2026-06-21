@@ -125,6 +125,45 @@ func (h *Handler) GetPosts(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
+// GetMyPostsRequest 我发布的帖子列表请求。
+type GetMyPostsRequest struct {
+	Keyword     string `query:"keyword"`
+	Size        int    `query:"size"`
+	SearchAfter string `query:"search_after"`
+}
+
+// GetMyPosts GET /post/my
+//
+// 查看自己发的帖（按当前登录用户过滤，支持 title/summary 模糊关键字，
+// 含草稿/审核等全部状态，仅排除已删除）。
+func (h *Handler) GetMyPosts(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req GetMyPostsRequest
+	if err := c.BindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	size := normalizeSize(req.Size)
+	searchAfter, ok := parseSearchAfter(c, req.SearchAfter)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.GetMyPosts(c, userID, req.Keyword, size, searchAfter)
+	if err != nil {
+		logger.Log.Error("Failed to search my posts: " + err.Error())
+		httputil.InternalError(c, "Failed to search my posts")
+		return
+	}
+	httputil.Success(c, result)
+}
+
 // ===== 辅助函数 =====
 
 func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {

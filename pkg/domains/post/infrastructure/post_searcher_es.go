@@ -24,9 +24,32 @@ func (s *postSearcherES) Search(ctx context.Context, keyword string, circleID uu
 	if err != nil {
 		return nil, err
 	}
+	return toRawPostSearchResult(result), nil
+}
 
-	posts := make([]application.PostDoc, 0, len(result.Posts))
-	for _, doc := range result.Posts {
+// SearchMy 搜索指定用户自己的帖子（keyword 为空时返回该用户全部帖子）。
+func (s *postSearcherES) SearchMy(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*application.RawPostSearchResult, error) {
+	result, err := elasticsearch.SearchMyPosts(userID, keyword, size, searchAfter)
+	if err != nil {
+		return nil, err
+	}
+	return toRawPostSearchResult(result), nil
+}
+
+// toRawPostSearchResult 把 ES PostListResponse 转为 application.RawPostSearchResult。
+func toRawPostSearchResult(r *elasticsearch.PostListResponse) *application.RawPostSearchResult {
+	return &application.RawPostSearchResult{
+		Posts:       toPostDocs(r.Posts),
+		Total:       r.Total,
+		Size:        r.Size,
+		SearchAfter: marshalSearchAfter(r.SearchAfter),
+	}
+}
+
+// toPostDocs 把 ES PostDocument 列表转为 application.PostDoc 列表。
+func toPostDocs(docs []elasticsearch.PostDocument) []application.PostDoc {
+	posts := make([]application.PostDoc, 0, len(docs))
+	for _, doc := range docs {
 		posts = append(posts, application.PostDoc{
 			ID: doc.ID, CircleID: doc.CircleID, UserID: doc.UserID, Type: doc.Type,
 			Title: doc.Title, Summary: doc.Summary, Content: doc.Content,
@@ -36,13 +59,7 @@ func (s *postSearcherES) Search(ctx context.Context, keyword string, circleID uu
 			Status: doc.Status, CreateTime: doc.CreateTime,
 		})
 	}
-
-	return &application.RawPostSearchResult{
-		Posts:       posts,
-		Total:       result.Total,
-		Size:        result.Size,
-		SearchAfter: marshalSearchAfter(result.SearchAfter),
-	}, nil
+	return posts
 }
 
 // marshalSearchAfter 把 []interface{} 序列化为 JSON 字符串。
