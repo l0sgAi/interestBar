@@ -218,6 +218,9 @@ type CircleService interface {
 	LeaveCircle(ctx context.Context, userID, circleID uuid.UUID) error
 	SearchCircles(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*CircleSearchResult, error)
 	GetMyCircles(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*MyCircleSearchResult, error)
+	// GetUserCircles 获取任意用户加入的圈子列表（查看「他人」加入的圈子）。
+	// 逻辑与 GetMyCircles 一致，仅 userID 来源不同（query 参数 vs 当前会话）。
+	GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*MyCircleSearchResult, error)
 	GetCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*CirclePostResult, error)
 
 	// SetUserFacade 注入 user Facade（GetCirclePosts 组装作者信息用）。
@@ -494,6 +497,20 @@ func (s *circleServiceImpl) SearchCircles(ctx context.Context, keyword string, s
 
 // GetMyCircles 获取我加入的圈子列表。
 func (s *circleServiceImpl) GetMyCircles(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*MyCircleSearchResult, error) {
+	return s.loadJoinedCircles(ctx, userID, keyword, size, searchAfter)
+}
+
+// GetUserCircles 获取任意用户加入的圈子列表（查看「他人」加入的圈子）。
+func (s *circleServiceImpl) GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*MyCircleSearchResult, error) {
+	return s.loadJoinedCircles(ctx, targetUserID, keyword, size, searchAfter)
+}
+
+// loadJoinedCircles 加载指定用户加入的圈子列表（GetMyCircles / GetUserCircles 共用）。
+//
+// 浏览模式（keyword 为空）缓存优先，仅加载前 500 个；搜索模式绕过缓存查全量。
+// joinedCache 按 userID key，查「他人」时回填的是对方的 joined 缓存
+// （副作用：加速对方自己的 my 查询）。
+func (s *circleServiceImpl) loadJoinedCircles(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*MyCircleSearchResult, error) {
 	var circleIDs []uuid.UUID
 
 	if keyword == "" {

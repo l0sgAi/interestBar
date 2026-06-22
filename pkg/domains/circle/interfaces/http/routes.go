@@ -12,6 +12,7 @@ import (
 //   GET  /circle/list         搜索圈子列表（需登录）
 //   GET  /circle/detail/:id   获取圈子详情（需登录）
 //   GET  /circle/my           我加入的圈子列表（需登录）
+//   GET  /circle/user         任意用户加入圈子列表（需登录）
 //   POST /circle/join         加入圈子（需登录）
 //   POST /circle/leave        退出圈子（需登录）
 //   GET  /circle/posts        圈内帖子列表（需登录）
@@ -28,6 +29,7 @@ func RegisterRoutes(
 		cir.GET("/list", h.GetCircles)
 		cir.GET("/detail/:id", h.GetCircleDetail)
 		cir.GET("/my", h.GetMyCircles)
+		cir.GET("/user", h.GetUserCircles)
 		cir.POST("/join", h.JoinCircle)
 		cir.POST("/leave", h.LeaveCircle)
 		cir.GET("/posts", h.GetCirclePosts)

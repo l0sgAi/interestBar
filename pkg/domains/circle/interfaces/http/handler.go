@@ -211,6 +211,44 @@ func (h *Handler) GetMyCircles(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
+// GetUserCirclesRequest 任意用户加入圈子列表请求。
+type GetUserCirclesRequest struct {
+	UserID      string `query:"user_id"`
+	Keyword     string `query:"keyword"`
+	Size        int    `query:"size"`
+	SearchAfter string `query:"search_after"`
+}
+
+// GetUserCircles GET /circle/user —— 查看任意用户加入的圈子（分页）。
+func (h *Handler) GetUserCircles(c appctx.AppContext) {
+	var req GetUserCirclesRequest
+	if err := c.BindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	targetUserID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		httputil.BadRequest(c, "Invalid user_id")
+		return
+	}
+
+	size := normalizeSize(req.Size)
+	searchAfter, ok := parseSearchAfter(c, req.SearchAfter)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.GetUserCircles(c, targetUserID, req.Keyword, size, searchAfter)
+	if err != nil {
+		logger.Log.Error("Failed to search user circles: " + err.Error())
+		httputil.InternalError(c, "Failed to search user circles")
+		return
+	}
+	httputil.Success(c, result)
+}
+
 // GetCirclePostsRequest 圈内帖子列表请求。
 type GetCirclePostsRequest struct {
 	CircleID    string `query:"circle_id" binding:"required,uuid"`
