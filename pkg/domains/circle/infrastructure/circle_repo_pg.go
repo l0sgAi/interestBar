@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"interestBar/pkg/domains/circle/domain"
 	sharedomain "interestBar/pkg/shared/domain"
@@ -130,16 +131,30 @@ func (r *memberRepoPG) GetMember(ctx context.Context, circleID, userID uuid.UUID
 	return &m, nil
 }
 
-func (r *memberRepoPG) GetJoinedCircleIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error) {
-	var circleIDs []uuid.UUID
+// ListJoinedWithScore 列出用户 normal 成员的 (circleID, 加入时间ms)，按加入时间倒序。
+// limit=0 表示不限制。用于 JoinedCirclesCache 重建。
+func (r *memberRepoPG) ListJoinedWithScore(ctx context.Context, userID uuid.UUID, limit int) ([]domain.JoinedMember, error) {
+	var rows []struct {
+		CircleID   uuid.UUID `gorm:"column:circle_id"`
+		CreateTime time.Time `gorm:"column:create_time"`
+	}
 	q := r.db.WithContext(ctx).Model(&domain.CircleMember{}).
 		Where("user_id = ? AND status = ?", userID, domain.MemberStatusNormal).
 		Order("create_time DESC")
 	if limit > 0 {
 		q = q.Limit(limit)
 	}
-	err := q.Pluck("circle_id", &circleIDs).Error
-	return circleIDs, err
+	if err := q.Select("circle_id, create_time").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	members := make([]domain.JoinedMember, len(rows))
+	for i, row := range rows {
+		members[i] = domain.JoinedMember{
+			CircleID: row.CircleID,
+			ScoreMs:  row.CreateTime.UnixMilli(),
+		}
+	}
+	return members, nil
 }
 
 // JoinCircle 用户加入圈子，与旧 model.JoinCircle 状态机完全一致。

@@ -197,15 +197,10 @@ func (h *Handler) GetMyCircles(c appctx.AppContext) {
 	}
 
 	size := normalizeSize(req.Size)
-	searchAfter, ok := parseSearchAfter(c, req.SearchAfter)
-	if !ok {
-		return
-	}
 
-	result, err := h.svc.GetMyCircles(c, userID, req.Keyword, size, searchAfter)
+	result, err := h.svc.GetMyCircles(c, userID, req.Keyword, size, req.SearchAfter)
 	if err != nil {
-		logger.Log.Error("Failed to search my circles: " + err.Error())
-		httputil.InternalError(c, "Failed to search my circles")
+		writeCircleError(c, err)
 		return
 	}
 	httputil.Success(c, result)
@@ -235,15 +230,10 @@ func (h *Handler) GetUserCircles(c appctx.AppContext) {
 	}
 
 	size := normalizeSize(req.Size)
-	searchAfter, ok := parseSearchAfter(c, req.SearchAfter)
-	if !ok {
-		return
-	}
 
-	result, err := h.svc.GetUserCircles(c, targetUserID, req.Keyword, size, searchAfter)
+	result, err := h.svc.GetUserCircles(c, targetUserID, req.Keyword, size, req.SearchAfter)
 	if err != nil {
-		logger.Log.Error("Failed to search user circles: " + err.Error())
-		httputil.InternalError(c, "Failed to search user circles")
+		writeCircleError(c, err)
 		return
 	}
 	httputil.Success(c, result)
@@ -326,6 +316,8 @@ func parseSearchAfter(c appctx.AppContext, s string) ([]interface{}, bool) {
 // writeCircleError 把 service 层错误映射到 HTTP 响应。
 func writeCircleError(c appctx.AppContext, err error) {
 	switch {
+	case application.IsInvalidCursorErr(err):
+		httputil.BadRequest(c, "Invalid search_after parameter")
 	case application.IsInvalidJoinTypeErr(err):
 		httputil.BadRequest(c, "join_type must be 0 (direct), 1 (approval), or 2 (private)")
 	case application.IsCircleNameExistsErr(err):

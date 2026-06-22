@@ -42,10 +42,12 @@ const (
 	// 包含字段：id, username, email, phone, google_id, github_id, avatar_url, gender, birthdate, status, role, deleted, create_time, update_time
 	UserInfoPrefix = "user:info:"
 
-	// UserJoinedCirclesPrefix 用户已加入圈子ID列表缓存key前缀
-	// 完整key格式: user_joined_circles:{user_id}
-	// 存储内容：[]uuid.UUID 圈子ID列表，按加入时间倒序排列
-	UserJoinedCirclesPrefix = "user_joined_circles:"
+	// UserJoinedCirclesPrefix 用户已加入圈子 ZSET 缓存key前缀
+	// 完整key格式: circle:joined:{user_id}
+	// ZSET: member=circle_id, score=加入时间 Unix 毫秒，倒序（最近加入在前）
+	// 注：前缀从 user_joined_circles: 改为 circle:joined:，避免旧 string 类型 key
+	// 残留导致 ZSET 操作 WRONGTYPE（旧 key 任其 24h TTL 过期）。
+	UserJoinedCirclesPrefix = "circle:joined:"
 )
 
 // CircleBaseInfo 圈子基础信息（不含统计信息）

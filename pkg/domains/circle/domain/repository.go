@@ -32,9 +32,9 @@ type CircleRepository interface {
 type MemberRepository interface {
 	// GetMember 获取成员信息。未找到返回 ErrMemberNotFound。
 	GetMember(ctx context.Context, circleID, userID uuid.UUID) (*CircleMember, error)
-	// GetJoinedCircleIDs 获取用户加入的圈子 ID 列表（按加入时间倒序）。
-	// limit=0 表示不限制。
-	GetJoinedCircleIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error)
+	// ListJoinedWithScore 列出用户 normal 成员的 (circleID, 加入时间ms)，按加入时间倒序。
+	// limit=0 表示不限制。用于 JoinedCirclesCache 重建。
+	ListJoinedWithScore(ctx context.Context, userID uuid.UUID, limit int) ([]JoinedMember, error)
 	// JoinCircle 用户加入圈子（含状态机：pending/left/banned → normal 等）。
 	// 返回错误信息与旧 model.JoinCircle 一致（"user is already a member..." 等）。
 	JoinCircle(ctx context.Context, circleID, userID uuid.UUID, joinType int16) (*CircleMember, error)
@@ -65,14 +65,29 @@ type CircleStatsCache interface {
 	IncrPostCount(ctx context.Context, circleID uuid.UUID) error
 }
 
-// JoinedCirclesCache 用户已加入圈子 ID 列表的缓存（旁路缓存）。
+// JoinedMember 成员关系（ZSET 元素 + score，用于缓存重建/写入）。
+type JoinedMember struct {
+	CircleID uuid.UUID
+	ScoreMs  int64 // 加入时间 Unix 毫秒
+}
+
+// JoinedCirclesCache 用户已加入圈子 ID 的 ZSET 缓存。
+//
+// member=circle_id, score=加入时间 Unix 毫秒，倒序。支持无上限成员数：
+// 分页/批量按 rank 取，永不物化全量列表。
 type JoinedCirclesCache interface {
-	// GetJoined 获取用户加入的圈子 ID 列表。未命中返回 nil, nil。
-	GetJoined(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
-	// SetJoined 写入用户加入的圈子 ID 列表。
-	SetJoined(ctx context.Context, userID uuid.UUID, circleIDs []uuid.UUID) error
-	// InvalidateJoined 删除用户加入圈子缓存（join/leave 后调用）。
-	InvalidateJoined(ctx context.Context, userID uuid.UUID) error
+	// PageByRank 倒序按 rank 区间 [start, start+limit) 取 circleID。
+	PageByRank(ctx context.Context, userID uuid.UUID, start, limit int64) ([]uuid.UUID, error)
+	// Card 成员总数（ZCARD）。
+	Card(ctx context.Context, userID uuid.UUID) (int64, error)
+	// Exists ZSET 是否存在（miss 检测，触发 DB 重建）。
+	Exists(ctx context.Context, userID uuid.UUID) (bool, error)
+	// Add 加入（ZADD，score=加入时间ms）。
+	Add(ctx context.Context, userID, circleID uuid.UUID, scoreMs int64) error
+	// Remove 退出（ZREM）。
+	Remove(ctx context.Context, userID uuid.UUID, circleID uuid.UUID) error
+	// Rebuild 全量重建（先 Del 再批量 ZADD + 续 TTL）。
+	Rebuild(ctx context.Context, userID uuid.UUID, members []JoinedMember) error
 }
 
 // CircleEventPublisher 圈子事件发布（用于异步持久化计数到 DB）。
