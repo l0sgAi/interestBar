@@ -654,7 +654,8 @@ func BatchUpdatePostStatistics(updates map[uuid.UUID]*PostStatistics) error {
 // ==================== 评论统计信息操作 ====================
 
 // CommentStatisticsExists 检查评论统计信息Hash是否存在
-func CommentStatisticsExists(commentID uuid.UUID) (bool, error) {
+// ctx 由调用方传入，使超时/取消得以传播（覆盖包级 background ctx）。
+func CommentStatisticsExists(ctx context.Context, commentID uuid.UUID) (bool, error) {
 	key := GetCommentStatsKey(commentID)
 	exists, err := Client.Exists(ctx, key).Result()
 	if err != nil {
@@ -664,7 +665,8 @@ func CommentStatisticsExists(commentID uuid.UUID) (bool, error) {
 }
 
 // UpdateCommentStatistics 更新评论统计信息缓存到Hash
-func UpdateCommentStatistics(commentID uuid.UUID, likeCount int) error {
+// ctx 由调用方传入，使超时/取消得以传播（覆盖包级 background ctx）。
+func UpdateCommentStatistics(ctx context.Context, commentID uuid.UUID, likeCount int) error {
 	key := GetCommentStatsKey(commentID)
 	pipe := Client.Pipeline()
 	pipe.HSet(ctx, key, "like_count", likeCount)

@@ -7,8 +7,9 @@ package application
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net/mail"
 	"strings"
 
@@ -190,7 +191,11 @@ func (s *authServiceImpl) SendCode(ctx context.Context, input SendCodeInput) err
 		return errRateLimitExceeded
 	}
 
-	code := fmt.Sprintf("%06d", rand.Intn(1000000))
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return err
+	}
+	code := fmt.Sprintf("%06d", n.Int64())
 
 	if err := s.verify.SetCode(input.Email, code); err != nil {
 		return err
@@ -331,7 +336,10 @@ func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code,
 	// 通过 UserSessionStore 按 (providerID OR email) 查询。
 	// 注意：这里"按 provider 列名 + email"的查询由 userStore 实现内部完成，
 	// auth 层不感知具体列名。
-	user := s.findOrCreateOAuthUser(p, userInfo)
+	user, err := s.findOrCreateOAuthUser(p, userInfo)
+	if err != nil {
+		return "", err
+	}
 
 	userIDStr := user.ID
 
@@ -355,14 +363,14 @@ func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code,
 //
 // 注意：这里通过 UserSessionStore 走的是跨领域调用（由 composition 注入）。
 // provider ID 的查询/写入由 userStore 实现内部按 provider name 映射列名完成。
-func (s *authServiceImpl) findOrCreateOAuthUser(p domain.OAuthProvider, info *domain.OAuthUserInfo) *domain.LoginUser {
+func (s *authServiceImpl) findOrCreateOAuthUser(p domain.OAuthProvider, info *domain.OAuthUserInfo) (*domain.LoginUser, error) {
 	// 先按 email 查（userStore 的 GetByEmail 不带 provider 列），
 	// 再由实现决定是否按 provider 列查询。
 	//
 	// 这里的语义是：把"按 (providerID OR email) 查 + 不存在则创建 + 补 provider ID"
 	// 这段逻辑交给 userStore 实现（它知道 SysUser 结构）。
 	// auth 层只负责调用，不关心具体表结构。
-	return s.userStore.FindOrCreateForOAuth(domain.OAuthUserLookup{
+	user, err := s.userStore.FindOrCreateForOAuth(domain.OAuthUserLookup{
 		Provider:     p.Name(),
 		LookupField:  p.UserLookupField(),
 		ProviderID:   info.ProviderID,
@@ -370,6 +378,10 @@ func (s *authServiceImpl) findOrCreateOAuthUser(p domain.OAuthProvider, info *do
 		Name:         info.Name,
 		AvatarURL:    info.AvatarURL,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("find or create oauth user: %w", err)
+	}
+	return user, nil
 }
 
 // LogoutByToken 按 token 注销。

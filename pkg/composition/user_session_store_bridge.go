@@ -74,7 +74,7 @@ func (b *userSessionStoreBridge) Create(input authdomain.CreateUserInput) (*auth
 // 若按 email 匹配但缺 provider ID 则补写。
 //
 // 与旧 controller/oauth.go 的 Callback 逻辑完全一致。
-func (b *userSessionStoreBridge) FindOrCreateForOAuth(lookup authdomain.OAuthUserLookup) *authdomain.LoginUser {
+func (b *userSessionStoreBridge) FindOrCreateForOAuth(lookup authdomain.OAuthUserLookup) (*authdomain.LoginUser, error) {
 	var u userdomain.SysUser
 	result := b.db.Where(
 		"("+lookup.LookupField+" = ? OR email = ?) AND deleted = ?",
@@ -83,7 +83,7 @@ func (b *userSessionStoreBridge) FindOrCreateForOAuth(lookup authdomain.OAuthUse
 
 	if result.Error != nil {
 		if result.Error != gorm.ErrRecordNotFound {
-			return nil
+			return nil, result.Error
 		}
 		// 不存在 → 创建
 		username := lookup.Name
@@ -102,21 +102,21 @@ func (b *userSessionStoreBridge) FindOrCreateForOAuth(lookup authdomain.OAuthUse
 		applyProviderID(&newUser, lookup.Provider, lookup.ProviderID)
 
 		if err := b.db.Create(&newUser).Error; err != nil {
-			return nil
+			return nil, err
 		}
-		return b.toLoginUser(&newUser)
+		return b.toLoginUser(&newUser), nil
 	}
 
 	// 已存在 → 若按 email 匹配但 provider ID 缺失，则补写
 	if getProviderID(&u, lookup.Provider) == "" {
 		applyProviderID(&u, lookup.Provider, lookup.ProviderID)
 		if err := b.db.Save(&u).Error; err != nil {
-			// 补写失败：返回 nil，让上层走"未识别用户"分支重试，
-			// 避免本次成功登录但下次又因 provider ID 缺失重复创建用户。
-			return nil
+			// 补写失败：返回错误中止本次登录。
+			// 宁可本次登录失败，也不能让 provider ID 缺失导致下次按 email 再次命中并重复创建用户。
+			return nil, err
 		}
 	}
-	return b.toLoginUser(&u)
+	return b.toLoginUser(&u), nil
 }
 
 // UpdatePassword 更新指定用户的密码哈希（仅更新 pwd 字段）。

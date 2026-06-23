@@ -71,8 +71,8 @@ type UserSessionStore interface {
 	Create(input CreateUserInput) (*LoginUser, error)
 	// FindOrCreateForOAuth 按 provider ID 或 email 查找用户；
 	// 不存在则创建；若按 email 匹配但缺 provider ID 则补写。
-	// 返回的 LoginUser 一定含 ID。
-	FindOrCreateForOAuth(lookup OAuthUserLookup) *LoginUser
+	// 成功时返回的 LoginUser 一定含 ID；失败时返回底层 DB 错误。
+	FindOrCreateForOAuth(lookup OAuthUserLookup) (*LoginUser, error)
 	// UpdatePassword 更新用户密码哈希（用于哈希算法透明升级）。
 	//
 	// 实现层应只更新 pwd 字段，不触碰其他字段；userID 是 LoginUser.ID（UUIDv7 字符串）。
