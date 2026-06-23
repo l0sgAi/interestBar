@@ -12,12 +12,24 @@ import (
 	redpanda "interestBar/pkg/server/storage/redpanda"
 	s3storage "interestBar/pkg/server/storage/s3"
 	emailutil "interestBar/pkg/util/email"
+	"interestBar/pkg/util/password"
 	"strings"
 )
 
 func Run(configPath, bootstrapPath string) {
 	// 1. Init Config (优先 Nacos，不可用时回退本地文件)
 	conf.InitConfig(configPath, bootstrapPath)
+
+	// 1.5 应用密码哈希参数（从 conf.Security.PasswordHash 注入）。
+	// 任一字段为 0 时 password 包内部回退到默认值。
+	ph := conf.Config.Security.PasswordHash
+	password.SetParams(password.Params{
+		Time:    ph.Time,
+		Memory:  ph.Memory,
+		Threads: ph.Threads,
+		KeyLen:  ph.KeyLen,
+		SaltLen: ph.SaltLen,
+	})
 
 	// 2. Init Logger
 	logger.InitLogger()

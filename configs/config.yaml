@@ -100,3 +100,15 @@ redpanda:
   like_event_consumer_group: "like_events_consumer_group" # 点赞事件消费者组
   like_event_flush_interval: 10 # 点赞事件刷写间隔(秒)
 
+# 安全相关配置
+security:
+  # 密码哈希参数 (Argon2id, OWASP 2024 推荐 RFC 9106)
+  # 调参指南：单次哈希耗时控制在 100~300ms 之间，过长会拖慢登录/注册。
+  # 任一字段留空/为 0 时使用代码内默认值。
+  password_hash:
+    time: 3            # 迭代次数 (>=2)，默认 3
+    memory: 65536      # 内存 KiB (>=19456=19MB)，默认 65536=64MB
+    threads: 4         # 并行度 (1-4)，默认 4
+    key_len: 32        # 输出哈希长度（字节），默认 32
+    salt_len: 16       # 随机 salt 长度（字节），默认 16
+

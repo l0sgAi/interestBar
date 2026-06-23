@@ -7,13 +7,14 @@ package application
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"math/rand"
 	"net/mail"
 	"strings"
 
 	"interestBar/pkg/domains/auth/domain"
+	"interestBar/pkg/logger"
+	"interestBar/pkg/util/password"
 )
 
 // LoginInput 邮箱密码登录入参。
@@ -103,8 +104,9 @@ func NewAuthService(
 // 与旧 controller.Login 行为一致：
 //  1. 按邮箱查用户；
 //  2. 校验 status（禁用 → Forbidden）；
-//  3. 校验密码（sha256 比对）；
-//  4. 清理同设备旧 token + 登录 + 写会话。
+//  3. 校验密码（password.Verify 自动识别 Argon2id / 旧 SHA256）；
+//  4. 若旧哈希格式 → 升级为 Argon2id（失败不阻断登录）；
+//  5. 清理同设备旧 token + 登录 + 写会话。
 func (s *authServiceImpl) Login(ctx context.Context, input LoginInput) (*LoginResult, error) {
 	user, err := s.userStore.GetByEmail(input.Email)
 	if err != nil {
@@ -118,9 +120,25 @@ func (s *authServiceImpl) Login(ctx context.Context, input LoginInput) (*LoginRe
 		return nil, errAccountDisabled
 	}
 
-	pwdHash := fmt.Sprintf("%x", sha256.Sum256([]byte(input.Password)))
-	if user.Pwd != pwdHash {
+	ok, needsUpgrade, verifyErr := password.Verify(input.Password, user.Pwd)
+	if verifyErr != nil {
+		// 哈希格式损坏：当作凭据失败处理，避免泄露内部状态
+		logger.Log.Warn("password hash format invalid for user " + user.ID + ": " + verifyErr.Error())
 		return nil, errInvalidCredentials
+	}
+	if !ok {
+		return nil, errInvalidCredentials
+	}
+
+	// 透明升级：旧 SHA256 → Argon2id。失败仅记日志，不阻断登录。
+	if needsUpgrade {
+		if newHash, herr := password.Hash(input.Password); herr == nil {
+			if uerr := s.userStore.UpdatePassword(user.ID, newHash); uerr != nil {
+				logger.Log.Warn("failed to upgrade password hash for user " + user.ID + ": " + uerr.Error())
+			}
+		} else {
+			logger.Log.Warn("failed to compute new password hash for user " + user.ID + ": " + herr.Error())
+		}
 	}
 
 	device := resolveDevice(input.Device)
@@ -239,7 +257,10 @@ func (s *authServiceImpl) Register(ctx context.Context, input RegisterInput) (*L
 		return nil, errEmailAlreadyExists
 	}
 
-	pwdHash := fmt.Sprintf("%x", sha256.Sum256([]byte(input.Password)))
+	pwdHash, err := password.Hash(input.Password)
+	if err != nil {
+		return nil, err
+	}
 
 	user, err := s.userStore.Create(domain.CreateUserInput{
 		Username: input.Username,

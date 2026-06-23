@@ -73,6 +73,10 @@ type UserSessionStore interface {
 	// 不存在则创建；若按 email 匹配但缺 provider ID 则补写。
 	// 返回的 LoginUser 一定含 ID。
 	FindOrCreateForOAuth(lookup OAuthUserLookup) *LoginUser
+	// UpdatePassword 更新用户密码哈希（用于哈希算法透明升级）。
+	//
+	// 实现层应只更新 pwd 字段，不触碰其他字段；userID 是 LoginUser.ID（UUIDv7 字符串）。
+	UpdatePassword(userID string, newHash string) error
 }
 
 // OAuthUserLookup 是 OAuth 登录时查找/创建用户的入参。
@@ -96,7 +100,7 @@ type LoginUser struct {
 	Username    string
 	Email       string
 	Phone       string
-	Pwd         string // 密码哈希（sha256）
+	Pwd         string // 密码哈希（Argon2id PHC 串；兼容旧 SHA256 十六进制）
 	GoogleID    string
 	XID         string
 	GithubID    string
@@ -151,7 +155,7 @@ func (u *LoginUser) ToSessionUser() SessionUser {
 type CreateUserInput struct {
 	Username   string
 	Email      string
-	Pwd        string // 已 sha256 哈希
+	Pwd        string // 已哈希（Argon2id PHC 串）
 	AvatarURL  string
 	Gender     int
 	ProviderID string // OAuth 注册时填充，邮箱注册时为空

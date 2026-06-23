@@ -17,6 +17,7 @@ import (
 	userdomain "interestBar/pkg/domains/user/domain"
 	sharedomain "interestBar/pkg/shared/domain"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -116,6 +117,20 @@ func (b *userSessionStoreBridge) FindOrCreateForOAuth(lookup authdomain.OAuthUse
 		}
 	}
 	return b.toLoginUser(&u)
+}
+
+// UpdatePassword 更新指定用户的密码哈希（仅更新 pwd 字段）。
+//
+// 用于密码哈希算法透明升级：登录时若发现 pwd 是旧 SHA256 格式，
+// 校验成功后调用此方法把哈希替换为新的 Argon2id PHC 串。
+func (b *userSessionStoreBridge) UpdatePassword(userID, newHash string) error {
+	id, err := uuid.Parse(userID)
+	if err != nil {
+		return err
+	}
+	return b.db.Model(&userdomain.SysUser{}).
+		Where("id = ? AND deleted = ?", id, 0).
+		Update("pwd", newHash).Error
 }
 
 // toLoginUser 把 user 领域的 SysUser 转成 auth 领域的 LoginUser。
