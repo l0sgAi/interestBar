@@ -95,6 +95,11 @@ func (c *circleStatsCacheRedis) IncrPostCount(ctx context.Context, circleID uuid
 // joinedCirclesCacheTTL 用户加入圈子 ZSET 缓存有效期（与旧 controller 一致：24 小时）。
 const joinedCirclesCacheTTL = 24 * time.Hour
 
+// joinedKey 返回用户已加入圈子 ZSET 的完整 key（前缀 circle:joined:）。
+func joinedKey(userID uuid.UUID) string {
+	return redispkg.GetUserJoinedCirclesKey(userID)
+}
+
 // joinedCirclesCacheRedis 基于 Redis ZSET 的 JoinedCirclesCache 实现。
 //
 // member=circle_id(uuid hex), score=加入时间 Unix 毫秒，倒序（最近加入在前）。
@@ -106,14 +111,8 @@ func NewJoinedCirclesCache() domain.JoinedCirclesCache {
 	return &joinedCirclesCacheRedis{}
 }
 
-func (c *joinedCirclesCacheRedis) GetJoined(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error) {
-	key := redispkg.GetUserJoinedCirclesKey(userID)
-	var circleIDs []uuid.UUID
-	if err := redispkg.GetJSON(key, &circleIDs); err != nil {
-		// 缓存 miss 不告警；其他错误记日志
-		if !errors.Is(err, redis.Nil) {
-			logger.Log.Warn("Redis cache error for joined circles: " + err.Error())
-		}
+func (c *joinedCirclesCacheRedis) PageByRank(ctx context.Context, userID uuid.UUID, start, limit int64) ([]uuid.UUID, error) {
+	if limit <= 0 {
 		return nil, nil
 	}
 	members, err := redispkg.Client.ZRevRange(ctx, joinedKey(userID), start, start+limit-1).Result()
