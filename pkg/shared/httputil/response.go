@@ -181,11 +181,15 @@ func Created(c appctx.AppContext, data interface{}) {
 }
 
 // Error 发送错误响应。
+//
+// 写完响应后会调用 c.Abort()，与 ErrorWithMessage / ErrorWithData 保持一致，
+// 避免后续中间件/handler 继续写入造成重复响应。
 func Error(c appctx.AppContext, code ResponseCode) {
 	c.JSON(GetHTTPStatus(code), Response{
 		Code:    code,
 		Message: GetMessage(code),
 	})
+	c.Abort()
 }
 
 // ErrorWithMessage 发送带自定义消息的错误响应。

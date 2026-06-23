@@ -59,8 +59,22 @@ func InitDB() {
 	// Comment 已迁移到 comment 领域（pkg/domains/comment/domain）。
 	// 其余领域（post/circle/user/like）由各自领域包自行管理迁移（或通过
 	// 对应的 infrastructure 层调用），这里只保留启动时必须迁移的核心表。
-	db.AutoMigrate(&model.SysUser{})
-	db.AutoMigrate(&commentdomain.Comment{})
+	if err := db.AutoMigrate(&model.SysUser{}); err != nil {
+		if logger.Log != nil {
+			logger.Log.Error("Failed to auto-migrate SysUser: " + err.Error())
+		} else {
+			fmt.Println("Failed to auto-migrate SysUser: " + err.Error())
+		}
+		os.Exit(1)
+	}
+	if err := db.AutoMigrate(&commentdomain.Comment{}); err != nil {
+		if logger.Log != nil {
+			logger.Log.Error("Failed to auto-migrate Comment: " + err.Error())
+		} else {
+			fmt.Println("Failed to auto-migrate Comment: " + err.Error())
+		}
+		os.Exit(1)
+	}
 
 	DB = db
 	if logger.Log != nil {

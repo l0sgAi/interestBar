@@ -6,11 +6,18 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
 	"mime/multipart"
 
 	"interestBar/pkg/domains/storage/domain"
 	s3storage "interestBar/pkg/server/storage/s3"
 )
+
+// errS3Unavailable 在 S3 client 未初始化时返回。
+//
+// 防御性兜底：尽管 application 层在调用前会用 Available() 检查，
+// 但为避免 TOCTOU 缺口或调用方遗漏，这里在每次访问 client 时也做一次判空。
+var errS3Unavailable = errors.New("s3 client is not initialized")
 
 // s3Storage 基于 pkg/server/storage/s3 包的 ObjectStorage 实现。
 type s3Storage struct{}
@@ -30,17 +37,29 @@ func (s *s3Storage) Available() bool {
 
 // Upload 调用 S3 client 上传文件。
 func (s *s3Storage) Upload(ctx context.Context, key string, file *multipart.FileHeader, acl string) (string, error) {
-	return s3storage.GetS3Client().UploadFile(ctx, key, file, acl)
+	client := s3storage.GetS3Client()
+	if client == nil {
+		return "", errS3Unavailable
+	}
+	return client.UploadFile(ctx, key, file, acl)
 }
 
 // Delete 删除文件。
 func (s *s3Storage) Delete(ctx context.Context, key string) error {
-	return s3storage.GetS3Client().DeleteFile(ctx, key)
+	client := s3storage.GetS3Client()
+	if client == nil {
+		return errS3Unavailable
+	}
+	return client.DeleteFile(ctx, key)
 }
 
 // PresignedURL 生成预签名 URL。
 func (s *s3Storage) PresignedURL(ctx context.Context, key string) (string, error) {
-	return s3storage.GetS3Client().GetPresignedURL(ctx, key)
+	client := s3storage.GetS3Client()
+	if client == nil {
+		return "", errS3Unavailable
+	}
+	return client.GetPresignedURL(ctx, key)
 }
 
 // ValidateFile 是对 s3storage.ValidateFile 的直通包装。

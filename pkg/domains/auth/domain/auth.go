@@ -181,7 +181,10 @@ type VerificationStore interface {
 // EmailSender 邮件发送抽象（由 infrastructure 提供）。
 type EmailSender interface {
 	// SendVerificationCode 发送验证码邮件。
-	SendVerificationCode(email, code, lang string) error
+	//
+	// ctx 用于传递请求上下文（取消信号、deadline、trace），实现层应
+	// 直接透传给底层 email client，避免使用 context.Background() 断开链路。
+	SendVerificationCode(ctx context.Context, email, code, lang string) error
 }
 
 // OAuthProvider 是 OAuth 提供方的抽象（由 infrastructure 提供具体实现）。

@@ -179,7 +179,7 @@ func (s *authServiceImpl) SendCode(ctx context.Context, input SendCodeInput) err
 	}
 	_ = s.verify.SetSendRateLimit(input.Email)
 
-	if err := s.email.SendVerificationCode(input.Email, code, input.Lang); err != nil {
+	if err := s.email.SendVerificationCode(ctx, input.Email, code, input.Lang); err != nil {
 		return err
 	}
 	return nil

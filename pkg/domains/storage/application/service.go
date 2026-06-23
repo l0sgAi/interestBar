@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"mime/multipart"
 
+	"github.com/google/uuid"
+
 	"interestBar/pkg/domains/storage/domain"
 	infra "interestBar/pkg/domains/storage/infrastructure"
 	"interestBar/pkg/logger"
@@ -96,6 +98,9 @@ func NewStorageService(storage domain.ObjectStorage) StorageService {
 
 // UploadImage 上传单张图片到 S3。
 func (s *storageServiceImpl) UploadImage(ctx context.Context, userID string, file *multipart.FileHeader) (FileVO, error) {
+	if err := validateUserID(userID); err != nil {
+		return FileVO{}, err
+	}
 	if err := infra.ValidateFile(file, imageExts, imageMaxSize); err != nil {
 		logger.Log.Error("file validation failed", zap.Error(err))
 		return FileVO{}, fmt.Errorf("file validation failed: %w", err)
@@ -124,6 +129,9 @@ func (s *storageServiceImpl) UploadImage(ctx context.Context, userID string, fil
 
 // UploadPostImages 批量上传帖子图片（最多 9 张）。
 func (s *storageServiceImpl) UploadPostImages(ctx context.Context, userID string, files []*multipart.FileHeader) (UploadedImagesVO, error) {
+	if err := validateUserID(userID); err != nil {
+		return UploadedImagesVO{}, err
+	}
 	if len(files) == 0 {
 		return UploadedImagesVO{}, fmt.Errorf("no files uploaded")
 	}
@@ -234,4 +242,18 @@ func (s *storageServiceImpl) PresignedURL(ctx context.Context, key string) (Pres
 		return PresignedURLVO{}, fmt.Errorf("failed to generate presigned URL")
 	}
 	return PresignedURLVO{URL: url, Key: key}, nil
+}
+
+// validateUserID 校验 userID 为合法 UUID，防止路径遍历或非预期字符注入 S3 key。
+//
+// 上层 handler 已从登录态 token 解析得到 userID，正常应为 UUIDv7 字符串；
+// 这里再加一道防御，避免任何调用方误传含 "../"、"/" 等字符的值。
+func validateUserID(userID string) error {
+	if userID == "" {
+		return fmt.Errorf("userID is required")
+	}
+	if _, err := uuid.Parse(userID); err != nil {
+		return fmt.Errorf("invalid userID: %w", err)
+	}
+	return nil
 }

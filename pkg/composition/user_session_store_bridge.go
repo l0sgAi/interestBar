@@ -109,7 +109,11 @@ func (b *userSessionStoreBridge) FindOrCreateForOAuth(lookup authdomain.OAuthUse
 	// 已存在 → 若按 email 匹配但 provider ID 缺失，则补写
 	if getProviderID(&u, lookup.Provider) == "" {
 		applyProviderID(&u, lookup.Provider, lookup.ProviderID)
-		b.db.Save(&u)
+		if err := b.db.Save(&u).Error; err != nil {
+			// 补写失败：返回 nil，让上层走"未识别用户"分支重试，
+			// 避免本次成功登录但下次又因 provider ID 缺失重复创建用户。
+			return nil
+		}
 	}
 	return b.toLoginUser(&u)
 }

@@ -2,12 +2,15 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"interestBar/pkg/domains/circle/domain"
+	"interestBar/pkg/logger"
 	redispkg "interestBar/pkg/server/storage/redis"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // circleBaseCacheTTL 圈子基础信息缓存有效期（与旧 controller 一致：24 小时）。
@@ -25,6 +28,10 @@ func (c *circleBaseCacheRedis) GetBase(ctx context.Context, circleID uuid.UUID) 
 	key := redispkg.GetCircleInfoKey(circleID)
 	var info domain.CircleBaseInfo
 	if err := redispkg.GetJSONCompressed(key, &info); err != nil {
+		// 缓存 miss 不告警；其他错误（连接失败/反序列化失败）记日志便于观测
+		if !errors.Is(err, redis.Nil) {
+			logger.Log.Warn("Redis cache error for circle base info: " + err.Error())
+		}
 		return nil, nil
 	}
 	return &info, nil
@@ -100,6 +107,10 @@ func (c *joinedCirclesCacheRedis) GetJoined(ctx context.Context, userID uuid.UUI
 	key := redispkg.GetUserJoinedCirclesKey(userID)
 	var circleIDs []uuid.UUID
 	if err := redispkg.GetJSON(key, &circleIDs); err != nil {
+		// 缓存 miss 不告警；其他错误记日志
+		if !errors.Is(err, redis.Nil) {
+			logger.Log.Warn("Redis cache error for joined circles: " + err.Error())
+		}
 		return nil, nil
 	}
 	return circleIDs, nil
