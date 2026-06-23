@@ -48,7 +48,12 @@ type PostListResponse struct {
 // circleID: 圈子ID，为0时搜索所有圈子
 // size: 每页数量，默认 20
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
-// 返回：帖子列表响应（包含帖子列表、总数、分页信息）
+// SearchPosts searches for posts with optional keyword filtering and circle scope,
+// returning only published and non-deleted posts. Results are sorted by post ID in
+// descending order; when a keyword is provided, they are sorted by relevance score
+// first. The search supports pagination via search_after. Page size is limited to a
+// maximum of 100 items; invalid sizes default to 20. If circleID is non-nil, results
+// are limited to that circle.
 func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
@@ -186,7 +191,15 @@ func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []int
 //
 // 与 SearchPosts 的差异：
 //   - 过滤条件用 user_id（而非 circle_id）；
-//   - 关键字 multi_match 增加 fuzziness=AUTO，容忍拼写错误。
+// searchUserPostsInternal searches posts for a specific user with optional keyword filtering and status enforcement.
+// It normalizes page size to 20 if out of bounds, filters results to the specified user's posts and excludes deleted posts.
+// If publishedOnly is true, it additionally restricts results to published posts only (status=1).
+// When keyword is provided, the search uses fuzzy multi_match across title (weighted 3x) and summary fields, sorted by relevance score then id.
+// When keyword is empty, results are sorted by id descending. Pagination is supported via search_after.
+// @param userID The user whose posts to search.
+// @param publishedOnly If true, restricts results to published posts only; if false, includes all non-deleted posts.
+// @param searchAfter Optional pagination cursor for retrieving the next page of results.
+// @returns A PostListResponse containing matching posts and pagination info, or an error if the search or marshaling fails.
 func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly bool, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
@@ -317,7 +330,7 @@ func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly boo
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
 // 返回：帖子列表响应（包含帖子列表、总数、分页信息）
 //
-// 不过滤 status：作者可见自己全部状态（草稿/审核/已发布/拒绝/封禁），仅排除已删除。
+// SearchMyPosts retrieves all posts authored by the specified user, including drafts and unpublished content, excluding only deleted posts.
 func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	return searchUserPostsInternal(userID, keyword, false, size, searchAfter)
 }
@@ -329,12 +342,12 @@ func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []int
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
 // 返回：帖子列表响应（包含帖子列表、总数、分页信息）
 //
-// 与 SearchMyPosts 的差异：强制 status=1（仅已发布），他人不可见对方草稿/审核/拒绝/封禁帖。
+// SearchUserPosts returns posts for a specific user that are visible to other users, filtering to published posts only.
 func SearchUserPosts(userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
 	return searchUserPostsInternal(userID, keyword, true, size, searchAfter)
 }
 
-// parsePostSearchResponse 解析帖子搜索响应
+// ParsePostSearchResponse decodes an Elasticsearch search response into a PostListResponse, extracting documents and pagination cursors for subsequent queries.
 func parsePostSearchResponse(res *esapi.Response, size int) (*PostListResponse, error) {
 	var searchResult map[string]interface{}
 	if err := json.NewDecoder(res.Body).Decode(&searchResult); err != nil {

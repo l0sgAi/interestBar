@@ -45,7 +45,7 @@ func (s *postSearcherES) SearchByUser(ctx context.Context, userID uuid.UUID, key
 	return toRawPostSearchResult(result), nil
 }
 
-// toRawPostSearchResult 把 ES PostListResponse 转为 application.RawPostSearchResult。
+// toRawPostSearchResult converts an Elasticsearch post search response to the application layer representation.
 func toRawPostSearchResult(r *elasticsearch.PostListResponse) *application.RawPostSearchResult {
 	return &application.RawPostSearchResult{
 		Posts:       toPostDocs(r.Posts),
@@ -55,7 +55,7 @@ func toRawPostSearchResult(r *elasticsearch.PostListResponse) *application.RawPo
 	}
 }
 
-// toPostDocs 把 ES PostDocument 列表转为 application.PostDoc 列表。
+// toPostDocs converts Elasticsearch PostDocument documents to application PostDoc objects.
 func toPostDocs(docs []elasticsearch.PostDocument) []application.PostDoc {
 	posts := make([]application.PostDoc, 0, len(docs))
 	for _, doc := range docs {

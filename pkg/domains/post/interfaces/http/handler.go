@@ -204,7 +204,11 @@ func (h *Handler) GetUserPosts(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
-// ===== 辅助函数 =====
+// requireUserID retrieves the authenticated user's ID from the request context,
+// validates it exists and is non-empty, and parses it as a UUID. It returns the
+// parsed UUID and true on success. If the login ID is missing, empty, or cannot
+// be parsed as a UUID, it writes an HTTP error response to the context and returns
+// uuid.Nil and false.
 
 func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
 	loginID, ok := c.LoginID()

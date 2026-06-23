@@ -12,7 +12,7 @@ import (
 //   GET  /post/list         搜索帖子列表（需登录）
 //   GET  /post/my           查看自己发的帖（需登录）
 //   GET  /post/user/:user_id 查看任意用户发的帖（需登录，仅已发布）
-//   GET  /post/detail/:id   获取帖子详情（需登录）
+// RegisterRoutes registers the post domain HTTP routes onto the provided router group with authentication required for all endpoints.
 func RegisterRoutes(
 	rg routing.RouterGroup,
 	svc application.PostService,
