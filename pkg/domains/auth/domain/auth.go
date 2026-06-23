@@ -166,7 +166,7 @@ type VerificationStore interface {
 	GetCode(email string) (string, error)
 	// DeleteCode 删除验证码。
 	DeleteCode(email string) error
-	// MarkVerified 标记邮箱已校验（10 分钟过期）。
+	// MarkVerified 标记邮箱已校验（5 分钟过期）。
 	MarkVerified(email string) error
 	// IsVerified 检查邮箱是否已校验。
 	IsVerified(email string) (bool, error)
@@ -176,6 +176,33 @@ type VerificationStore interface {
 	SetSendRateLimit(email string) error
 	// CheckSendRateLimit 检查是否处于发送频率限制中（true=受限）。
 	CheckSendRateLimit(email string) (bool, error)
+	// VerifyAttempt 原子地「校验验证码 + 失败计数 + 锁定 + 置 verified」。
+	//
+	// 一次调用完成所有副作用，杜绝并发竞态与爆破。返回 VerifyAttemptResult。
+	// 错误（Redis 不可用等）返回 error，调用方应降级而非默认放行。
+	VerifyAttempt(email, code string) (VerifyAttemptResult, error)
+}
+
+// VerifyAttemptStatus 原子校验状态。
+type VerifyAttemptStatus string
+
+const (
+	// VerifyStatusOK 校验通过，verified 已置位。
+	VerifyStatusOK VerifyAttemptStatus = "ok"
+	// VerifyStatusWrong 验证码错误，仍有剩余次数。
+	VerifyStatusWrong VerifyAttemptStatus = "wrong"
+	// VerifyStatusLocked 失败次数耗尽，已锁定。
+	VerifyStatusLocked VerifyAttemptStatus = "locked"
+	// VerifyStatusExpired 验证码已过期/不存在。
+	VerifyStatusExpired VerifyAttemptStatus = "expired"
+)
+
+// VerifyAttemptResult 原子校验结果。
+//
+//	Remaining：wrong 时为剩余尝试次数；locked 时为剩余锁定秒数；其余为 0。
+type VerifyAttemptResult struct {
+	Status    VerifyAttemptStatus
+	Remaining int
 }
 
 // EmailSender 邮件发送抽象（由 infrastructure 提供）。

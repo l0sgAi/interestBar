@@ -9,6 +9,7 @@ var (
 	errInvalidEmail                = errors.New("invalid email format")
 	errEmailAlreadyExists          = errors.New("email already registered")
 	errRateLimitExceeded           = errors.New("rate limit exceeded")
+	errVerifyLocked                = errors.New("verification attempts exhausted, please try again later")
 	errOTPExpired                  = errors.New("verification code expired")
 	errInvalidOTP                  = errors.New("invalid verification code")
 	errUsernameTooLong             = errors.New("username must be at most 50 characters")
@@ -23,6 +24,7 @@ func IsAccountDisabledErr(err error) bool              { return errors.Is(err, e
 func IsInvalidEmailErr(err error) bool                 { return errors.Is(err, errInvalidEmail) }
 func IsEmailAlreadyExistsErr(err error) bool           { return errors.Is(err, errEmailAlreadyExists) }
 func IsRateLimitExceededErr(err error) bool            { return errors.Is(err, errRateLimitExceeded) }
+func IsVerifyLockedErr(err error) bool                 { return errors.Is(err, errVerifyLocked) }
 func IsOTPExpiredErr(err error) bool                   { return errors.Is(err, errOTPExpired) }
 func IsInvalidOTPErr(err error) bool                   { return errors.Is(err, errInvalidOTP) }
 func IsUsernameTooLongErr(err error) bool              { return errors.Is(err, errUsernameTooLong) }

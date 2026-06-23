@@ -100,6 +100,20 @@ func Run(configPath, bootstrapPath string) {
 		logger.Log.Info("View Lua scripts loaded successfully")
 	}
 
+	// 8.10 Init Verify-Attempt Lua script（验证码原子校验 + 失败计数/锁定）
+	if err := redis.InitVerifyAttemptLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load verify attempt Lua script: " + err.Error())
+	} else {
+		logger.Log.Info("Verify attempt Lua script loaded successfully")
+	}
+
+	// 8.11 Init Rate-Limit Lua script（IP 滑动窗口限流）
+	if err := redis.InitRateLimitLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load rate limit Lua script: " + err.Error())
+	} else {
+		logger.Log.Info("Rate limit Lua script loaded successfully")
+	}
+
 	// 9. Init Router
 	r := router.InitRouter()
 

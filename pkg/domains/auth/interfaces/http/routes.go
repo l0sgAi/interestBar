@@ -16,10 +16,10 @@ import (
 //	  GET  /auth/github/callback
 //	  GET  /auth/azure/login
 //	  GET  /auth/azure/callback
-//	  POST /auth/register/send-code 发送验证码
-//	  POST /auth/register/verify    校验验证码
-//	  POST /auth/register/complete  完成注册
-//	  POST /auth/login              邮箱密码登录
+//	  POST /auth/register/send-code 发送验证码（IP 限流）
+//	  POST /auth/register/verify    校验验证码（IP 限流 + 失败次数硬上限）
+//	  POST /auth/register/complete  完成注册（IP 限流）
+//	  POST /auth/login              邮箱密码登录（IP 限流）
 //
 //	需要登录：
 //	  POST /auth/logout             注销当前 token
@@ -32,6 +32,8 @@ func RegisterRoutes(
 	rg routing.RouterGroup,
 	svc application.AuthService,
 	authCheck routing.HandlerFunc,
+	registerLimiter routing.HandlerFunc,
+	loginLimiter routing.HandlerFunc,
 ) {
 	h := NewHandler(svc)
 
@@ -42,10 +44,15 @@ func RegisterRoutes(
 			auth.GET("/"+p+"/login", h.OAuthLogin(p))
 			auth.GET("/"+p+"/callback", h.OAuthCallback(p))
 		}
-		auth.POST("/register/send-code", h.SendCode)
-		auth.POST("/register/verify", h.VerifyCode)
-		auth.POST("/register/complete", h.CompleteRegistration)
-		auth.POST("/login", h.Login)
+
+		// 注册三端点共享同一 IP 限流桶（防组合爆破 / 邮件轰炸）。
+		registerGrp := auth.Group("/register", registerLimiter)
+		registerGrp.POST("/send-code", h.SendCode)
+		registerGrp.POST("/verify", h.VerifyCode)
+		registerGrp.POST("/complete", h.CompleteRegistration)
+
+		// 登录单挂限流（防密码爆破）。
+		auth.POST("/login", loginLimiter, h.Login)
 
 		// 需要登录：注销。用子组挂中间件。
 		logoutGrp := auth.Group("/", authCheck)

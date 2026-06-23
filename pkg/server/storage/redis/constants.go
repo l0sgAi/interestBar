@@ -24,6 +24,12 @@ const (
 	// 完整key格式: register:rate:{email}
 	// 存储内容：频率限制标记，TTL 60秒
 	RegisterRatePrefix = "register:rate:"
+
+	// RegisterAttemptsPrefix 注册验证码失败尝试次数 key 前缀
+	// 完整key格式: register:attempts:{email}
+	// 存储内容：该邮箱校验失败累计次数；达到 maxVerifyAttempts 后作为锁定标记，
+	//           TTL = verifyLockoutTTL，期间即使重发验证码也无法通过校验。
+	RegisterAttemptsPrefix = "register:attempts:"
 )
 
 const (
@@ -167,4 +173,9 @@ func GetRegisterVerifiedKey(email string) string {
 // GetRegisterRateKey 获取注册验证码发送频率限制的完整key
 func GetRegisterRateKey(email string) string {
 	return RegisterRatePrefix + email
+}
+
+// GetRegisterAttemptsKey 获取注册验证码失败尝试次数的完整key
+func GetRegisterAttemptsKey(email string) string {
+	return RegisterAttemptsPrefix + email
 }

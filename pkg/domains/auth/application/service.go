@@ -7,9 +7,10 @@ package application
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"fmt"
-	"math/rand"
 	"net/mail"
 	"strings"
 
@@ -172,7 +173,12 @@ func (s *authServiceImpl) SendCode(ctx context.Context, input SendCodeInput) err
 		return errRateLimitExceeded
 	}
 
-	code := fmt.Sprintf("%06d", rand.Intn(1000000))
+	// crypto/rand 生成 6 位验证码（密码学安全随机，避免 math/rand 序列可预测）。
+	var randBytes [8]byte
+	if _, err := rand.Read(randBytes[:]); err != nil {
+		return err
+	}
+	code := fmt.Sprintf("%06d", binary.BigEndian.Uint64(randBytes[:])%1000000)
 
 	if err := s.verify.SetCode(input.Email, code); err != nil {
 		return err
@@ -187,25 +193,30 @@ func (s *authServiceImpl) SendCode(ctx context.Context, input SendCodeInput) err
 
 // VerifyCode 校验注册验证码。
 //
-// 与旧 controller.VerifyCode 行为一致：
-//  1. 从 Redis 读验证码（不存在 → OTPExpired）；
-//  2. 比对（不等 → InvalidOTP）；
-//  3. 删除验证码 + 标记邮箱已校验（10 分钟有效）。
+// 通过原子脚本 VerifyAttempt 完成「取码 → 比对 → 失败计数/锁定 → 置 verified」，
+// 单邮箱失败达 maxVerifyAttempts 次后锁定 verifyLockoutTTL 时长，阻断爆破。
+//
+// 返回错误映射：
+//   - ok      → nil
+//   - wrong   → errInvalidOTP
+//   - locked  → errVerifyLocked（handler 映射 429）
+//   - expired → errOTPExpired
 func (s *authServiceImpl) VerifyCode(ctx context.Context, input VerifyCodeInput) error {
-	storedCode, err := s.verify.GetCode(input.Email)
+	r, err := s.verify.VerifyAttempt(input.Email, input.Code)
 	if err != nil {
+		// Redis 异常等：降级为过期提示，让用户重新发送验证码，不默认放行。
 		return errOTPExpired
 	}
-	if storedCode != input.Code {
+	switch r.Status {
+	case domain.VerifyStatusOK:
+		return nil
+	case domain.VerifyStatusLocked:
+		return errVerifyLocked
+	case domain.VerifyStatusWrong:
 		return errInvalidOTP
+	default: // expired
+		return errOTPExpired
 	}
-
-	_ = s.verify.DeleteCode(input.Email)
-
-	if err := s.verify.MarkVerified(input.Email); err != nil {
-		return err
-	}
-	return nil
 }
 
 // Register 完成注册。

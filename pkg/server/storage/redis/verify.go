@@ -7,8 +7,12 @@ import (
 
 const (
 	registerCodeTTL     = 5 * time.Minute
-	registerVerifiedTTL = 10 * time.Minute
+	registerVerifiedTTL = 5 * time.Minute // 收紧：原 10min，与验证码 TTL 对齐，缩小爆破窗口
 	registerRateTTL     = 60 * time.Second
+
+	// 验证码尝试硬上限（防爆破）
+	maxVerifyAttempts = 5              // 单邮箱累计失败上限
+	verifyLockoutTTL  = 15 * time.Minute // 达上限后锁定时长（即 attempts key 的 TTL）
 )
 
 // SetVerificationCode 存储注册验证码，有效期5分钟
@@ -26,7 +30,7 @@ func DeleteVerificationCode(email string) error {
 	return Del(GetRegisterCodeKey(email))
 }
 
-// SetEmailVerified 标记邮箱已通过验证码校验，有效期10分钟
+// SetEmailVerified 标记邮箱已通过验证码校验，有效期 5 分钟
 func SetEmailVerified(email string) error {
 	return Set(GetRegisterVerifiedKey(email), "1", registerVerifiedTTL)
 }

@@ -200,6 +200,8 @@ func writeAuthError(c appctx.AppContext, err error) {
 		httputil.Conflict(c, httputil.MsgEmailAlreadyExists)
 	case application.IsRateLimitExceededErr(err):
 		httputil.TooManyRequests(c, httputil.MsgRateLimitExceeded)
+	case application.IsVerifyLockedErr(err):
+		httputil.TooManyRequests(c, "Too many failed attempts, please try again later")
 	case application.IsOTPExpiredErr(err):
 		// 与旧 controller.VerifyCode 一致：用 BadRequest code
 		httputil.ErrorWithMessage(c, httputil.CodeBadRequest, httputil.MsgOTPExpired)

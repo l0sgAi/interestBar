@@ -35,6 +35,9 @@ type AppContext interface {
 	Query(name string) string
 	// Header 读取请求头。
 	Header(name string) string
+	// ClientIP 返回客户端 IP（经可信代理解析）。
+	// 用于限流、审计等需要按 IP 维度识别主体的场景。
+	ClientIP() string
 	// PostForm 读取表单字段（multipart 或 application/x-www-form-urlencoded）。
 	PostForm(name string) string
 	// FormFile 读取 multipart 上传的单个文件。

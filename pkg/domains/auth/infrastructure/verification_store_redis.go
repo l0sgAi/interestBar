@@ -44,3 +44,23 @@ func (v *verificationStoreRedis) SetSendRateLimit(email string) error {
 func (v *verificationStoreRedis) CheckSendRateLimit(email string) (bool, error) {
 	return redispkg.CheckSendRateLimit(email)
 }
+
+// VerifyAttempt 转发到 redis 原子脚本，并映射状态枚举（domain 不依赖 redis 包）。
+func (v *verificationStoreRedis) VerifyAttempt(email, code string) (domain.VerifyAttemptResult, error) {
+	o, err := redispkg.AtomicVerifyAttempt(email, code)
+	if err != nil {
+		return domain.VerifyAttemptResult{}, err
+	}
+	var st domain.VerifyAttemptStatus
+	switch o.Status {
+	case redispkg.VerifyAttemptOK:
+		st = domain.VerifyStatusOK
+	case redispkg.VerifyAttemptWrong:
+		st = domain.VerifyStatusWrong
+	case redispkg.VerifyAttemptLocked:
+		st = domain.VerifyStatusLocked
+	default:
+		st = domain.VerifyStatusExpired
+	}
+	return domain.VerifyAttemptResult{Status: st, Remaining: o.Remaining}, nil
+}

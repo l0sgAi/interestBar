@@ -2,6 +2,8 @@
 package composition
 
 import (
+	"time"
+
 	authapp "interestBar/pkg/domains/auth/application"
 	authinfra "interestBar/pkg/domains/auth/infrastructure"
 	authhttp "interestBar/pkg/domains/auth/interfaces/http"
@@ -116,7 +118,15 @@ func registerAuth(root routing.RouterGroup, deps *Deps, authCheck routing.Handle
 	email := authinfra.NewEmailSender()
 	oauthReg := authinfra.NewOAuthProviderRegistry()
 	svc := authapp.NewAuthService(session, userStore, verify, email, oauthReg)
-	authhttp.RegisterRoutes(root, svc, authCheck)
+
+	// IP 滑动窗口限流：注册三端点共享一桶，登录单独一桶。
+	registerLimiter := NewIPRateLimiter(IPRateLimitOpt{
+		KeyPrefix: "rl:ip:auth-register", Limit: 10, Window: time.Minute,
+	})
+	loginLimiter := NewIPRateLimiter(IPRateLimitOpt{
+		KeyPrefix: "rl:ip:auth-login", Limit: 10, Window: time.Minute,
+	})
+	authhttp.RegisterRoutes(root, svc, authCheck, registerLimiter, loginLimiter)
 }
 
 // registerCircle 装配 circle 领域。

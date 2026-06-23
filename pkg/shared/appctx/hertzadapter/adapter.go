@@ -45,6 +45,10 @@ func (h *hertzAppContext) Path() string                { return string(h.c.Reque
 func (h *hertzAppContext) Param(name string) string    { return h.c.Param(name) }
 func (h *hertzAppContext) Query(name string) string    { return string(h.c.Query(name)) }
 func (h *hertzAppContext) Header(name string) string   { return string(h.c.GetHeader(name)) }
+
+// ClientIP 返回客户端 IP，映射 hertz RequestContext.ClientIP()。
+// 注意：结果受 hertz 可信代理配置影响，部署在反代后需正确配置 WithTrustedProxies。
+func (h *hertzAppContext) ClientIP() string { return h.c.ClientIP() }
 func (h *hertzAppContext) PostForm(name string) string { return string(h.c.PostForm(name)) }
 
 // FormFile 读取 multipart 上传的单个文件，映射到 RequestContext.FormFile。
