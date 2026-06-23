@@ -385,7 +385,7 @@ func checkMemberStatus(member *CircleMemberInfo) error {
 		return errMembershipPending
 	case statusMuted:
 		if member.MuteEndTime != nil && member.MuteEndTime.After(time.Now()) {
-			return errMutedUntil(member.MuteEndTime)
+			return errMutedUntil(*member.MuteEndTime)
 		}
 		return nil
 	case statusBanned:
