@@ -67,16 +67,31 @@ func TestVerifyLegacySHA256(t *testing.T) {
 	if !needsUpgrade2 {
 		t.Fatal("needsUpgrade should still be true (format is still legacy) even when password is wrong")
 	}
+
+	// 大写十六进制的 legacy 哈希（如外部系统迁移）也应能校验通过
+	upper := strings.ToUpper(legacy)
+	ok3, needsUpgrade3, err := Verify(plain, upper)
+	if err != nil {
+		t.Fatalf("Verify failed on uppercase legacy SHA256: %v", err)
+	}
+	if !ok3 {
+		t.Fatal("Verify returned ok=false for correct uppercase legacy SHA256")
+	}
+	if !needsUpgrade3 {
+		t.Fatal("needsUpgrade should be true for uppercase legacy SHA256")
+	}
 }
 
 func TestVerifyMalformed(t *testing.T) {
 	cases := []string{
 		"",
 		"not-a-hash",
-		"$argon2id$",                                // 段数不够
-		"$argon2id$v=19$m=65536,t=3,p=4$bad$bad",    // 段数不够
+		"$argon2id$",                                // 段数不够（2 段）
+		"$argon2id$v=19$m=65536,t=3,p=4$onlysalt",   // 段数不够（5 段，缺 hash）
 		"$argon2id$v=19$m=65536,t=3,p=4$!!!$@@@",    // base64 损坏
-		strings.Repeat("g", 64),                     // 64 字符但不是十六进制
+		"$argon2id$v=19$m=65536,t=0,p=4$dGVzdA$dGVzdA", // time=0 → 参数守卫拦截（防 panic）
+		"$argon2id$v=19$m=65536,t=3,p=0$dGVzdA$dGVzdA", // threads=0 → 参数守卫拦截（防 panic）
+		strings.Repeat("g", 64),                      // 64 字符但不是十六进制
 	}
 	for _, c := range cases {
 		ok, _, err := Verify("any", c)

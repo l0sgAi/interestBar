@@ -141,8 +141,10 @@ func Verify(plain, stored string) (ok bool, needsUpgrade bool, err error) {
 
 	// 旧 SHA256 格式：64 字符十六进制
 	if isLegacySHA256(stored) {
+		// %x 输出小写；isLegacySHA256 同时接受大小写，故将存储值归一为小写后再比对，
+		// 避免外部迁移来的大写哈希无法验证。
 		expected := fmt.Sprintf("%x", sha256.Sum256([]byte(plain)))
-		matched := subtle.ConstantTimeCompare([]byte(expected), []byte(stored)) == 1
+		matched := subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(stored))) == 1
 		return matched, true, nil
 	}
 
@@ -201,6 +203,13 @@ func verifyArgon2id(plain, encoded string) (bool, error) {
 	}
 	hash, err := base64.RawStdEncoding.DecodeString(parts[5])
 	if err != nil {
+		return false, ErrInvalidHash
+	}
+
+	// 调用 argon2.IDKey 前的守卫：time=0 或 threads=0 会让 argon2 直接 panic
+	// （"number of rounds too small" / "parallelism degree too low"），
+	// 损坏或被篡改的存储哈希不应因此崩溃登录流程。
+	if time == 0 || memory == 0 || threads == 0 {
 		return false, ErrInvalidHash
 	}
 
