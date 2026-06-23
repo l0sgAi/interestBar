@@ -10,6 +10,8 @@ import (
 // 路由清单（与旧 routers.go 中 /post 组一致）：
 //   POST /post/create       发帖（需登录）
 //   GET  /post/list         搜索帖子列表（需登录）
+//   GET  /post/my           查看自己发的帖（需登录）
+//   GET  /post/user/:user_id 查看任意用户发的帖（需登录，仅已发布）
 //   GET  /post/detail/:id   获取帖子详情（需登录）
 func RegisterRoutes(
 	rg routing.RouterGroup,
@@ -22,6 +24,8 @@ func RegisterRoutes(
 	{
 		p.POST("/create", h.CreatePost)
 		p.GET("/list", h.GetPosts)
+		p.GET("/my", h.GetMyPosts)
+		p.GET("/user/:user_id", h.GetUserPosts)
 		p.GET("/detail/:id", h.GetPostDetail)
 	}
 }

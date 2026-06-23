@@ -135,6 +135,10 @@ type RawPostSearchResult struct {
 // PostSearcher 帖子搜索抽象。
 type PostSearcher interface {
 	Search(ctx context.Context, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
+	// SearchMy 搜索指定用户自己的帖子（"我的发帖"，keyword 为空时返回该用户全部帖子）。
+	SearchMy(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
+	// SearchByUser 搜索指定用户已发布的帖子（查看「他人」发帖，强制 status=1）。
+	SearchByUser(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
 }
 
 // PostDetailVO 帖子详情 VO。
@@ -181,6 +185,12 @@ type PostService interface {
 	CreatePost(ctx context.Context, userID uuid.UUID, input CreatePostInput) (uuid.UUID, error)
 	GetPostDetail(ctx context.Context, userID, postID uuid.UUID) (*PostDetailVO, error)
 	SearchPosts(ctx context.Context, keyword string, circleID uuid.UUID, size int, searchAfter []interface{}) (*PostSearchResult, error)
+	// GetMyPosts 查看自己发的帖（按 userID 过滤，支持 title/summary 模糊关键字）。
+	// 不过滤 status，作者可见自己全部状态（草稿/审核/已发布/锁定），仅排除已删除。
+	GetMyPosts(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error)
+	// GetUserPosts 查看任意指定用户的发帖记录（按 targetUserID 过滤，支持 title/summary 模糊关键字）。
+	// 强制 status=1：他人不可见对方草稿/审核/拒绝/封禁帖，仅返回已发布。
+	GetUserPosts(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error)
 	// GetMediaByPostIDs 批量获取帖子图片（供 circle 领域 GetCirclePosts 调用）。
 	GetMediaByPostIDs(ctx context.Context, postIDs []string) (map[string][]string, error)
 
@@ -513,7 +523,40 @@ func (s *postServiceImpl) SearchPosts(ctx context.Context, keyword string, circl
 	if err != nil {
 		return nil, err
 	}
+	posts := s.assemblePostList(ctx, raw)
+	return &PostSearchResult{
+		Posts: posts, Total: raw.Total, Size: raw.Size, SearchAfter: raw.SearchAfter,
+	}, nil
+}
 
+// GetMyPosts 查看自己发的帖（按 userID 过滤，支持 title/summary 模糊关键字）。
+func (s *postServiceImpl) GetMyPosts(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error) {
+	raw, err := s.searcher.SearchMy(ctx, userID, keyword, size, searchAfter)
+	if err != nil {
+		return nil, err
+	}
+	posts := s.assemblePostList(ctx, raw)
+	return &PostSearchResult{
+		Posts: posts, Total: raw.Total, Size: raw.Size, SearchAfter: raw.SearchAfter,
+	}, nil
+}
+
+// GetUserPosts 查看任意指定用户的发帖记录（按 targetUserID 过滤，仅已发布 status=1）。
+func (s *postServiceImpl) GetUserPosts(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error) {
+	raw, err := s.searcher.SearchByUser(ctx, targetUserID, keyword, size, searchAfter)
+	if err != nil {
+		return nil, err
+	}
+	posts := s.assemblePostList(ctx, raw)
+	return &PostSearchResult{
+		Posts: posts, Total: raw.Total, Size: raw.Size, SearchAfter: raw.SearchAfter,
+	}, nil
+}
+
+// assemblePostList 把 ES 原始结果批量组装为 PostListItem（作者/圈子/图片信息）。
+//
+// 抽出来供 SearchPosts 与 GetMyPosts 共用，避免重复 ~90 行组装代码。
+func (s *postServiceImpl) assemblePostList(ctx context.Context, raw *RawPostSearchResult) []PostListItem {
 	// 收集 userIDs/circleIDs/postIDs
 	userIDSet := make(map[uuid.UUID]struct{})
 	circleIDSet := make(map[uuid.UUID]struct{})
@@ -603,10 +646,7 @@ func (s *postServiceImpl) SearchPosts(ctx context.Context, keyword string, circl
 			Images: images,
 		})
 	}
-
-	return &PostSearchResult{
-		Posts: posts, Total: raw.Total, Size: raw.Size, SearchAfter: raw.SearchAfter,
-	}, nil
+	return posts
 }
 
 // GetMediaByPostIDs 批量获取帖子图片（供 circle 领域调用）。

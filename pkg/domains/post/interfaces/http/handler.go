@@ -125,6 +125,85 @@ func (h *Handler) GetPosts(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
+// GetMyPostsRequest 我发布的帖子列表请求。
+type GetMyPostsRequest struct {
+	Keyword     string `query:"keyword"`
+	Size        int    `query:"size"`
+	SearchAfter string `query:"search_after"`
+}
+
+// GetMyPosts GET /post/my
+//
+// 查看自己发的帖（按当前登录用户过滤，支持 title/summary 模糊关键字，
+// 含草稿/审核等全部状态，仅排除已删除）。
+func (h *Handler) GetMyPosts(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req GetMyPostsRequest
+	if err := c.BindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	size := normalizeSize(req.Size)
+	searchAfter, ok := parseSearchAfter(c, req.SearchAfter)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.GetMyPosts(c, userID, req.Keyword, size, searchAfter)
+	if err != nil {
+		logger.Log.Error("Failed to search my posts: " + err.Error())
+		httputil.InternalError(c, "Failed to search my posts")
+		return
+	}
+	httputil.Success(c, result)
+}
+
+// GetUserPostsRequest 查看任意用户发帖列表的请求结构（user_id 走路径参数，不在此结构）。
+type GetUserPostsRequest struct {
+	Keyword     string `query:"keyword"`
+	Size        int    `query:"size"`
+	SearchAfter string `query:"search_after"`
+}
+
+// GetUserPosts GET /post/user/:user_id
+//
+// 查看任意用户的发帖记录（按路径 :user_id 过滤，支持 title/summary 模糊关键字）。
+// 强制 status=1：他人不可见对方草稿/审核/拒绝/封禁帖，仅返回已发布，排除已删除。
+func (h *Handler) GetUserPosts(c appctx.AppContext) {
+	targetUserID, err := uuid.Parse(c.Param("user_id"))
+	if err != nil {
+		httputil.BadRequest(c, "Invalid user_id")
+		return
+	}
+
+	var req GetUserPostsRequest
+	if err := c.BindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	size := normalizeSize(req.Size)
+	searchAfter, ok := parseSearchAfter(c, req.SearchAfter)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.GetUserPosts(c, targetUserID, req.Keyword, size, searchAfter)
+	if err != nil {
+		logger.Log.Error("Failed to search user posts: " + err.Error())
+		httputil.InternalError(c, "Failed to search user posts")
+		return
+	}
+	httputil.Success(c, result)
+}
+
 // ===== 辅助函数 =====
 
 func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {

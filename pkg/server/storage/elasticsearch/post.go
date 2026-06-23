@@ -172,6 +172,168 @@ func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []int
 	return parsePostSearchResponse(res, size)
 }
 
+// searchUserPostsInternal 按发帖人 user_id 过滤搜索帖子，供 SearchMyPosts /
+// SearchUserPosts 共用，避免重复查询体。
+//
+// userID: 发帖人ID（必传，核心过滤条件）
+// keyword: 搜索关键字，为空时返回该用户全部帖子，优先 title 检索，其次 summary
+// publishedOnly: true 时强制 status=1（仅已发布），用于查看「他人」发帖；
+//
+//	false 时不过滤 status（作者可见自己全部状态），用于「我的发帖」。
+//
+// size: 每页数量，默认 20
+// searchAfter: 上一页返回的 search_after 值，用于获取下一页
+//
+// 与 SearchPosts 的差异：
+//   - 过滤条件用 user_id（而非 circle_id）；
+//   - 关键字 multi_match 增加 fuzziness=AUTO，容忍拼写错误。
+func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly bool, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	// 默认每页 20 条
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	// 构建搜索查询
+	var searchQuery map[string]interface{}
+
+	// 定义排序规则：按id倒序（最新的帖子id最大，在前），避免日期精度和范围问题
+	sortRules := []map[string]interface{}{
+		{
+			"id": map[string]interface{}{
+				"order": "desc",
+			},
+		},
+	}
+
+	// 构建基础查询条件（过滤发帖人 + 已删除）
+	mustConditions := []map[string]interface{}{
+		{
+			"term": map[string]interface{}{
+				"user_id": userID.String(), // 只返回该用户的帖子
+			},
+		},
+		{
+			"term": map[string]interface{}{
+				"deleted": 0, // 过滤掉已删除的帖子
+			},
+		},
+	}
+	// 查看他人发帖时强制只返回已发布帖子（status=1）
+	if publishedOnly {
+		mustConditions = append(mustConditions, map[string]interface{}{
+			"term": map[string]interface{}{
+				"status": 1,
+			},
+		})
+	}
+
+	if keyword == "" {
+		// 无关键字时，返回符合条件的全部帖子，按id倒序
+		searchQuery = map[string]interface{}{
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": mustConditions,
+				},
+			},
+			"size": size,
+			"sort": sortRules,
+		}
+	} else {
+		// 有关键字时，使用 multi_match 进行加权搜索
+		// title 权重是 summary 的 3 倍，fuzziness=AUTO 容忍拼写错误，按_score排序
+		sortWithScore := []map[string]interface{}{
+			{
+				"_score": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			{
+				"id": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+		}
+
+		// 添加关键字搜索条件
+		searchConditions := []map[string]interface{}{
+			{
+				"multi_match": map[string]interface{}{
+					"query":     keyword,
+					"fields":    []string{"title^3", "summary^1"},
+					"type":      "best_fields",
+					"operator":  "or",
+					"fuzziness": "AUTO",
+				},
+			},
+		}
+		searchConditions = append(searchConditions, mustConditions...)
+
+		searchQuery = map[string]interface{}{
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": searchConditions,
+				},
+			},
+			"size": size,
+			"sort": sortWithScore,
+		}
+	}
+
+	// 添加 search_after 参数（如果提供）
+	if len(searchAfter) > 0 {
+		searchQuery["search_after"] = searchAfter
+	}
+
+	queryJSON, err := json.Marshal(searchQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query: %w", err)
+	}
+
+	// 使用帖子索引名称
+	postIndex := GetPostIndexName()
+
+	res, err := Client.Search(
+		Client.Search.WithContext(nil),
+		Client.Search.WithIndex(postIndex),
+		Client.Search.WithBody(bytes.NewReader(queryJSON)),
+		Client.Search.WithTrackTotalHits(true),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+	}
+
+	return parsePostSearchResponse(res, size)
+}
+
+// SearchMyPosts 搜索指定用户自己的帖子（"我的发帖"）。
+// userID: 发帖人ID（必传，核心过滤条件）
+// keyword: 搜索关键字，为空时返回该用户全部帖子，优先 title 检索，其次 summary
+// size: 每页数量，默认 20
+// searchAfter: 上一页返回的 search_after 值，用于获取下一页
+// 返回：帖子列表响应（包含帖子列表、总数、分页信息）
+//
+// 不过滤 status：作者可见自己全部状态（草稿/审核/已发布/拒绝/封禁），仅排除已删除。
+func SearchMyPosts(userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	return searchUserPostsInternal(userID, keyword, false, size, searchAfter)
+}
+
+// SearchUserPosts 搜索指定用户已发布的帖子（查看「他人」发帖记录用）。
+// userID: 发帖人ID（必传，核心过滤条件）
+// keyword: 搜索关键字，为空时返回该用户全部已发布帖子，优先 title 检索，其次 summary
+// size: 每页数量，默认 20
+// searchAfter: 上一页返回的 search_after 值，用于获取下一页
+// 返回：帖子列表响应（包含帖子列表、总数、分页信息）
+//
+// 与 SearchMyPosts 的差异：强制 status=1（仅已发布），他人不可见对方草稿/审核/拒绝/封禁帖。
+func SearchUserPosts(userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostListResponse, error) {
+	return searchUserPostsInternal(userID, keyword, true, size, searchAfter)
+}
+
 // parsePostSearchResponse 解析帖子搜索响应
 func parsePostSearchResponse(res *esapi.Response, size int) (*PostListResponse, error) {
 	var searchResult map[string]interface{}
