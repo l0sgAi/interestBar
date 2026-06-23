@@ -69,7 +69,7 @@ func (m *MediaExtraJSON) Scan(value interface{}) error {
 	}
 	bytes, ok := value.([]byte)
 	if !ok {
-		return nil
+		return errors.New("MediaExtraJSON: cannot scan non-[]byte value")
 	}
 	if string(bytes) == "{}" {
 		*m = make(MediaExtraJSON, 0)

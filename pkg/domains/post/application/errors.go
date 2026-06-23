@@ -23,8 +23,8 @@ func (e *mutedError) Error() string {
 	return "you are muted until " + e.until.Format("2006-01-02 15:04:05")
 }
 
-func errMutedUntil(t *time.Time) error {
-	return &mutedError{until: *t}
+func errMutedUntil(t time.Time) error {
+	return &mutedError{until: t}
 }
 
 // IsMutedErr 判断是否为"被禁言"错误，并返回截止时间。

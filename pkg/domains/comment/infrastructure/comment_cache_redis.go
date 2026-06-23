@@ -18,11 +18,11 @@ func NewCommentStatsCache() domain.CommentStatsCache {
 }
 
 func (c *commentStatsCacheRedis) Exists(ctx context.Context, commentID uuid.UUID) (bool, error) {
-	return redispkg.CommentStatisticsExists(commentID)
+	return redispkg.CommentStatisticsExists(ctx, commentID)
 }
 
 func (c *commentStatsCacheRedis) Set(ctx context.Context, commentID uuid.UUID, likeCount int) error {
-	return redispkg.UpdateCommentStatistics(commentID, likeCount)
+	return redispkg.UpdateCommentStatistics(ctx, commentID, likeCount)
 }
 
 // commentLikeCacheRedis 基于 Redis ZSET 的 CommentLikeCache 实现。
@@ -34,9 +34,9 @@ func NewCommentLikeCache() domain.CommentLikeCache {
 }
 
 func (c *commentLikeCacheRedis) BatchCheck(ctx context.Context, userID uuid.UUID, commentIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
-	return redispkg.BatchCheckCommentLiked(userID, commentIDs)
+	return redispkg.BatchCheckCommentLiked(ctx, userID, commentIDs)
 }
 
 func (c *commentLikeCacheRedis) Backfill(ctx context.Context, userID uuid.UUID, likedCommentIDs []uuid.UUID) error {
-	return redispkg.BackfillCommentLikes(userID, likedCommentIDs)
+	return redispkg.BackfillCommentLikes(ctx, userID, likedCommentIDs)
 }

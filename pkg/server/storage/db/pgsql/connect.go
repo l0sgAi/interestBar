@@ -3,9 +3,7 @@ package pgsql
 import (
 	"fmt"
 	"interestBar/pkg/conf"
-	commentdomain "interestBar/pkg/domains/comment/domain"
 	"interestBar/pkg/logger"
-	"interestBar/pkg/server/model"
 	"os"
 
 	"gorm.io/driver/postgres"
@@ -54,14 +52,10 @@ func InitDB() {
 	sqlDB.SetMaxIdleConns(p.MaxIdleConns)
 	sqlDB.SetMaxOpenConns(p.MaxOpenConns)
 
-	// Auto Migrate
-	// 注意：SysUser 仍在 pkg/server/model 中（auth OAuth provider 依赖它）。
-	// Comment 已迁移到 comment 领域（pkg/domains/comment/domain）。
-	// 其余领域（post/circle/user/like）由各自领域包自行管理迁移（或通过
-	// 对应的 infrastructure 层调用），这里只保留启动时必须迁移的核心表。
-	db.AutoMigrate(&model.SysUser{})
-	db.AutoMigrate(&commentdomain.Comment{})
-
+	// 表结构由 SQL 脚本（docs/db.md）管理，并由 DB owner 角色执行。
+	// 运行时连接用的是最小权限角色（如 qubar_web_app），并非表 owner，
+	// 不具备 ALTER 权限，因此这里不做 AutoMigrate——这与 post/circle/user/
+	// like/category 等领域的做法保持一致（它们也都只依赖 SQL 脚本建表）。
 	DB = db
 	if logger.Log != nil {
 		logger.Log.Info("Database connection successful")

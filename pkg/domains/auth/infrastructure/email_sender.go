@@ -19,10 +19,12 @@ func NewEmailSender() domain.EmailSender {
 }
 
 // SendVerificationCode 调用全局 email client 发送验证码。
-func (e *emailSenderImpl) SendVerificationCode(email, code, lang string) error {
+//
+// 直接透传调用方传入的 ctx，使邮件发送遵循请求的取消信号与 trace 上下文。
+func (e *emailSenderImpl) SendVerificationCode(ctx context.Context, email, code, lang string) error {
 	client := emailutil.GetClient()
 	if client == nil {
 		return errEmailServiceUnavailable
 	}
-	return client.SendVerificationCode(context.Background(), email, code, lang)
+	return client.SendVerificationCode(ctx, email, code, lang)
 }

@@ -49,5 +49,5 @@ func (c *commentLikeCacheRedis) Toggle(ctx context.Context, userID, commentID uu
 }
 
 func (c *commentLikeCacheRedis) StatsExists(ctx context.Context, commentID uuid.UUID) (bool, error) {
-	return redispkg.CommentStatisticsExists(commentID)
+	return redispkg.CommentStatisticsExists(ctx, commentID)
 }

@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -112,7 +113,8 @@ func executeLikeToggle(statsKey, zsetKey string, targetID uuid.UUID) (ToggleLike
 
 // BatchCheckCommentLiked 批量检查用户是否点赞了多条评论
 // ZMScore 对不存在的成员返回 float64(0)，由于我们的 score 是时间戳(>0)，score==0 等价于不存在
-func BatchCheckCommentLiked(userID uuid.UUID, commentIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
+// ctx 由调用方传入，使超时/取消得以传播（覆盖包级 background ctx）。
+func BatchCheckCommentLiked(ctx context.Context, userID uuid.UUID, commentIDs []uuid.UUID) (map[uuid.UUID]bool, error) {
 	if len(commentIDs) == 0 {
 		return make(map[uuid.UUID]bool), nil
 	}
@@ -183,7 +185,8 @@ func BatchCheckPostLiked(userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]b
 }
 
 // BackfillCommentLikes 将DB查询确认的点赞状态回填到ZSET
-func BackfillCommentLikes(userID uuid.UUID, likedCommentIDs []uuid.UUID) error {
+// ctx 由调用方传入，使超时/取消得以传播（覆盖包级 background ctx）。
+func BackfillCommentLikes(ctx context.Context, userID uuid.UUID, likedCommentIDs []uuid.UUID) error {
 	if len(likedCommentIDs) == 0 {
 		return nil
 	}

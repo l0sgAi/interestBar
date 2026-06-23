@@ -71,8 +71,12 @@ type UserSessionStore interface {
 	Create(input CreateUserInput) (*LoginUser, error)
 	// FindOrCreateForOAuth 按 provider ID 或 email 查找用户；
 	// 不存在则创建；若按 email 匹配但缺 provider ID 则补写。
-	// 返回的 LoginUser 一定含 ID。
-	FindOrCreateForOAuth(lookup OAuthUserLookup) *LoginUser
+	// 成功时返回的 LoginUser 一定含 ID；失败时返回底层 DB 错误。
+	FindOrCreateForOAuth(lookup OAuthUserLookup) (*LoginUser, error)
+	// UpdatePassword 更新用户密码哈希（用于哈希算法透明升级）。
+	//
+	// 实现层应只更新 pwd 字段，不触碰其他字段；userID 是 LoginUser.ID（UUIDv7 字符串）。
+	UpdatePassword(userID string, newHash string) error
 }
 
 // OAuthUserLookup 是 OAuth 登录时查找/创建用户的入参。
@@ -96,7 +100,7 @@ type LoginUser struct {
 	Username    string
 	Email       string
 	Phone       string
-	Pwd         string // 密码哈希（sha256）
+	Pwd         string // 密码哈希（Argon2id PHC 串；兼容旧 SHA256 十六进制）
 	GoogleID    string
 	XID         string
 	GithubID    string
@@ -151,7 +155,7 @@ func (u *LoginUser) ToSessionUser() SessionUser {
 type CreateUserInput struct {
 	Username   string
 	Email      string
-	Pwd        string // 已 sha256 哈希
+	Pwd        string // 已哈希（Argon2id PHC 串）
 	AvatarURL  string
 	Gender     int
 	ProviderID string // OAuth 注册时填充，邮箱注册时为空
@@ -181,7 +185,10 @@ type VerificationStore interface {
 // EmailSender 邮件发送抽象（由 infrastructure 提供）。
 type EmailSender interface {
 	// SendVerificationCode 发送验证码邮件。
-	SendVerificationCode(email, code, lang string) error
+	//
+	// ctx 用于传递请求上下文（取消信号、deadline、trace），实现层应
+	// 直接透传给底层 email client，避免使用 context.Background() 断开链路。
+	SendVerificationCode(ctx context.Context, email, code, lang string) error
 }
 
 // OAuthProvider 是 OAuth 提供方的抽象（由 infrastructure 提供具体实现）。

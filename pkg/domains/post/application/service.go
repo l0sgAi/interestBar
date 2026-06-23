@@ -8,6 +8,7 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -305,10 +306,7 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		if member == nil {
 			return uuid.Nil, errNotMember
 		}
-		if member.Status != domain.PostStatusPublished {
-			// 复用 PostStatusPublished=1 作为"normal"语义（与旧 MemberStatusNormal=1 一致）
-		}
-		// 检查成员状态
+		// 检查成员状态（pending/muted/banned → 拒绝；normal → 放行）
 		if err := checkMemberStatus(member); err != nil {
 			return uuid.Nil, err
 		}
@@ -387,7 +385,7 @@ func checkMemberStatus(member *CircleMemberInfo) error {
 		return errMembershipPending
 	case statusMuted:
 		if member.MuteEndTime != nil && member.MuteEndTime.After(time.Now()) {
-			return errMutedUntil(member.MuteEndTime)
+			return errMutedUntil(*member.MuteEndTime)
 		}
 		return nil
 	case statusBanned:
@@ -411,8 +409,15 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	// 点赞状态（缓存优先，miss 回源 DB）
 	isLiked := s.checkLiked(ctx, userID, postID)
 
-	// 异步增加浏览量
-	go s.asyncIncrementView(postID, userID)
+	// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Log.Error(fmt.Sprintf("Panic in asyncIncrementView: %v", r))
+			}
+		}()
+		s.asyncIncrementView(postID, userID)
+	}()
 
 	// 查发帖人信息
 	var authorName, authorAvatar string

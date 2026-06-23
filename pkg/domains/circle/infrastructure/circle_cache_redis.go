@@ -2,13 +2,15 @@ package infrastructure
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"interestBar/pkg/domains/circle/domain"
+	"interestBar/pkg/logger"
 	redispkg "interestBar/pkg/server/storage/redis"
 
 	"github.com/google/uuid"
-	redis "github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9"
 )
 
 // circleBaseCacheTTL 圈子基础信息缓存有效期（与旧 controller 一致：24 小时）。
@@ -26,6 +28,10 @@ func (c *circleBaseCacheRedis) GetBase(ctx context.Context, circleID uuid.UUID) 
 	key := redispkg.GetCircleInfoKey(circleID)
 	var info domain.CircleBaseInfo
 	if err := redispkg.GetJSONCompressed(key, &info); err != nil {
+		// 缓存 miss 不告警；其他错误（连接失败/反序列化失败）记日志便于观测
+		if !errors.Is(err, redis.Nil) {
+			logger.Log.Warn("Redis cache error for circle base info: " + err.Error())
+		}
 		return nil, nil
 	}
 	return &info, nil
@@ -100,13 +106,14 @@ func NewJoinedCirclesCache() domain.JoinedCirclesCache {
 	return &joinedCirclesCacheRedis{}
 }
 
-func joinedKey(userID uuid.UUID) string {
-	return redispkg.GetUserJoinedCirclesKey(userID)
-}
-
-// PageByRank 倒序按 rank 区间 [start, start+limit) 取 circleID。
-func (c *joinedCirclesCacheRedis) PageByRank(ctx context.Context, userID uuid.UUID, start, limit int64) ([]uuid.UUID, error) {
-	if limit <= 0 {
+func (c *joinedCirclesCacheRedis) GetJoined(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error) {
+	key := redispkg.GetUserJoinedCirclesKey(userID)
+	var circleIDs []uuid.UUID
+	if err := redispkg.GetJSON(key, &circleIDs); err != nil {
+		// 缓存 miss 不告警；其他错误记日志
+		if !errors.Is(err, redis.Nil) {
+			logger.Log.Warn("Redis cache error for joined circles: " + err.Error())
+		}
 		return nil, nil
 	}
 	members, err := redispkg.Client.ZRevRange(ctx, joinedKey(userID), start, start+limit-1).Result()

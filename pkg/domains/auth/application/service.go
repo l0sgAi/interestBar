@@ -7,13 +7,15 @@ package application
 
 import (
 	"context"
-	"crypto/sha256"
+	"crypto/rand"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net/mail"
 	"strings"
 
 	"interestBar/pkg/domains/auth/domain"
+	"interestBar/pkg/logger"
+	"interestBar/pkg/util/password"
 )
 
 // LoginInput 邮箱密码登录入参。
@@ -103,8 +105,9 @@ func NewAuthService(
 // 与旧 controller.Login 行为一致：
 //  1. 按邮箱查用户；
 //  2. 校验 status（禁用 → Forbidden）；
-//  3. 校验密码（sha256 比对）；
-//  4. 清理同设备旧 token + 登录 + 写会话。
+//  3. 校验密码（password.Verify 自动识别 Argon2id / 旧 SHA256）；
+//  4. 若旧哈希格式 → 升级为 Argon2id（失败不阻断登录）；
+//  5. 清理同设备旧 token + 登录 + 写会话。
 func (s *authServiceImpl) Login(ctx context.Context, input LoginInput) (*LoginResult, error) {
 	user, err := s.userStore.GetByEmail(input.Email)
 	if err != nil {
@@ -118,9 +121,25 @@ func (s *authServiceImpl) Login(ctx context.Context, input LoginInput) (*LoginRe
 		return nil, errAccountDisabled
 	}
 
-	pwdHash := fmt.Sprintf("%x", sha256.Sum256([]byte(input.Password)))
-	if user.Pwd != pwdHash {
+	ok, needsUpgrade, verifyErr := password.Verify(input.Password, user.Pwd)
+	if verifyErr != nil {
+		// 哈希格式损坏：当作凭据失败处理，避免泄露内部状态
+		logger.Log.Warn("password hash format invalid for user " + user.ID + ": " + verifyErr.Error())
 		return nil, errInvalidCredentials
+	}
+	if !ok {
+		return nil, errInvalidCredentials
+	}
+
+	// 透明升级：旧 SHA256 → Argon2id。失败仅记日志，不阻断登录。
+	if needsUpgrade {
+		if newHash, herr := password.Hash(input.Password); herr == nil {
+			if uerr := s.userStore.UpdatePassword(user.ID, newHash); uerr != nil {
+				logger.Log.Warn("failed to upgrade password hash for user " + user.ID + ": " + uerr.Error())
+			}
+		} else {
+			logger.Log.Warn("failed to compute new password hash for user " + user.ID + ": " + herr.Error())
+		}
 	}
 
 	device := resolveDevice(input.Device)
@@ -172,14 +191,18 @@ func (s *authServiceImpl) SendCode(ctx context.Context, input SendCodeInput) err
 		return errRateLimitExceeded
 	}
 
-	code := fmt.Sprintf("%06d", rand.Intn(1000000))
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return err
+	}
+	code := fmt.Sprintf("%06d", n.Int64())
 
 	if err := s.verify.SetCode(input.Email, code); err != nil {
 		return err
 	}
 	_ = s.verify.SetSendRateLimit(input.Email)
 
-	if err := s.email.SendVerificationCode(input.Email, code, input.Lang); err != nil {
+	if err := s.email.SendVerificationCode(ctx, input.Email, code, input.Lang); err != nil {
 		return err
 	}
 	return nil
@@ -239,7 +262,10 @@ func (s *authServiceImpl) Register(ctx context.Context, input RegisterInput) (*L
 		return nil, errEmailAlreadyExists
 	}
 
-	pwdHash := fmt.Sprintf("%x", sha256.Sum256([]byte(input.Password)))
+	pwdHash, err := password.Hash(input.Password)
+	if err != nil {
+		return nil, err
+	}
 
 	user, err := s.userStore.Create(domain.CreateUserInput{
 		Username: input.Username,
@@ -310,7 +336,10 @@ func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code,
 	// 通过 UserSessionStore 按 (providerID OR email) 查询。
 	// 注意：这里"按 provider 列名 + email"的查询由 userStore 实现内部完成，
 	// auth 层不感知具体列名。
-	user := s.findOrCreateOAuthUser(p, userInfo)
+	user, err := s.findOrCreateOAuthUser(p, userInfo)
+	if err != nil {
+		return "", err
+	}
 
 	userIDStr := user.ID
 
@@ -334,14 +363,14 @@ func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code,
 //
 // 注意：这里通过 UserSessionStore 走的是跨领域调用（由 composition 注入）。
 // provider ID 的查询/写入由 userStore 实现内部按 provider name 映射列名完成。
-func (s *authServiceImpl) findOrCreateOAuthUser(p domain.OAuthProvider, info *domain.OAuthUserInfo) *domain.LoginUser {
+func (s *authServiceImpl) findOrCreateOAuthUser(p domain.OAuthProvider, info *domain.OAuthUserInfo) (*domain.LoginUser, error) {
 	// 先按 email 查（userStore 的 GetByEmail 不带 provider 列），
 	// 再由实现决定是否按 provider 列查询。
 	//
 	// 这里的语义是：把"按 (providerID OR email) 查 + 不存在则创建 + 补 provider ID"
 	// 这段逻辑交给 userStore 实现（它知道 SysUser 结构）。
 	// auth 层只负责调用，不关心具体表结构。
-	return s.userStore.FindOrCreateForOAuth(domain.OAuthUserLookup{
+	user, err := s.userStore.FindOrCreateForOAuth(domain.OAuthUserLookup{
 		Provider:     p.Name(),
 		LookupField:  p.UserLookupField(),
 		ProviderID:   info.ProviderID,
@@ -349,6 +378,10 @@ func (s *authServiceImpl) findOrCreateOAuthUser(p domain.OAuthProvider, info *do
 		Name:         info.Name,
 		AvatarURL:    info.AvatarURL,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("find or create oauth user: %w", err)
+	}
+	return user, nil
 }
 
 // LogoutByToken 按 token 注销。
