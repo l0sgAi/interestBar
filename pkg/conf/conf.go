@@ -49,6 +49,10 @@ type Log struct {
 
 // 新增：对应 yaml 中的 oauth 层级
 type Oauth struct {
+	// ProxyURL OAuth 出站（换 token / 拉用户信息）使用的 HTTP 代理。
+	// 为空则直连。本地开发在网络受限时可配置（如 http://127.0.0.1:6268）。
+	ProxyURL string `mapstructure:"proxy_url" json:"proxy_url" yaml:"proxy_url"`
+
 	Google    Google    `mapstructure:"google" json:"google" yaml:"google"`
 	Github    Github    `mapstructure:"github" json:"github" yaml:"github"`
 	Microsoft Microsoft `mapstructure:"microsoft" json:"microsoft" yaml:"microsoft"`

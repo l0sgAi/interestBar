@@ -55,7 +55,9 @@ func (p *GoogleProvider) OAuthConfig() *oauth2.Config {
 }
 
 func (p *GoogleProvider) FetchUser(ctx context.Context, token *oauth2.Token) (*OAuthUserInfo, error) {
-	gu, err := GetGoogleUser(token)
+	// ctx 已携带代理感知 client（由适配器注入）与超时；用它构造带 token 的 client。
+	client := p.OAuthConfig().Client(ctx, token)
+	gu, err := GetGoogleUser(client)
 	if err != nil {
 		return nil, err
 	}
@@ -81,9 +83,9 @@ func (p *GoogleProvider) FrontendRedirectURL() string {
 	return conf.Config.Oauth.Google.FrontendRedirectURL
 }
 
-// GetGoogleUser fetches user info from Google using the access token
-func GetGoogleUser(token *oauth2.Token) (*GoogleUser, error) {
-	client := GetGoogleOAuthConfig().Client(context.Background(), token)
+// GetGoogleUser fetches user info from Google using the access token.
+// client 由调用方传入（携带 OAuth 代理与超时配置）。
+func GetGoogleUser(client *http.Client) (*GoogleUser, error) {
 	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user info: %v", err)
