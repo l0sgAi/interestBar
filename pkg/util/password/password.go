@@ -32,6 +32,11 @@ const (
 	defaultSaltLen uint32 = 16
 )
 
+// MinLength 密码最小长度。
+//
+// 统一注册与重置密码的最小长度校验，避免各处硬编码 6 导致规则漂移。
+const MinLength = 6
+
 // Params 哈希算法参数。
 type Params struct {
 	Time    uint32 // Argon2id 迭代次数（time cost）
