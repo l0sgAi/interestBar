@@ -509,6 +509,55 @@ CREATE INDEX idx_user_post_active ON domains.post_like(user_id, create_time DESC
 CREATE INDEX idx_clike_post_active ON domains.post_like(post_id, create_time DESC) WHERE deleted = 0;
 ```
 
+## 帖子收藏表
+
+> 设计与 [`post_like`](#帖子点赞表) 完全对齐:同属「用户对帖子的二元状态」流水表,仅目标维度不同(收藏 vs 点赞)。
+> 统计字段 `post.collect_count` 已在帖子表预留,Redis Hash `post:stats:{post_id}` 的 `collect_count` 字段、
+> Redpanda `post_collect_count` 消费链路均已就绪——本表补齐「收藏流水 + 收藏者关系」最后一环。
+
+```sql
+-- 帖子收藏表 (post_collect)
+DROP TABLE IF EXISTS domains.post_collect;
+
+CREATE TABLE domains.post_collect (
+    -- ID主键 (UUIDv7)
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
+
+    -- 核心关系
+    user_id UUID NOT NULL,           -- 收藏人
+    post_id UUID NOT NULL,           -- 被收藏的帖子ID (必填)
+
+    -- 收藏状态 (0=有效收藏, 1=取消收藏)
+    deleted SMALLINT NOT NULL DEFAULT 0,
+
+    create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- --- 注释 ---
+COMMENT ON TABLE domains.post_collect IS '帖子收藏流水表';
+COMMENT ON COLUMN domains.post_collect.id IS '主键ID(UUIDv7,应用层生成,DB默认值仅兜底)';
+COMMENT ON COLUMN domains.post_collect.user_id IS '收藏人ID(UUID)';
+COMMENT ON COLUMN domains.post_collect.post_id IS '被收藏的帖子ID(UUID)';
+COMMENT ON COLUMN domains.post_collect.deleted IS '收藏状态: 0=有效收藏, 1=取消收藏';
+COMMENT ON COLUMN domains.post_collect.create_time IS '收藏时间(用于"我的收藏"按收藏时间倒序)';
+COMMENT ON COLUMN domains.post_collect.update_time IS '更新时间(收藏/取消收藏切换时更新)';
+
+-- --- 索引优化 ---
+
+-- 1. 【核心】保证每个用户对每个帖子只有一条收藏/取消收藏的记录
+CREATE UNIQUE INDEX uk_post_collect_user_post ON domains.post_collect(user_id, post_id);
+
+-- 2. 【核心】查询"我收藏过的帖子"
+-- 场景：个人中心"我的收藏"页，按收藏时间倒序翻页。
+-- (create_time, id) 组合可做 keyset 游标分页，避免深翻页 OFFSET 性能退化。
+CREATE INDEX idx_pcollect_user_active ON domains.post_collect(user_id, create_time DESC, id DESC) WHERE deleted = 0;
+
+-- 3. 【统计/关联】查询某帖子的收藏者列表 (通常只展示头像，不常翻页)
+-- 配合 `deleted=0` 查询有效收藏者。
+CREATE INDEX idx_pcollect_post_active ON domains.post_collect(post_id, create_time DESC) WHERE deleted = 0;
+```
+
 ---
 
 ## 附录:批量更新统计的 jsonb 类型对照

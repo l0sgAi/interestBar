@@ -194,6 +194,9 @@ type PostService interface {
 	GetUserPosts(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error)
 	// GetMediaByPostIDs 批量获取帖子图片（供 circle 领域 GetCirclePosts 调用）。
 	GetMediaByPostIDs(ctx context.Context, postIDs []string) (map[string][]string, error)
+	// GetPostsByIDs 按 ID 列表批量获取已组装的帖子（仅未删除 + 已发布）。
+	// 供 collect 领域「我的收藏」列表调用。顺序不保证，调用方自行按收藏时间排序；失效帖静默过滤。
+	GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error)
 
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
@@ -674,6 +677,108 @@ func (s *postServiceImpl) GetMediaByPostIDs(ctx context.Context, postIDs []strin
 		result[pid.String()] = []string(m)
 	}
 	return result, nil
+}
+
+// GetPostsByIDs 按 ID 列表批量获取已组装的帖子（DB 来源，仅未删除 + 已发布）。
+//
+// 供 collect 领域「我的收藏」列表调用。与 assemblePostList（ES 来源）平行：
+// 批量查作者/圈子/图片后组装为 PostListItem。顺序不保证，失效帖静默过滤。
+func (s *postServiceImpl) GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error) {
+	if len(postIDs) == 0 {
+		return []PostListItem{}, nil
+	}
+	posts, err := s.repo.ListByIDs(ctx, postIDs)
+	if err != nil {
+		return nil, err
+	}
+	return s.assembleFromPosts(ctx, posts), nil
+}
+
+// assembleFromPosts 把 DB Post 实体批量组装为 PostListItem（作者/圈子/图片信息）。
+//
+// 与 assemblePostList 平行：后者喂 ES PostDoc，本方法喂 domain.Post。
+// 两者共享 batch 查询 user/circle/media 的模式，但输入类型不同，故独立实现以保证清晰。
+func (s *postServiceImpl) assembleFromPosts(ctx context.Context, posts []domain.Post) []PostListItem {
+	if len(posts) == 0 {
+		return []PostListItem{}
+	}
+
+	userIDSet := make(map[uuid.UUID]struct{})
+	circleIDSet := make(map[uuid.UUID]struct{})
+	postIDs := make([]uuid.UUID, 0, len(posts))
+	for _, p := range posts {
+		postIDs = append(postIDs, p.ID)
+		userIDSet[p.UserID] = struct{}{}
+		circleIDSet[p.CircleID] = struct{}{}
+	}
+	userIDs := keys(userIDSet)
+	circleIDs := keys(circleIDSet)
+
+	// 批量查询用户信息
+	userMap := make(map[uuid.UUID]UserBrief)
+	if s.userFacade != nil && len(userIDs) > 0 {
+		if briefs, err := s.userFacade.GetBriefs(ctx, toStrings(userIDs)); err == nil {
+			for idStr, b := range briefs {
+				if uid, err := uuid.Parse(idStr); err == nil {
+					userMap[uid] = UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}
+				}
+			}
+		}
+	}
+
+	// 批量查询圈子信息
+	circleMap := make(map[uuid.UUID]CircleBrief)
+	if s.circleFacade != nil && len(circleIDs) > 0 {
+		if briefs, err := s.circleFacade.GetBriefs(ctx, toStrings(circleIDs)); err == nil {
+			for idStr, b := range briefs {
+				if cid, err := uuid.Parse(idStr); err == nil {
+					circleMap[cid] = CircleBrief{ID: b.ID, Name: b.Name, AvatarURL: b.AvatarURL}
+				}
+			}
+		}
+	}
+
+	// 批量查询帖子媒体
+	mediaMap := make(map[uuid.UUID][]string)
+	if len(postIDs) > 0 {
+		if media, err := s.repo.GetMediaByPostIDs(ctx, postIDs); err == nil {
+			for pid, m := range media {
+				mediaMap[pid] = []string(m)
+			}
+		}
+	}
+
+	// 组装
+	result := make([]PostListItem, 0, len(posts))
+	for _, p := range posts {
+		var authorName, authorAvatar string
+		if a, ok := userMap[p.UserID]; ok {
+			authorName = a.Username
+			authorAvatar = a.AvatarURL
+		}
+		var circleName, circleAvatar string
+		if c, ok := circleMap[p.CircleID]; ok {
+			circleName = c.Name
+			circleAvatar = c.AvatarURL
+		}
+		var images []string
+		if m, ok := mediaMap[p.ID]; ok {
+			images = m
+		}
+
+		result = append(result, PostListItem{
+			ID: p.ID, CircleID: p.CircleID, UserID: p.UserID, Type: p.Type,
+			Title: p.Title, Summary: p.Summary, Content: p.Content,
+			ViewCount: p.ViewCount, CommentCount: p.CommentCount,
+			LikeCount: p.LikeCount, CollectCount: p.CollectCount,
+			IsPinned: p.IsPinned, IsEssence: p.IsEssence, IsLock: p.IsLock,
+			Status: p.Status, CreateTime: p.CreateTime,
+			AuthorName: authorName, AuthorAvatar: authorAvatar,
+			CircleName: circleName, CircleAvatar: circleAvatar,
+			Images: images,
+		})
+	}
+	return result
 }
 
 // GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。

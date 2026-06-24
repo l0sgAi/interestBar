@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	dialer          *kafka.Dialer
-	writer          *kafka.Writer
-	postWriter      *kafka.Writer
-	likeEventWriter *kafka.Writer
+	dialer            *kafka.Dialer
+	writer            *kafka.Writer
+	postWriter        *kafka.Writer
+	likeEventWriter   *kafka.Writer
+	collectEventWriter *kafka.Writer
 )
 
 // InitRedpandaProducer 初始化Redpanda Producer
@@ -306,6 +307,71 @@ func CloseLikeEventProducer() error {
 			return err
 		}
 		logger.Log.Info("Like event producer closed")
+	}
+	return nil
+}
+
+// ==================== 收藏事件消息 ====================
+
+// InitCollectEventProducer 初始化收藏事件Producer
+func InitCollectEventProducer() error {
+	collectEventWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.CollectEventTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("Collect event producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.CollectEventTopic))
+	return nil
+}
+
+// PublishPostCollectEvent 发布帖子收藏事件消息
+func PublishPostCollectEvent(userID, postID uuid.UUID, amount int64) error {
+	if collectEventWriter == nil {
+		return fmt.Errorf("collect event writer is not initialized")
+	}
+	return publishCollectEvent(CollectEventMessage{
+		Type:   CollectEventType,
+		UserID: userID,
+		PostID: postID,
+		Amount: amount,
+	})
+}
+
+func publishCollectEvent(msg CollectEventMessage) error {
+	value, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal collect event message: %w", err)
+	}
+	kafkaMsg := kafka.Message{
+		Key:   []byte(fmt.Sprintf("%s:%s", msg.UserID.String(), msg.PostID.String())),
+		Value: value,
+	}
+	if err := collectEventWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+		return fmt.Errorf("failed to write collect event message: %w", err)
+	}
+	logger.Log.Debug(fmt.Sprintf("Published collect event: type=%s, user=%s, post=%s, amount=%d",
+		msg.Type, msg.UserID.String(), msg.PostID.String(), msg.Amount))
+	return nil
+}
+
+// CloseCollectEventProducer 关闭收藏事件Producer
+func CloseCollectEventProducer() error {
+	if collectEventWriter != nil {
+		if err := collectEventWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close collect event writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("Collect event producer closed")
 	}
 	return nil
 }

@@ -15,6 +15,8 @@ type PostRepository interface {
 	Create(ctx context.Context, post *Post) error
 	// GetMediaByPostIDs 批量获取帖子的图片列表（仅查 id + media_extra）。
 	GetMediaByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]MediaExtraJSON, error)
+	// ListByIDs 批量获取帖子（仅未删除 + 已发布），供 collect「我的收藏」组装用。
+	ListByIDs(ctx context.Context, postIDs []uuid.UUID) ([]Post, error)
 	// IsLiked 检查用户是否点赞了帖子（DB 回源用）。
 	IsLiked(ctx context.Context, userID, postID uuid.UUID) (bool, error)
 	// IncrCommentCount 同步递增帖子评论计数（DB UPDATE comment_count + 1）。

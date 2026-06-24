@@ -100,6 +100,9 @@ redpanda:
   like_event_topic: "like_events" # 点赞事件topic
   like_event_consumer_group: "like_events_consumer_group" # 点赞事件消费者组
   like_event_flush_interval: 10 # 点赞事件刷写间隔(秒)
+  collect_event_topic: "collect_events" # 收藏事件topic
+  collect_event_consumer_group: "collect_events_consumer_group" # 收藏事件消费者组
+  collect_event_flush_interval: 10 # 收藏事件刷写间隔(秒)
 
 # 安全相关配置
 security:

@@ -142,6 +142,9 @@ type Redpanda struct {
 	LikeEventTopic         string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
 	LikeEventConsumerGroup string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
 	LikeEventFlushInterval int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
+	CollectEventTopic         string   `mapstructure:"collect_event_topic" json:"collect_event_topic" yaml:"collect_event_topic"`
+	CollectEventConsumerGroup string   `mapstructure:"collect_event_consumer_group" json:"collect_event_consumer_group" yaml:"collect_event_consumer_group"`
+	CollectEventFlushInterval int      `mapstructure:"collect_event_flush_interval" json:"collect_event_flush_interval" yaml:"collect_event_flush_interval"`
 }
 
 // Mailtrap 邮件发送配置

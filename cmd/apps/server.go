@@ -105,6 +105,22 @@ func Run(configPath, bootstrapPath string) {
 		logger.Log.Info("Like Lua scripts loaded successfully")
 	}
 
+	// 8.10 Init Collect event Redpanda producer
+	if err := redpanda.InitCollectEventProducer(); err != nil {
+		logger.Log.Error("Failed to initialize collect event producer: " + err.Error())
+		logger.Log.Warn("Collect event persistence to database is disabled.")
+	} else {
+		logger.Log.Info("Collect event producer initialized successfully")
+		go redpanda.StartCollectEventConsumerWithRetry()
+	}
+
+	// 8.11 Init Collect Lua scripts in Redis
+	if err := redis.InitCollectLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load collect Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("Collect Lua scripts loaded successfully")
+	}
+
 	// 8.9 Init View Lua scripts in Redis
 	if err := redis.InitViewLuaScripts(); err != nil {
 		logger.Log.Error("Failed to load view Lua scripts: " + err.Error())
@@ -129,5 +145,6 @@ func Run(configPath, bootstrapPath string) {
 	redpanda.CloseRedpandaProducer()
 	redpanda.ClosePostStatsProducer()
 	redpanda.CloseLikeEventProducer()
+	redpanda.CloseCollectEventProducer()
 	logger.Log.Info("Server shutdown complete")
 }

@@ -57,6 +57,22 @@ func (r *postRepoPG) GetMediaByPostIDs(ctx context.Context, postIDs []uuid.UUID)
 	return result, nil
 }
 
+// ListByIDs 批量获取帖子（仅未删除 + 已发布 status=1）。
+// 供 collect「我的收藏」组装用：失效帖（已删/未发布）在此静默过滤。
+func (r *postRepoPG) ListByIDs(ctx context.Context, postIDs []uuid.UUID) ([]domain.Post, error) {
+	if len(postIDs) == 0 {
+		return nil, nil
+	}
+	var posts []domain.Post
+	err := r.db.WithContext(ctx).
+		Where("id IN ? AND deleted = ? AND status = ?", postIDs, 0, domain.PostStatusPublished).
+		Find(&posts).Error
+	if err != nil {
+		return nil, err
+	}
+	return posts, nil
+}
+
 func (r *postRepoPG) IsLiked(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&domain.PostLike{}).

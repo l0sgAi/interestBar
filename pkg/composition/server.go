@@ -15,6 +15,9 @@ import (
 	commentapp "interestBar/pkg/domains/comment/application"
 	commentinfra "interestBar/pkg/domains/comment/infrastructure"
 	commenthttp "interestBar/pkg/domains/comment/interfaces/http"
+	collectapp "interestBar/pkg/domains/collect/application"
+	collectinfra "interestBar/pkg/domains/collect/infrastructure"
+	collecthttp "interestBar/pkg/domains/collect/interfaces/http"
 	likeapp "interestBar/pkg/domains/like/application"
 	likeinfra "interestBar/pkg/domains/like/infrastructure"
 	likehttp "interestBar/pkg/domains/like/interfaces/http"
@@ -50,6 +53,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 
 	commentSvc := newCommentService(deps)
 	likeSvc := newLikeService(deps)
+	collectSvc := newCollectService(deps)
 
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
@@ -71,10 +75,14 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	likeSvc.SetPostTarget(&likePostTarget{delegate: postSvc})
 	likeSvc.SetCommentTarget(&likeCommentTarget{delegate: commentSvc})
 
+	// collect 需要 post 查询端口（存在性校验 + 统计缓存恢复）+ post 组装端口（「我的收藏」列表）
+	collectSvc.SetPostTarget(&collectPostTarget{delegate: postSvc})
+	collectSvc.SetPostFetcher(&collectPostFetcher{delegate: postSvc})
+
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
 	if logger.Log != nil {
-		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment")
+		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post")
 	}
 
 	// 注册路由
@@ -86,6 +94,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerPost(root, postSvc, authCheck)
 	registerComment(root, commentSvc, authCheck)
 	registerLike(root, likeSvc, authCheck)
+	registerCollect(root, collectSvc, authCheck)
 }
 
 // registerCategory 装配 category 领域。
@@ -137,6 +146,11 @@ func registerComment(root routing.RouterGroup, svc commentapp.CommentService, au
 // registerLike 装配 like 领域。
 func registerLike(root routing.RouterGroup, svc likeapp.LikeService, authCheck routing.HandlerFunc) {
 	likehttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerCollect 装配 collect 领域。
+func registerCollect(root routing.RouterGroup, svc collectapp.CollectService, authCheck routing.HandlerFunc) {
+	collecthttp.RegisterRoutes(root, svc, authCheck)
 }
 
 // ===== Service 构造函数 =====
@@ -191,4 +205,14 @@ func newLikeService(deps *Deps) likeapp.LikeService {
 	commentCache := likeinfra.NewCommentLikeCache()
 	publisher := likeinfra.NewLikeEventPublisher()
 	return likeapp.NewLikeService(postCache, commentCache, publisher)
+}
+
+// newCollectService 构造 CollectService。
+//
+// post 跨领域依赖（查询端口 + 组装端口）通过 setter 注入（见 RegisterDomainRoutes）。
+func newCollectService(deps *Deps) collectapp.CollectService {
+	cache := collectinfra.NewPostCollectCache()
+	repo := collectinfra.NewPostCollectRepository(deps.DB.Get())
+	publisher := collectinfra.NewCollectEventPublisher()
+	return collectapp.NewCollectService(cache, repo, publisher)
 }
