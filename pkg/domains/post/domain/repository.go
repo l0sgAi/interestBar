@@ -34,6 +34,12 @@ type PostStatsCache interface {
 	Get(ctx context.Context, postID uuid.UUID) (*PostStatistics, error)
 	// Set 设置统计信息（用于从 DB 恢复）。
 	Set(ctx context.Context, postID uuid.UUID, stats *PostStatistics) error
+	// BatchGet 批量获取统计信息（pipeline，1 RTT）。仅返回字段齐全的 postID；
+	// 未命中/部分缺失的不计入（调用方走 DB/ES baseline）。
+	BatchGet(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]*PostStatistics, error)
+	// SetIfAbsent 仅当字段不存在时回种（HSetNX）。用于读路径 miss 回种，
+	// 避免覆盖并发浏览量自增。
+	SetIfAbsent(ctx context.Context, postID uuid.UUID, stats *PostStatistics) error
 	// IncrViewCount 增加浏览量（带去重），返回新计数值。
 	IncrViewCount(ctx context.Context, postID, userID uuid.UUID) (int64, error)
 	// IncrCommentCount 递增帖子评论计数（Hash 字段 comment_count +1）。

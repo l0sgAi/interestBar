@@ -456,9 +456,18 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		IsCollected: isCollected,
 	}
 
-	// 用 Redis 最新浏览量覆盖 DB 值
+	// 用 Redis 实时统计覆盖 DB 值（全 4 字段）；缓存缺失则用 DB 兜底（值已在 vo）并回种 Redis。
+	// 回种用 HSetNX：async 浏览量 goroutine 会 HINCRBY view_count，普通 HSet 会 clobber 它的 +1。
 	if stats, _ := s.statsCache.Get(ctx, postID); stats != nil {
 		vo.ViewCount = stats.ViewCount
+		vo.CommentCount = stats.CommentCount
+		vo.LikeCount = stats.LikeCount
+		vo.CollectCount = stats.CollectCount
+	} else {
+		_ = s.statsCache.SetIfAbsent(ctx, postID, &domain.PostStatistics{
+			ViewCount: post.ViewCount, CommentCount: post.CommentCount,
+			LikeCount: post.LikeCount, CollectCount: post.CollectCount,
+		})
 	}
 
 	return vo, nil
@@ -696,7 +705,32 @@ func (s *postServiceImpl) assemblePostList(ctx context.Context, raw *RawPostSear
 			Images: images,
 		})
 	}
+	s.applyStatsOverlay(ctx, posts)
 	return posts
+}
+
+// applyStatsOverlay 用 Redis 实时统计覆盖列表项计数字段（view/comment/like/collect）。
+// 批量 pipeline 1 RTT；未命中的帖子保留原值（ES/DB 快照），不回种（避免读路径写放大）。
+func (s *postServiceImpl) applyStatsOverlay(ctx context.Context, posts []PostListItem) {
+	if len(posts) == 0 {
+		return
+	}
+	postIDs := make([]uuid.UUID, 0, len(posts))
+	for _, p := range posts {
+		postIDs = append(postIDs, p.ID)
+	}
+	statsMap, err := s.statsCache.BatchGet(ctx, postIDs)
+	if err != nil || len(statsMap) == 0 {
+		return
+	}
+	for i := range posts {
+		if st, ok := statsMap[posts[i].ID]; ok && st != nil {
+			posts[i].ViewCount = st.ViewCount
+			posts[i].CommentCount = st.CommentCount
+			posts[i].LikeCount = st.LikeCount
+			posts[i].CollectCount = st.CollectCount
+		}
+	}
 }
 
 // GetMediaByPostIDs 批量获取帖子图片（供 circle 领域调用）。
@@ -820,6 +854,7 @@ func (s *postServiceImpl) assembleFromPosts(ctx context.Context, posts []domain.
 			Images: images,
 		})
 	}
+	s.applyStatsOverlay(ctx, result)
 	return result
 }
 
