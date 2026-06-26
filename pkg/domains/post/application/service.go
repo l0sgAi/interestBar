@@ -168,6 +168,7 @@ type PostDetailVO struct {
 	AuthorName    string             `json:"author_name"`
 	AuthorAvatar  string             `json:"author_avatar"`
 	IsLiked       bool               `json:"is_liked"`
+	IsCollected   bool               `json:"is_collected"`
 }
 
 // CreatePostInput 发帖入参。
@@ -219,6 +220,8 @@ type PostService interface {
 	SetStatusChecker(c CircleStatusChecker)
 	// SetPostCountPort 注入圈子帖子计数端口（发帖后递增计数用）。
 	SetPostCountPort(p CirclePostCountPort)
+	// SetCollectCache 注入收藏状态缓存（详情页 is_collected 回显用）。
+	SetCollectCache(c domain.PostCollectCache)
 }
 
 // PostMeta 帖子元信息（供 comment/like 领域校验用）。
@@ -234,6 +237,7 @@ type postServiceImpl struct {
 	repo         domain.PostRepository
 	statsCache   domain.PostStatsCache
 	likeCache    domain.PostLikeCache
+	collectCache domain.PostCollectCache
 	searcher     PostSearcher
 	publisher    domain.PostEventPublisher
 	userFacade   UserFacade
@@ -251,15 +255,17 @@ func NewPostService(
 	repo domain.PostRepository,
 	statsCache domain.PostStatsCache,
 	likeCache domain.PostLikeCache,
+	collectCache domain.PostCollectCache,
 	searcher PostSearcher,
 	publisher domain.PostEventPublisher,
 ) PostService {
 	return &postServiceImpl{
-		repo:       repo,
-		statsCache: statsCache,
-		likeCache:  likeCache,
-		searcher:   searcher,
-		publisher:  publisher,
+		repo:         repo,
+		statsCache:   statsCache,
+		likeCache:    likeCache,
+		collectCache: collectCache,
+		searcher:     searcher,
+		publisher:    publisher,
 	}
 }
 
@@ -269,6 +275,7 @@ func (s *postServiceImpl) SetCircleFacade(f CircleFacade)          { s.circleFac
 func (s *postServiceImpl) SetMemberChecker(c CircleMemberChecker)  { s.memberCheck = c }
 func (s *postServiceImpl) SetStatusChecker(c CircleStatusChecker)  { s.statusCheck = c }
 func (s *postServiceImpl) SetPostCountPort(p CirclePostCountPort)  { s.postCountPort = p }
+func (s *postServiceImpl) SetCollectCache(c domain.PostCollectCache) { s.collectCache = c }
 
 // CreatePost 创建帖子。
 //
@@ -412,6 +419,9 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	// 点赞状态（缓存优先，miss 回源 DB）
 	isLiked := s.checkLiked(ctx, userID, postID)
 
+	// 收藏状态（缓存优先，miss 回源 DB）
+	isCollected := s.checkCollected(ctx, userID, postID)
+
 	// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）
 	go func() {
 		defer func() {
@@ -443,6 +453,7 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		LastReplyTime: post.LastReplyTime,
 		AuthorID: post.UserID, AuthorName: authorName, AuthorAvatar: authorAvatar,
 		IsLiked: isLiked,
+		IsCollected: isCollected,
 	}
 
 	// 用 Redis 最新浏览量覆盖 DB 值
@@ -478,6 +489,37 @@ func (s *postServiceImpl) checkLiked(ctx context.Context, userID, postID uuid.UU
 		return false
 	}
 	return isLiked
+}
+
+// checkCollected 检查收藏状态（缓存优先，miss 回源 DB + 回填）。
+// 未注入 collectCache 时（向后兼容）直接返回 false。
+func (s *postServiceImpl) checkCollected(ctx context.Context, userID, postID uuid.UUID) bool {
+	if s.collectCache == nil {
+		return false
+	}
+	collectedMap, missed, err := s.collectCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
+	if err == nil {
+		if collectedMap[postID] {
+			return true
+		}
+		if len(missed) > 0 {
+			isCollected, dbErr := s.repo.IsCollected(ctx, userID, postID)
+			if dbErr != nil {
+				return false
+			}
+			if isCollected {
+				_ = s.collectCache.Backfill(ctx, userID, []uuid.UUID{postID})
+			}
+			return isCollected
+		}
+		return false
+	}
+	// 缓存故障：直接回源 DB
+	isCollected, dbErr := s.repo.IsCollected(ctx, userID, postID)
+	if dbErr != nil {
+		return false
+	}
+	return isCollected
 }
 
 // asyncIncrementView 异步增加浏览量（含缓存恢复 + 发布事件）。

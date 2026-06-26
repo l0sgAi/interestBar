@@ -81,6 +81,17 @@ func (r *postRepoPG) IsLiked(ctx context.Context, userID, postID uuid.UUID) (boo
 	return count > 0, err
 }
 
+// IsCollected 检查用户是否收藏了帖子（DB 回源用）。
+// post_collect 表属 collect 领域，这里用 Table() 按表名查询，避免跨领域 import 实体。
+// deleted=0 等价 collect.domain.PostCollectActive。
+func (r *postRepoPG) IsCollected(ctx context.Context, userID, postID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Table("domains.post_collect").
+		Where("user_id = ? AND post_id = ? AND deleted = ?", userID, postID, 0).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // IncrCommentCount 同步递增帖子评论计数（comment_count + 1）。
 // 实时持久化到 DB，替代旧的 Redpanda 异步聚合；GREATEST 防御性兜底，与批量聚合语义一致。
 func (r *postRepoPG) IncrCommentCount(ctx context.Context, postID uuid.UUID) error {

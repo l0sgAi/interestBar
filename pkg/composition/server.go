@@ -182,9 +182,10 @@ func newPostService(deps *Deps) postapp.PostService {
 	repo := postinfra.NewPostRepository(deps.DB.Get())
 	statsCache := postinfra.NewPostStatsCache()
 	likeCache := postinfra.NewPostLikeCache()
+	collectCache := postinfra.NewPostCollectCache()
 	searcher := postinfra.NewPostSearcher()
 	publisher := postinfra.NewPostEventPublisher()
-	return postapp.NewPostService(repo, statsCache, likeCache, searcher, publisher)
+	return postapp.NewPostService(repo, statsCache, likeCache, collectCache, searcher, publisher)
 }
 
 // newCommentService 构造 CommentService。
