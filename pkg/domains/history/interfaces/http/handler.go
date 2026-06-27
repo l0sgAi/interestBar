@@ -25,8 +25,9 @@ func NewHandler(svc application.HistoryService) *Handler {
 
 // ListHistoryPostsRequest 「最近浏览」列表请求。
 type ListHistoryPostsRequest struct {
-	Size   int `query:"size"`
-	Offset int `query:"offset"`
+	Keyword string `query:"keyword"`
+	Size    int    `query:"size"`
+	Offset  int    `query:"offset"`
 }
 
 // ListHistoryPosts GET /history/posts
@@ -42,7 +43,7 @@ func (h *Handler) ListHistoryPosts(c appctx.AppContext) {
 		return
 	}
 
-	result, err := h.svc.ListHistoryPosts(c, userID, req.Size, req.Offset)
+	result, err := h.svc.ListHistoryPosts(c, userID, req.Keyword, req.Size, req.Offset)
 	if err != nil {
 		writeHistoryError(c, err)
 		return

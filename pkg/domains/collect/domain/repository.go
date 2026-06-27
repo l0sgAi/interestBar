@@ -39,8 +39,9 @@ type CollectEventPublisher interface {
 type PostCollectRepository interface {
 	// ListCollectedPostIDs 按收藏时间倒序分页查询用户收藏的帖子ID（keyset 游标分页）。
 	// cursor 为首页空串；返回 postID 列表、总数、下一页游标（末页为空串）、error。
-	// 游标非法返回 ErrInvalidCursor。
-	ListCollectedPostIDs(ctx context.Context, userID uuid.UUID, size int, cursor string) (postIDs []uuid.UUID, total int64, nextCursor string, err error)
+	// keyword 非空时 JOIN domains.post 过滤 title/summary（ILIKE）+ 仅已发布未删帖，
+	// 返回的 postIDs 与 total 均仅计匹配项。游标非法返回 ErrInvalidCursor。
+	ListCollectedPostIDs(ctx context.Context, userID uuid.UUID, keyword string, size int, cursor string) (postIDs []uuid.UUID, total int64, nextCursor string, err error)
 	// IsCollected 检查用户是否收藏了帖子（DB 回源用，缓存 miss 时调用）。
 	IsCollected(ctx context.Context, userID, postID uuid.UUID) (bool, error)
 	// SetCollected 同步 upsert 收藏流水行（active=true 新增/恢复，active=false 标记取消）。

@@ -295,3 +295,7 @@ func (f *historyPostFetcher) SearchByIDs(ctx context.Context, postIDs []uuid.UUI
 	return f.delegate.SearchPostsByIDs(ctx, postIDs)
 }
 
+func (f *historyPostFetcher) SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]postapp.PostListItem, int64, error) {
+	return f.delegate.SearchPostsByIDsAndKeyword(ctx, postIDs, keyword, size, offset)
+}
+

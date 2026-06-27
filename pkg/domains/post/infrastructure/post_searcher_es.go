@@ -58,6 +58,20 @@ func (s *postSearcherES) SearchByIDs(ctx context.Context, postIDs []uuid.UUID, s
 	return toRawPostSearchResult(result), nil
 }
 
+// SearchByIDsAndKeyword 在 ID 集合内按关键字搜索帖子(供 history「最近浏览」关键字搜索用)。
+// 多一层 multi_match(title^3/summary) 过滤,按 _score 排序,offset 分页。
+func (s *postSearcherES) SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) (*application.RawPostSearchResult, error) {
+	idStrs := make([]string, 0, len(postIDs))
+	for _, id := range postIDs {
+		idStrs = append(idStrs, id.String())
+	}
+	result, err := elasticsearch.SearchPostsByIDsAndKeyword(idStrs, keyword, size, offset)
+	if err != nil {
+		return nil, err
+	}
+	return toRawPostSearchResult(result), nil
+}
+
 // toRawPostSearchResult 把 ES PostListResponse 转为 application.RawPostSearchResult。
 func toRawPostSearchResult(r *elasticsearch.PostListResponse) *application.RawPostSearchResult {
 	return &application.RawPostSearchResult{

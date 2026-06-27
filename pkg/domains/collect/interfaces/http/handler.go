@@ -51,6 +51,7 @@ func (h *Handler) ToggleCollect(c appctx.AppContext) {
 
 // ListCollectedPostsRequest 「我的收藏」列表请求。
 type ListCollectedPostsRequest struct {
+	Keyword     string `query:"keyword"`
 	Size        int    `query:"size"`
 	SearchAfter string `query:"search_after"`
 }
@@ -68,7 +69,7 @@ func (h *Handler) ListCollectedPosts(c appctx.AppContext) {
 		return
 	}
 
-	result, err := h.svc.ListCollectedPosts(c, userID, req.Size, req.SearchAfter)
+	result, err := h.svc.ListCollectedPosts(c, userID, req.Keyword, req.Size, req.SearchAfter)
 	if err != nil {
 		writeCollectError(c, err)
 		return

@@ -144,6 +144,9 @@ type PostSearcher interface {
 	// 顺序不保证,调用方自行按业务序重排;失效帖(被删/未发布)静默过滤。
 	// 供 history「最近浏览」列表用。
 	SearchByIDs(ctx context.Context, postIDs []uuid.UUID, size int) (*RawPostSearchResult, error)
+	// SearchByIDsAndKeyword 在 ID 集合内按关键字搜索帖子(title^3/summary multi_match),
+	// 按 _score desc 排序,offset 分页。供 history「最近浏览」关键字搜索用。
+	SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) (*RawPostSearchResult, error)
 }
 
 // PostDetailVO 帖子详情 VO。
@@ -205,6 +208,10 @@ type PostService interface {
 	// SearchPostsByIDs 按 ID 列表从 ES 获取已组装帖子(供 history「最近浏览」列表调用)。
 	// ES terms 查询,仅未删除 + 已发布;顺序不保证,调用方自行按浏览时间排序,失效帖静默过滤。
 	SearchPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error)
+	// SearchPostsByIDsAndKeyword 在 ID 集合内按关键字搜索并组装帖子(供 history「最近浏览」关键字搜索)。
+	// title^3/summary multi_match + 失效帖过滤,按 _score desc 排序,offset 分页;
+	// 返回匹配总数(供上层 next_offset 计算)。keyword/postIDs 为空返回空列表。
+	SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]PostListItem, int64, error)
 
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
@@ -801,6 +808,22 @@ func (s *postServiceImpl) SearchPostsByIDs(ctx context.Context, postIDs []uuid.U
 		return nil, err
 	}
 	return s.assemblePostList(ctx, raw), nil
+}
+
+// SearchPostsByIDsAndKeyword 在 ID 集合内按关键字搜索并组装帖子(供 history「最近浏览」关键字搜索)。
+//
+// 与 SearchPostsByIDs 平行,但叠加 multi_match(title^3/summary) 关键字过滤,
+// 按 _score desc 排序,offset 分页;返回匹配总数(raw.Total)供上层计算 next_offset。
+// 失效帖(被删/未发布)在 ES 查询时静默过滤。
+func (s *postServiceImpl) SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]PostListItem, int64, error) {
+	if len(postIDs) == 0 || keyword == "" {
+		return []PostListItem{}, 0, nil
+	}
+	raw, err := s.searcher.SearchByIDsAndKeyword(ctx, postIDs, keyword, size, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	return s.assemblePostList(ctx, raw), raw.Total, nil
 }
 
 // assembleFromPosts 把 DB Post 实体批量组装为 PostListItem（作者/圈子/图片信息）。

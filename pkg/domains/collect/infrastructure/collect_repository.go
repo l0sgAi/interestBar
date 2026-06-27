@@ -86,27 +86,48 @@ type collectCursor struct {
 // 游标语义：(create_time, id) 复合比较，配合索引 idx_pcollect_user_active
 // (user_id, create_time DESC, id DESC) WHERE deleted=0 实现无 OFFSET 深翻页。
 // 取 size+1 条判断是否还有下一页；nextCursor 编码本页最后一条。
-func (r *postCollectRepoGORM) ListCollectedPostIDs(ctx context.Context, userID uuid.UUID, size int, cursor string) ([]uuid.UUID, int64, string, error) {
+//
+// keyword 非空时 JOIN domains.post 过滤 title/summary（ILIKE %kw%）+ 仅已发布未删帖，
+// 游标与排序仍基于 post_collect 列（JOIN 后列名歧义，故全限定表名）。
+func (r *postCollectRepoGORM) ListCollectedPostIDs(ctx context.Context, userID uuid.UUID, keyword string, size int, cursor string) ([]uuid.UUID, int64, string, error) {
+	keyword = strings.TrimSpace(keyword)
+
 	q := r.db.WithContext(ctx).Model(&domain.PostCollect{}).
-		Where("user_id = ? AND deleted = ?", userID, domain.PostCollectActive)
+		Where("domains.post_collect.user_id = ? AND domains.post_collect.deleted = ?", userID, domain.PostCollectActive)
+
+	// 关键字过滤：JOIN domains.post + title/summary ILIKE + 仅已发布未删帖
+	if keyword != "" {
+		q = q.Joins("JOIN domains.post ON domains.post.id = domains.post_collect.post_id").
+			Where("domains.post.deleted = ? AND domains.post.status = ?", 0, 1).
+			Where("(domains.post.title ILIKE ? OR domains.post.summary ILIKE ?)", "%"+keyword+"%", "%"+keyword+"%")
+	}
 
 	if cursor != "" {
 		c, err := decodeCollectCursor(cursor)
 		if err != nil {
 			return nil, 0, "", domain.ErrInvalidCursor
 		}
-		q = q.Where("(create_time, id) < (?, ?)", c.CreateTime, c.ID)
+		q = q.Where("(domains.post_collect.create_time, domains.post_collect.id) < (?, ?)", c.CreateTime, c.ID)
 	}
 
+	// JOIN 后 SELECT * 会带入 domains.post 同名列(id/create_time 等)，显式取 post_collect 列避免歧义
 	var rows []domain.PostCollect
-	if err := q.Order("create_time DESC, id DESC").Limit(size + 1).Find(&rows).Error; err != nil {
+	if err := q.Select("domains.post_collect.id, domains.post_collect.user_id, domains.post_collect.post_id, domains.post_collect.deleted, domains.post_collect.create_time, domains.post_collect.update_time").
+		Order("domains.post_collect.create_time DESC, domains.post_collect.id DESC").
+		Limit(size + 1).
+		Find(&rows).Error; err != nil {
 		return nil, 0, "", err
 	}
 
 	var total int64
-	if err := r.db.WithContext(ctx).Model(&domain.PostCollect{}).
-		Where("user_id = ? AND deleted = ?", userID, domain.PostCollectActive).
-		Count(&total).Error; err != nil {
+	countQ := r.db.WithContext(ctx).Model(&domain.PostCollect{}).
+		Where("domains.post_collect.user_id = ? AND domains.post_collect.deleted = ?", userID, domain.PostCollectActive)
+	if keyword != "" {
+		countQ = countQ.Joins("JOIN domains.post ON domains.post.id = domains.post_collect.post_id").
+			Where("domains.post.deleted = ? AND domains.post.status = ?", 0, 1).
+			Where("(domains.post.title ILIKE ? OR domains.post.summary ILIKE ?)", "%"+keyword+"%", "%"+keyword+"%")
+	}
+	if err := countQ.Count(&total).Error; err != nil {
 		return nil, 0, "", err
 	}
 

@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"interestBar/pkg/domains/history/domain"
@@ -25,6 +26,9 @@ type PostFetcher interface {
 	// SearchByIDs 按 ID 列表从 ES 批量获取已组装帖子(仅未删除 + 已发布)。
 	// 顺序不保证,调用方按浏览时间自行排序;失效帖静默过滤。
 	SearchByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error)
+	// SearchByIDsAndKeyword 在 ID 集合内按关键字搜索并组装帖子(title^3/summary),
+	// 按 _score desc 排序,offset 分页;返回匹配总数。供「最近浏览」关键字搜索用。
+	SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]postapp.PostListItem, int64, error)
 }
 
 // ===== DTO =====
@@ -54,7 +58,9 @@ type HistoryService interface {
 	// Redis ZSET 即时写 + MQ 异步落库;失败仅记日志,不影响详情接口。
 	RecordView(ctx context.Context, userID, postID uuid.UUID) error
 	// ListHistoryPosts 查看当前用户的「最近浏览」列表(按最近访问时间倒序,ZSET offset 分页)。
-	ListHistoryPosts(ctx context.Context, userID uuid.UUID, size, offset int) (*ListHistoryPostsResult, error)
+	// keyword 非空时:在最近浏览的帖子(≤500)内按关键字搜索(title^3/summary),
+	// 结果按相关性(_score)排序,仍用 offset 分页。
+	ListHistoryPosts(ctx context.Context, userID uuid.UUID, keyword string, size, offset int) (*ListHistoryPostsResult, error)
 
 	// SetPostFetcher 注入 ES 帖子组装端口(「最近浏览」列表用)。
 	SetPostFetcher(f PostFetcher)
@@ -109,7 +115,10 @@ func (s *historyServiceImpl) RecordView(ctx context.Context, userID, postID uuid
 // 数据源:Redis ZSET(即时读),按最近访问时间倒序 offset 分页,每条带 viewed_at(ZSET score 还原)。
 // 冷启动(ZCARD==0)时从 DB top500 回源(update_time 作 score)+ Backfill,保证访问时间一致。
 // 帖子数据走 ES(SearchByIDs),失效帖(被删/未发布)在 ES terms 查询时静默过滤。
-func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.UUID, size, offset int) (*ListHistoryPostsResult, error) {
+//
+// keyword 非空时改走关键字分支(searchHistoryPosts):取该用户全部浏览 entries(≤500)
+// 作 ID 集合 → ES 在集合内 multi_match(title^3/summary) 过滤打分,按 _score 排序,offset 分页。
+func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.UUID, keyword string, size, offset int) (*ListHistoryPostsResult, error) {
 	if s.fetcher == nil {
 		return nil, errors.New("post fetcher is not configured")
 	}
@@ -118,6 +127,11 @@ func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.U
 	}
 	if offset < 0 {
 		offset = 0
+	}
+
+	keyword = strings.TrimSpace(keyword)
+	if keyword != "" {
+		return s.searchHistoryPosts(ctx, userID, keyword, size, offset)
 	}
 
 	entries, total, err := s.cache.ListViews(ctx, userID, offset, size)
@@ -165,6 +179,65 @@ func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.U
 		Size:  len(posts),
 	}
 	// 计算下一页 offset:还有更多数据时返回 offset+size,否则省略
+	if int64(offset+size) < total {
+		next := offset + size
+		result.NextOffset = &next
+	}
+	return result, nil
+}
+
+// searchHistoryPosts 在「最近浏览」范围内按关键字搜索。
+//
+// 1. loadAllViewEntries 取该用户全部浏览 entries(≤500,含冷启动 backfill)作 ID 集合 +
+//    postID→ViewedAt 映射(ZSET 序 = 最近访问序,仅用于回填 viewed_at,不参与排序);
+// 2. ES 在 ID 集合内 multi_match(title^3/summary) 过滤 + 失效帖过滤,按 _score desc 排序,
+//    from/size offset 分页,返回匹配总数;
+// 3. 按 ES 返回(相关性序)组装,附 viewed_at(查映射)。
+//
+// 与无关键字路径的差异:排序改为相关性(_score),非最近访问时间;分页语义(offset)不变。
+func (s *historyServiceImpl) searchHistoryPosts(ctx context.Context, userID uuid.UUID, keyword string, size, offset int) (*ListHistoryPostsResult, error) {
+	entries, _, err := s.cache.ListViews(ctx, userID, 0, 500)
+	if err != nil {
+		return nil, err
+	}
+	// 冷启动:ZSET 空 → DB top500 回源 + Backfill,再读一次(与无关键字路径一致)
+	if len(entries) == 0 {
+		if dbEntries, e := s.repo.ListTopByUserID(ctx, userID, 500); e == nil && len(dbEntries) > 0 {
+			if be := s.cache.Backfill(ctx, userID, dbEntries); be == nil {
+				if entries, _, err = s.cache.ListViews(ctx, userID, 0, 500); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	posts := make([]HistoryPostItem, 0, size)
+	if len(entries) == 0 {
+		return &ListHistoryPostsResult{Posts: posts, Total: 0, Size: 0}, nil
+	}
+
+	postIDs := make([]uuid.UUID, 0, len(entries))
+	viewedAtByID := make(map[uuid.UUID]time.Time, len(entries))
+	for _, e := range entries {
+		postIDs = append(postIDs, e.PostID)
+		viewedAtByID[e.PostID] = e.ViewedAt
+	}
+
+	matched, total, err := s.fetcher.SearchByIDsAndKeyword(ctx, postIDs, keyword, size, offset)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range matched {
+		if viewedAt, ok := viewedAtByID[p.ID]; ok {
+			posts = append(posts, HistoryPostItem{ViewedAt: viewedAt, PostListItem: p})
+		}
+	}
+
+	result := &ListHistoryPostsResult{
+		Posts: posts,
+		Total: total,
+		Size:  len(posts),
+	}
 	if int64(offset+size) < total {
 		next := offset + size
 		result.NextOffset = &next

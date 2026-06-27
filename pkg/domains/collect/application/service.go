@@ -57,7 +57,8 @@ type CollectService interface {
 	// Toggle 收藏/取消收藏（幂等操作）。
 	Toggle(ctx context.Context, userID uuid.UUID, input ToggleInput) (*ToggleResult, error)
 	// ListCollectedPosts 查看当前用户的收藏列表（按收藏时间倒序）。
-	ListCollectedPosts(ctx context.Context, userID uuid.UUID, size int, searchAfter string) (*ListCollectedPostsResult, error)
+	// keyword 非空时按 title/summary 过滤（ILIKE），仅返回匹配项。
+	ListCollectedPosts(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter string) (*ListCollectedPostsResult, error)
 
 	// SetPostTarget 注入帖子查询端口（存在性校验 + 统计缓存恢复）。
 	SetPostTarget(t domain.PostTarget)
@@ -151,9 +152,12 @@ func (s *collectServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input
 // ListCollectedPosts 查看当前用户的收藏列表。
 //
 // 数据源：DB post_collect（deleted=0），按收藏时间倒序 keyset 分页。
-// ZSET 仅用于信息流「是否已收藏」回显，不作为列表权威源（有 2000 条上限 + TTL 失活）。
+// ZSET 仅用于信息流「是否已收藏」回显，不作为列表权威源（有 2000 条上限 + TTL 失效）。
 // 失效帖（被删/未发布）在 post 组装时静默过滤（决策 #4）。
-func (s *collectServiceImpl) ListCollectedPosts(ctx context.Context, userID uuid.UUID, size int, searchAfter string) (*ListCollectedPostsResult, error) {
+//
+// keyword 非空时由 repo JOIN domains.post 在 SQL 层过滤 title/summary（ILIKE），
+// 仅返回匹配项（total 也仅计匹配）。
+func (s *collectServiceImpl) ListCollectedPosts(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter string) (*ListCollectedPostsResult, error) {
 	if s.postFetcher == nil {
 		return nil, errors.New("post fetcher is not configured")
 	}
@@ -162,7 +166,7 @@ func (s *collectServiceImpl) ListCollectedPosts(ctx context.Context, userID uuid
 		size = 20
 	}
 
-	postIDs, total, nextCursor, err := s.repo.ListCollectedPostIDs(ctx, userID, size, searchAfter)
+	postIDs, total, nextCursor, err := s.repo.ListCollectedPostIDs(ctx, userID, keyword, size, searchAfter)
 	if err != nil {
 		return nil, err
 	}
