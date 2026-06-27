@@ -41,3 +41,11 @@ type CommentLikeCache interface {
 	// Backfill 回填 DB 查询确认的点赞状态到 ZSET。
 	Backfill(ctx context.Context, userID uuid.UUID, likedCommentIDs []uuid.UUID) error
 }
+
+// CommentEventPublisher 评论事件发布（异步累积帖子热度）。
+type CommentEventPublisher interface {
+	// PublishCommentHot 发布评论对帖子热度的贡献。
+	// dir: +1 创建评论；-1 删除评论（TODO: 删除评论功能未实现，预留）。
+	// 权重与 per-post 上限（cap.comment）由源头 Lua 原子 clamp，本方法只发布最终 Δ。
+	PublishCommentHot(ctx context.Context, postID uuid.UUID, dir int) error
+}

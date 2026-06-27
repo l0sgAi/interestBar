@@ -136,22 +136,26 @@ type commentServiceImpl struct {
 	repo       domain.CommentRepository
 	statsCache domain.CommentStatsCache
 	likeCache  domain.CommentLikeCache
+	publisher  domain.CommentEventPublisher
 	userFacade UserFacade
 	postLookup PostLookup
 }
 
 // NewCommentService 构造 CommentService。
 //
+// publisher 是评论事件发布（同域 infra，构造注入）；
 // userFacade / postLookup 是跨领域依赖，通过 setter 注入（composition 层负责把它们连起来）。
 func NewCommentService(
 	repo domain.CommentRepository,
 	statsCache domain.CommentStatsCache,
 	likeCache domain.CommentLikeCache,
+	publisher domain.CommentEventPublisher,
 ) CommentService {
 	return &commentServiceImpl{
 		repo:       repo,
 		statsCache: statsCache,
 		likeCache:  likeCache,
+		publisher:  publisher,
 	}
 }
 
@@ -251,6 +255,13 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 	// 5. 实时递增帖子评论计数（Redis Hash + 恢复缓存 + DB 同步持久化）
 	if err := s.postLookup.RestoreStatsAndIncrCommentCount(ctx, input.PostID); err != nil {
 		logger.Log.Error("Failed to increment post comment count: " + err.Error())
+	}
+
+	// 6. 累积帖子热度（评论 +5，per-post 上限 cap.comment，Lua 原子 clamp；best-effort）
+	if s.publisher != nil {
+		if err := s.publisher.PublishCommentHot(ctx, input.PostID, 1); err != nil {
+			logger.Log.Error("Failed to publish comment hot: " + err.Error())
+		}
 	}
 
 	return comment.ID, nil
