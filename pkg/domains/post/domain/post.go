@@ -14,26 +14,27 @@ import (
 //
 // 与旧 model.Post 字段、TableName、GORM tag 完全一致。
 type Post struct {
-	ID           uuid.UUID      `json:"id" gorm:"type:uuid;primaryKey;column:id"`
-	CircleID     uuid.UUID      `json:"circle_id" gorm:"column:circle_id;type:uuid;not null"`
-	UserID       uuid.UUID      `json:"user_id" gorm:"column:user_id;type:uuid;not null"`
-	Type         int16          `json:"type" gorm:"column:type;type:smallint;default:1"`
-	Title        string         `json:"title" gorm:"column:title;type:varchar(200);default:''"`
-	Summary      string         `json:"summary" gorm:"column:summary;type:varchar(2000);default:''"`
-	Content      string         `json:"content" gorm:"column:content;type:text;default:''"`
-	MediaExtra   MediaExtraJSON `json:"media_extra" gorm:"column:media_extra;type:jsonb;default:'[]'::jsonb"`
-	ViewCount    int            `json:"view_count" gorm:"column:view_count;default:0"`
-	CommentCount int            `json:"comment_count" gorm:"column:comment_count;default:0"`
-	LikeCount    int            `json:"like_count" gorm:"column:like_count;default:0"`
-	CollectCount int            `json:"collect_count" gorm:"column:collect_count;default:0"`
-	IsPinned     int16          `json:"is_pinned" gorm:"column:is_pinned;type:smallint;default:0"`
-	IsEssence    int16          `json:"is_essence" gorm:"column:is_essence;type:smallint;default:0"`
-	IsLock       int16          `json:"is_lock" gorm:"column:is_lock;type:smallint;default:0"`
-	Status       int16          `json:"status" gorm:"column:status;type:smallint;default:1"`
-	Deleted      int16          `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`
-	LastReplyTime *time.Time    `json:"last_reply_time,omitempty" gorm:"column:last_reply_time"`
-	CreateTime   time.Time      `json:"create_time" gorm:"column:create_time;autoCreateTime"`
-	UpdateTime   time.Time      `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
+	ID            uuid.UUID      `json:"id" gorm:"type:uuid;primaryKey;column:id"`
+	CircleID      uuid.UUID      `json:"circle_id" gorm:"column:circle_id;type:uuid;not null"`
+	UserID        uuid.UUID      `json:"user_id" gorm:"column:user_id;type:uuid;not null"`
+	Type          int16          `json:"type" gorm:"column:type;type:smallint;default:1"`
+	Title         string         `json:"title" gorm:"column:title;type:varchar(200);default:''"`
+	Summary       string         `json:"summary" gorm:"column:summary;type:varchar(2000);default:''"`
+	Content       string         `json:"content" gorm:"column:content;type:text;default:''"`
+	MediaExtra    MediaExtraJSON `json:"media_extra" gorm:"column:media_extra;type:jsonb;default:'[]'::jsonb"`
+	ViewCount     int            `json:"view_count" gorm:"column:view_count;default:0"`
+	CommentCount  int            `json:"comment_count" gorm:"column:comment_count;default:0"`
+	LikeCount     int            `json:"like_count" gorm:"column:like_count;default:0"`
+	CollectCount  int            `json:"collect_count" gorm:"column:collect_count;default:0"`
+	Hot           int            `json:"hot" gorm:"column:hot;default:0"` // 热度分（互动事件加权累积，CDC 同步 ES 排序）
+	IsPinned      int16          `json:"is_pinned" gorm:"column:is_pinned;type:smallint;default:0"`
+	IsEssence     int16          `json:"is_essence" gorm:"column:is_essence;type:smallint;default:0"`
+	IsLock        int16          `json:"is_lock" gorm:"column:is_lock;type:smallint;default:0"`
+	Status        int16          `json:"status" gorm:"column:status;type:smallint;default:1"`
+	Deleted       int16          `json:"deleted" gorm:"column:deleted;type:smallint;default:0"`
+	LastReplyTime *time.Time     `json:"last_reply_time,omitempty" gorm:"column:last_reply_time"`
+	CreateTime    time.Time      `json:"create_time" gorm:"column:create_time;autoCreateTime"`
+	UpdateTime    time.Time      `json:"update_time" gorm:"column:update_time;autoUpdateTime"`
 }
 
 // TableName 指定表名。

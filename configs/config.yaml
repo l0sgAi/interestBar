@@ -106,6 +106,24 @@ redpanda:
   history_event_topic: "post_view_history" # 浏览历史事件topic
   history_event_consumer_group: "post_view_history_consumer_group" # 浏览历史事件消费者组
   history_event_flush_interval: 10 # 浏览历史事件刷写间隔(秒)
+  post_hot_topic: "post_hot" # 帖子热度增量topic
+  post_hot_consumer_group: "post_hot_consumer_group" # 帖子热度消费者组
+  post_hot_flush_interval: 13 # 帖子热度刷新间隔(分钟)
+  post_hot_flush_messages: 500 # 帖子热度批量刷新条数阈值
+  circle_hot_flush_interval: 34 # 圈子热度落库间隔(分钟)
+  circle_hot_ttl: 50 # 圈子热度累加器key TTL(小时)
+
+# 热度计算配置（权重 + 上限）
+hot:
+  weight:
+    post_like: 2      # 帖子点赞
+    post_collect: 5   # 帖子收藏
+    post_share: 7     # 帖子分享（TODO: 分享功能未实现，预留）
+    comment: 5        # 评论
+    comment_like: 1   # 评论点赞
+  cap:
+    comment: 5000     # 评论 hot 贡献上限（=1000 条，weight 整数倍）
+    comment_like: 25000 # 评论点赞 hot 贡献上限（weight 整数倍）
 
 # 安全相关配置
 security:

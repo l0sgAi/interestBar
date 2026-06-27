@@ -12,12 +12,12 @@ import (
 	circledomain "interestBar/pkg/domains/circle/domain"
 	circleinfra "interestBar/pkg/domains/circle/infrastructure"
 	circlehttp "interestBar/pkg/domains/circle/interfaces/http"
-	commentapp "interestBar/pkg/domains/comment/application"
-	commentinfra "interestBar/pkg/domains/comment/infrastructure"
-	commenthttp "interestBar/pkg/domains/comment/interfaces/http"
 	collectapp "interestBar/pkg/domains/collect/application"
 	collectinfra "interestBar/pkg/domains/collect/infrastructure"
 	collecthttp "interestBar/pkg/domains/collect/interfaces/http"
+	commentapp "interestBar/pkg/domains/comment/application"
+	commentinfra "interestBar/pkg/domains/comment/infrastructure"
+	commenthttp "interestBar/pkg/domains/comment/interfaces/http"
 	historyapp "interestBar/pkg/domains/history/application"
 	historyinfra "interestBar/pkg/domains/history/infrastructure"
 	historyhttp "interestBar/pkg/domains/history/interfaces/http"
@@ -209,7 +209,8 @@ func newCommentService(deps *Deps) commentapp.CommentService {
 	repo := commentinfra.NewCommentRepository(deps.DB.Get())
 	statsCache := commentinfra.NewCommentStatsCache()
 	likeCache := commentinfra.NewCommentLikeCache()
-	return commentapp.NewCommentService(repo, statsCache, likeCache)
+	publisher := commentinfra.NewCommentEventPublisher()
+	return commentapp.NewCommentService(repo, statsCache, likeCache, publisher)
 }
 
 // newLikeService 构造 LikeService。

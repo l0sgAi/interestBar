@@ -23,6 +23,7 @@ type AppConfig struct {
 	S3            S3            `mapstructure:"s3" json:"s3" yaml:"s3"`
 	Elasticsearch Elasticsearch `mapstructure:"elasticsearch" json:"elasticsearch" yaml:"elasticsearch"`
 	Redpanda      Redpanda      `mapstructure:"redpanda" json:"redpanda" yaml:"redpanda"`
+	Hot           Hot           `mapstructure:"hot" json:"hot" yaml:"hot"`
 	Mailtrap      Mailtrap      `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
 	Security      Security      `mapstructure:"security" json:"security" yaml:"security"`
 }
@@ -130,24 +131,53 @@ type Elasticsearch struct {
 
 // Redpanda Redpanda配置
 type Redpanda struct {
-	Brokers                []string `mapstructure:"brokers" json:"brokers" yaml:"brokers"`
-	Topic                  string   `mapstructure:"topic" json:"topic" yaml:"topic"`
-	ConsumerGroup          string   `mapstructure:"consumer_group" json:"consumer_group" yaml:"consumer_group"`
-	FlushInterval          int      `mapstructure:"flush_interval" json:"flush_interval" yaml:"flush_interval"`
-	FlushMessages          int      `mapstructure:"flush_messages" json:"flush_messages" yaml:"flush_messages"`
-	PostTopic              string   `mapstructure:"post_topic" json:"post_topic" yaml:"post_topic"`
-	PostConsumerGroup      string   `mapstructure:"post_consumer_group" json:"post_consumer_group" yaml:"post_consumer_group"`
-	PostFlushInterval      int      `mapstructure:"post_flush_interval" json:"post_flush_interval" yaml:"post_flush_interval"`
-	PostStatsTTL           int      `mapstructure:"post_stats_ttl" json:"post_stats_ttl" yaml:"post_stats_ttl"`
-	LikeEventTopic         string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
-	LikeEventConsumerGroup string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
-	LikeEventFlushInterval int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
+	Brokers                   []string `mapstructure:"brokers" json:"brokers" yaml:"brokers"`
+	Topic                     string   `mapstructure:"topic" json:"topic" yaml:"topic"`
+	ConsumerGroup             string   `mapstructure:"consumer_group" json:"consumer_group" yaml:"consumer_group"`
+	FlushInterval             int      `mapstructure:"flush_interval" json:"flush_interval" yaml:"flush_interval"`
+	FlushMessages             int      `mapstructure:"flush_messages" json:"flush_messages" yaml:"flush_messages"`
+	PostTopic                 string   `mapstructure:"post_topic" json:"post_topic" yaml:"post_topic"`
+	PostConsumerGroup         string   `mapstructure:"post_consumer_group" json:"post_consumer_group" yaml:"post_consumer_group"`
+	PostFlushInterval         int      `mapstructure:"post_flush_interval" json:"post_flush_interval" yaml:"post_flush_interval"`
+	PostStatsTTL              int      `mapstructure:"post_stats_ttl" json:"post_stats_ttl" yaml:"post_stats_ttl"`
+	LikeEventTopic            string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
+	LikeEventConsumerGroup    string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
+	LikeEventFlushInterval    int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
 	CollectEventTopic         string   `mapstructure:"collect_event_topic" json:"collect_event_topic" yaml:"collect_event_topic"`
 	CollectEventConsumerGroup string   `mapstructure:"collect_event_consumer_group" json:"collect_event_consumer_group" yaml:"collect_event_consumer_group"`
 	CollectEventFlushInterval int      `mapstructure:"collect_event_flush_interval" json:"collect_event_flush_interval" yaml:"collect_event_flush_interval"`
 	HistoryEventTopic         string   `mapstructure:"history_event_topic" json:"history_event_topic" yaml:"history_event_topic"`
 	HistoryEventConsumerGroup string   `mapstructure:"history_event_consumer_group" json:"history_event_consumer_group" yaml:"history_event_consumer_group"`
 	HistoryEventFlushInterval int      `mapstructure:"history_event_flush_interval" json:"history_event_flush_interval" yaml:"history_event_flush_interval"`
+
+	PostHotTopic           string `mapstructure:"post_hot_topic" json:"post_hot_topic" yaml:"post_hot_topic"`                                  // 帖子热度增量 topic
+	PostHotConsumerGroup   string `mapstructure:"post_hot_consumer_group" json:"post_hot_consumer_group" yaml:"post_hot_consumer_group"`       // 帖子热度消费者组
+	PostHotFlushInterval   int    `mapstructure:"post_hot_flush_interval" json:"post_hot_flush_interval" yaml:"post_hot_flush_interval"`       // 帖子热度刷新间隔(分钟)
+	PostHotFlushMessages   int    `mapstructure:"post_hot_flush_messages" json:"post_hot_flush_messages" yaml:"post_hot_flush_messages"`       // 帖子热度批量刷新条数阈值
+	CircleHotFlushInterval int    `mapstructure:"circle_hot_flush_interval" json:"circle_hot_flush_interval" yaml:"circle_hot_flush_interval"` // 圈子热度落库间隔(分钟)
+	CircleHotTTL           int    `mapstructure:"circle_hot_ttl" json:"circle_hot_ttl" yaml:"circle_hot_ttl"`                                  // 圈子热度累加器 key TTL(小时)
+}
+
+// Hot 热度计算配置（权重 + 上限）。
+type Hot struct {
+	Weight HotWeight `mapstructure:"weight" json:"weight" yaml:"weight"`
+	Cap    HotCap    `mapstructure:"cap" json:"cap" yaml:"cap"`
+}
+
+// HotWeight 各互动事件的热度权重（hot Δ = weight × 方向）。
+type HotWeight struct {
+	PostLike    int `mapstructure:"post_like" json:"post_like" yaml:"post_like"`          // 帖子点赞
+	PostCollect int `mapstructure:"post_collect" json:"post_collect" yaml:"post_collect"` // 帖子收藏
+	PostShare   int `mapstructure:"post_share" json:"post_share" yaml:"post_share"`       // 帖子分享（TODO: 分享功能未实现）
+	Comment     int `mapstructure:"comment" json:"comment" yaml:"comment"`                // 评论
+	CommentLike int `mapstructure:"comment_like" json:"comment_like" yaml:"comment_like"` // 评论点赞
+}
+
+// HotCap 热度贡献上限（per-post，防刷分）。
+// 不变式：cap 必须为对应 weight 的整数倍，否则 undo 与 clamp 边界产生漂移。
+type HotCap struct {
+	Comment     int `mapstructure:"comment" json:"comment" yaml:"comment"`                // 评论 hot 贡献上限
+	CommentLike int `mapstructure:"comment_like" json:"comment_like" yaml:"comment_like"` // 评论点赞 hot 贡献上限
 }
 
 // Mailtrap 邮件发送配置

@@ -144,6 +144,25 @@ func Run(configPath, bootstrapPath string) {
 		logger.Log.Info("History Lua scripts loaded successfully")
 	}
 
+	// 8.14 Init Hot Lua scripts（热度加权 × 方向 × clamp 原子脚本）
+	if err := redis.InitHotLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load hot Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("Hot Lua scripts loaded successfully")
+	}
+
+	// 8.15 Init Post hot Redpanda producer（帖子热度增量异步落库 + circle fan-out）
+	if err := redpanda.InitPostHotProducer(); err != nil {
+		logger.Log.Error("Failed to initialize post hot producer: " + err.Error())
+		logger.Log.Warn("Post hot persistence to database is disabled.")
+	} else {
+		logger.Log.Info("Post hot producer initialized successfully")
+		go redpanda.StartPostHotConsumerWithRetry()
+	}
+
+	// 8.16 Start Circle hot syncer（定时把 circle:hot 累加器落库 + 刷缓存）
+	go redpanda.StartCircleHotSyncerWithRetry()
+
 	// 9. Init Router
 	r := router.InitRouter()
 
@@ -163,5 +182,7 @@ func Run(configPath, bootstrapPath string) {
 	redpanda.CloseLikeEventProducer()
 	redpanda.CloseCollectEventProducer()
 	redpanda.CloseHistoryEventProducer()
+	redpanda.ClosePostHotProducer()
+	redpanda.StopCircleHotSyncer()
 	logger.Log.Info("Server shutdown complete")
 }

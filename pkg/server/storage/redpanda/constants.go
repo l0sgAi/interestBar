@@ -31,6 +31,15 @@ type PostStatisticsMessage struct {
 	Value  int64     `json:"value"`   // 变化值: 1 或 -1
 }
 
+// PostHotMessage 帖子热度增量消息。
+//
+// Delta 是事件时已 ApplyHotDelta 计算（权重 × 方向 × clamp）后的最终签名 Δ；
+// 消费者只累加 postID → ΣΔ 批量落库，不再做权重/cap 判断（cap 在源头 Lua 原子保证）。
+type PostHotMessage struct {
+	PostID uuid.UUID `json:"post_id"` // 帖子ID
+	Delta  int64     `json:"delta"`   // 已 clamp 的热度增量（可正可负）
+}
+
 // LikeEventMessage 点赞事件消息
 type LikeEventMessage struct {
 	Type     string    `json:"type"` // "comment_like" 或 "post_like"
@@ -45,7 +54,7 @@ const CollectEventType = "post_collect"
 
 // CollectEventMessage 收藏事件消息
 type CollectEventMessage struct {
-	Type   string    `json:"type"`    // 固定 "post_collect"
+	Type   string    `json:"type"` // 固定 "post_collect"
 	UserID uuid.UUID `json:"user_id"`
 	PostID uuid.UUID `json:"post_id"` // 被收藏的帖子ID
 	Amount int64     `json:"amount"`  // 1=收藏, -1=取消收藏
@@ -56,7 +65,7 @@ const HistoryEventType = "post_view"
 
 // HistoryEventMessage 浏览历史事件消息
 type HistoryEventMessage struct {
-	Type   string    `json:"type"`    // 固定 "post_view"
+	Type   string    `json:"type"` // 固定 "post_view"
 	UserID uuid.UUID `json:"user_id"`
 	PostID uuid.UUID `json:"post_id"` // 被浏览的帖子ID
 }
