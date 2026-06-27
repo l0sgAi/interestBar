@@ -167,6 +167,45 @@ type RawCirclePostResult struct {
 	SearchAfter string
 }
 
+// ===== 近期活跃圈子 DTO =====
+
+// RawActiveCircleItem searcher 返回的活跃圈子原始项（circle_id + 近期发帖数）。
+type RawActiveCircleItem struct {
+	CircleID        uuid.UUID
+	RecentPostCount int
+}
+
+// RawActiveCircleResult searcher 返回的原始活跃圈子聚合结果（未组装明细）。
+type RawActiveCircleResult struct {
+	Items     []RawActiveCircleItem
+	Total     int64 // 活跃圈子近似总数
+	Truncated bool  // 是否触达 maxScan 上限
+}
+
+// ActiveCircleDoc 近期活跃圈子项（组装明细后，返回 HTTP）。
+type ActiveCircleDoc struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	AvatarURL       string    `json:"avatar_url,omitempty"`
+	Description     string    `json:"description,omitempty"`
+	CategoryID      string    `json:"category_id,omitempty"`
+	MemberCount     int       `json:"member_count"`
+	PostCount       int       `json:"post_count"`        // 累积（circle.post_count）
+	Hot             int       `json:"hot"`               // 累积（circle.hot）
+	RecentPostCount int       `json:"recent_post_count"` // 近期活跃信号：窗口内发帖数
+	JoinType        int16     `json:"join_type"`
+	CreateTime      time.Time `json:"create_time"`
+}
+
+// ActiveCircleResult 近期活跃圈子分页结果。
+type ActiveCircleResult struct {
+	Circles   []ActiveCircleDoc `json:"circles"`
+	Total     int64             `json:"total"`
+	Size      int               `json:"size"`
+	Offset    int               `json:"offset"`
+	Truncated bool              `json:"truncated,omitempty"` // 触达 maxScan 上限
+}
+
 // ===== 用例输入/输出 DTO =====
 
 // CreateCircleInput 创建圈子入参。
@@ -214,6 +253,8 @@ type CircleSearcher interface {
 	Search(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*CircleSearchResult, error)
 	SearchMy(ctx context.Context, circleIDs []uuid.UUID, keyword string, size int, searchAfter []interface{}) (*MyCircleSearchResult, error)
 	SearchCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*RawCirclePostResult, error)
+	// SearchActive 近期活跃圈子聚合（按窗口内发帖数排序，offset 分页）。
+	SearchActive(ctx context.Context, size, offset int) (*RawActiveCircleResult, error)
 }
 
 // CircleService 是 circle 领域的应用服务接口。
@@ -228,6 +269,8 @@ type CircleService interface {
 	// 逻辑与 GetMyCircles 一致，仅 userID 来源不同（query 参数 vs 当前会话）。
 	GetUserCircles(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, cursor string) (*MyCircleSearchResult, error)
 	GetCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*CirclePostResult, error)
+	// ListActiveCircles 近期活跃圈子分页列表（按近 N 天发帖数排序）。
+	ListActiveCircles(ctx context.Context, size, offset int) (*ActiveCircleResult, error)
 
 	// SetUserFacade 注入 user Facade（GetCirclePosts 组装作者信息用）。
 	SetUserFacade(f UserFacade)
@@ -494,6 +537,70 @@ func (s *circleServiceImpl) LeaveCircle(ctx context.Context, userID, circleID uu
 // SearchCircles 搜索圈子列表。
 func (s *circleServiceImpl) SearchCircles(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*CircleSearchResult, error) {
 	return s.searcher.Search(ctx, keyword, size, searchAfter)
+}
+
+// ListActiveCircles 近期活跃圈子分页列表（按近 N 天发帖数排序）。
+//
+// 1. searcher.SearchActive 在 post 索引聚合得 ranked circleIDs + 近期发帖数；
+// 2. repo.GetByIDs 批量取明细（name/counts/hot），保留聚合顺序；
+// 3. 跳过已删除（GetByIDs 已过滤 deleted=0）与非正常状态圈子。
+func (s *circleServiceImpl) ListActiveCircles(ctx context.Context, size, offset int) (*ActiveCircleResult, error) {
+	raw, err := s.searcher.SearchActive(ctx, size, offset)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(raw.Items) == 0 {
+		return &ActiveCircleResult{Total: raw.Total, Size: size, Offset: offset, Truncated: raw.Truncated}, nil
+	}
+
+	ids := make([]uuid.UUID, 0, len(raw.Items))
+	recent := make(map[uuid.UUID]int, len(raw.Items))
+	for _, it := range raw.Items {
+		ids = append(ids, it.CircleID)
+		recent[it.CircleID] = it.RecentPostCount
+	}
+
+	circles, err := s.repo.GetByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	docs := make([]ActiveCircleDoc, 0, len(ids))
+	for _, id := range ids {
+		c, ok := circles[id]
+		if !ok {
+			continue // 已删除（GetByIDs 已过滤 deleted=0）
+		}
+		if c.Status != domain.CircleStatusNormal {
+			continue // 非正常状态圈子不上活跃榜
+		}
+		categoryID := ""
+		if c.CategoryID != nil {
+			categoryID = c.CategoryID.String()
+		}
+		docs = append(docs, ActiveCircleDoc{
+			ID:              c.ID.String(),
+			Name:            c.Name,
+			AvatarURL:       c.AvatarURL,
+			Description:     c.Description,
+			CategoryID:      categoryID,
+			MemberCount:     c.MemberCount,
+			PostCount:       c.PostCount,
+			Hot:             c.Hot,
+			RecentPostCount: recent[id],
+			JoinType:        c.JoinType,
+			CreateTime:      c.CreateTime,
+		})
+	}
+
+	return &ActiveCircleResult{
+		Circles:   docs,
+		Total:     raw.Total,
+		Size:      size,
+		Offset:    offset,
+		Truncated: raw.Truncated,
+	}, nil
 }
 
 // joinedSearchBatchSize keyword 模式每批喂 ES 的 ID 数（对齐 ES SearchMy 的 size 上限 100）。

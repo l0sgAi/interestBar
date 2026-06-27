@@ -546,6 +546,163 @@ func parsePostSearchResponse(res *esapi.Response, size int) (*PostListResponse, 
 	return response, nil
 }
 
+// ===== 近期活跃圈子聚合 =====
+
+const (
+	// activeCircleWindowDays 近期活跃统计窗口（天）。
+	activeCircleWindowDays = 7
+	// activeCircleMaxScan terms 聚合最大桶数（活跃榜分页上限）。
+	// 超出由 sum_other_doc_count 判定 → Truncated。
+	activeCircleMaxScan = 500
+	// activeCircleAggField 近期活跃聚合所用的 circle_id 字段。
+	// 默认 "circle_id"（与 SearchPosts 的 term 查询一致，PG uuid → ES keyword）。
+	// 若 mapping 核查发现 circle_id 是 text 类型，改为 "circle_id.keyword"。
+	// 详见 docs/active-circles-design.md §4.2。
+	activeCircleAggField = "circle_id"
+)
+
+// ActiveCircleBucket 近期活跃圈子聚合桶（circle_id + 窗口内发帖数）。
+type ActiveCircleBucket struct {
+	CircleID        string
+	RecentPostCount int
+}
+
+// ActiveCircleAggResult 近期活跃圈子聚合结果。
+type ActiveCircleAggResult struct {
+	Buckets   []ActiveCircleBucket
+	Total     int64 // 活跃圈子近似总数（cardinality）
+	Truncated bool  // 是否触达 maxScan 上限（sum_other_doc_count > 0）
+}
+
+// AggregateActiveCircles 按近期发帖数聚合活跃圈子（用于"近期活跃圈子"列表）。
+//
+// 在 post 索引上做 terms 聚合（field=activeCircleAggField），过滤
+// deleted=0 + status=1 + create_time >= now-activeCircleWindowDays/d，
+// 按 doc_count desc 排序，bucket_sort 切片 [offset, offset+size)。
+// size=0 不取 hits（只要聚合桶）。
+//
+// 前置条件：post 索引 circle_id 须为 keyword、create_time 须为 date
+// （见 docs/active-circles-design.md §4.2）。
+func AggregateActiveCircles(size, offset int) (*ActiveCircleAggResult, error) {
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	searchQuery := map[string]interface{}{
+		"size": 0,
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"filter": []map[string]interface{}{
+					{"term": map[string]interface{}{"deleted": 0}},
+					{"term": map[string]interface{}{"status": 1}},
+					{"range": map[string]interface{}{"create_time": map[string]interface{}{
+						"gte": fmt.Sprintf("now-%dd/d", activeCircleWindowDays),
+					}}},
+				},
+			},
+		},
+		"aggs": map[string]interface{}{
+			"by_circle": map[string]interface{}{
+				"terms": map[string]interface{}{
+					"field": activeCircleAggField,
+					"size":  activeCircleMaxScan,
+					"order": map[string]interface{}{"_count": "desc"},
+				},
+				"aggs": map[string]interface{}{
+					"page": map[string]interface{}{
+						"bucket_sort": map[string]interface{}{
+							"from": offset,
+							"size": size,
+						},
+					},
+				},
+			},
+			"active_total": map[string]interface{}{
+				"cardinality": map[string]interface{}{
+					"field":               activeCircleAggField,
+					"precision_threshold": 1000,
+				},
+			},
+		},
+	}
+
+	queryJSON, err := json.Marshal(searchQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal active circles query: %w", err)
+	}
+
+	postIndex := GetPostIndexName()
+	res, err := Client.Search(
+		Client.Search.WithContext(nil),
+		Client.Search.WithIndex(postIndex),
+		Client.Search.WithBody(bytes.NewReader(queryJSON)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to aggregate active circles: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, fmt.Errorf("elasticsearch aggregate error: %s", res.String())
+	}
+
+	return parseActiveCirclesResponse(res)
+}
+
+// parseActiveCirclesResponse 解析近期活跃圈子聚合响应。
+func parseActiveCirclesResponse(res *esapi.Response) (*ActiveCircleAggResult, error) {
+	var raw map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&raw); err != nil {
+		return nil, fmt.Errorf("failed to parse active circles response: %w", err)
+	}
+
+	result := &ActiveCircleAggResult{}
+
+	aggs, ok := raw["aggregations"].(map[string]interface{})
+	if !ok {
+		return result, nil
+	}
+
+	// active_total.value（cardinality 近似活跃圈子总数）
+	if at, ok := aggs["active_total"].(map[string]interface{}); ok {
+		if v, ok := at["value"].(float64); ok {
+			result.Total = int64(v)
+		}
+	}
+
+	bc, ok := aggs["by_circle"].(map[string]interface{})
+	if !ok {
+		return result, nil
+	}
+	// sum_other_doc_count > 0：还有桶被 terms.size(maxScan) 截断 → 标记 truncated。
+	if sodc, ok := bc["sum_other_doc_count"].(float64); ok && sodc > 0 {
+		result.Truncated = true
+	}
+
+	buckets, _ := bc["buckets"].([]interface{})
+	result.Buckets = make([]ActiveCircleBucket, 0, len(buckets))
+	for _, b := range buckets {
+		bm, ok := b.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		key, _ := bm["key"].(string)
+		count, _ := bm["doc_count"].(float64)
+		if key == "" {
+			continue
+		}
+		result.Buckets = append(result.Buckets, ActiveCircleBucket{
+			CircleID:        key,
+			RecentPostCount: int(count),
+		})
+	}
+
+	return result, nil
+}
+
 // SearchCirclePosts 圈内帖子列表搜索
 // circleID: 圈子ID（必传）
 // sortType: 排序类型 1=近期热点 2=最新 3=精华

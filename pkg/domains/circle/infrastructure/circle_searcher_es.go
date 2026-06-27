@@ -63,6 +63,30 @@ func (s *circleSearcherES) SearchCirclePosts(ctx context.Context, circleID uuid.
 	}, nil
 }
 
+// SearchActive 近期活跃圈子聚合（ES terms 聚合 + 时间窗口，按发帖数排序）。
+func (s *circleSearcherES) SearchActive(ctx context.Context, size, offset int) (*application.RawActiveCircleResult, error) {
+	result, err := elasticsearch.AggregateActiveCircles(size, offset)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]application.RawActiveCircleItem, 0, len(result.Buckets))
+	for _, b := range result.Buckets {
+		id, parseErr := uuid.Parse(b.CircleID)
+		if parseErr != nil {
+			continue
+		}
+		items = append(items, application.RawActiveCircleItem{
+			CircleID:        id,
+			RecentPostCount: b.RecentPostCount,
+		})
+	}
+	return &application.RawActiveCircleResult{
+		Items:     items,
+		Total:     result.Total,
+		Truncated: result.Truncated,
+	}, nil
+}
+
 func toCircleSearchResult(r *elasticsearch.CircleListResponse) *application.CircleSearchResult {
 	circles := make([]application.CircleDoc, 0, len(r.Circles))
 	for _, doc := range r.Circles {
