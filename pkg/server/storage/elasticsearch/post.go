@@ -172,6 +172,57 @@ func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []int
 	return parsePostSearchResponse(res, size)
 }
 
+// SearchPostsByIDs 按 ID 列表批量查询帖子(供 history「最近浏览」列表用)。
+//
+// postIDs: 帖子ID列表(必传,核心过滤);用 terms 查询,过滤 deleted=0 + status=1。
+// size: 上限(<= len(postIDs))。顺序不保证(调用方按浏览时间重排),失效帖静默过滤。
+func SearchPostsByIDs(postIDs []string, size int) (*PostListResponse, error) {
+	if len(postIDs) == 0 {
+		return &PostListResponse{}, nil
+	}
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	searchQuery := map[string]interface{}{
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"must": []map[string]interface{}{
+					{"terms": map[string]interface{}{"id": postIDs}},
+					{"term": map[string]interface{}{"deleted": 0}},
+					{"term": map[string]interface{}{"status": 1}},
+				},
+			},
+		},
+		"size": size,
+		// 不设 sort:顺序由调用方按浏览时间(ZSET 序)重排
+	}
+
+	queryJSON, err := json.Marshal(searchQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal query: %w", err)
+	}
+
+	postIndex := GetPostIndexName()
+
+	res, err := Client.Search(
+		Client.Search.WithContext(nil),
+		Client.Search.WithIndex(postIndex),
+		Client.Search.WithBody(bytes.NewReader(queryJSON)),
+		Client.Search.WithTrackTotalHits(true),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+	}
+
+	return parsePostSearchResponse(res, size)
+}
+
 // searchUserPostsInternal 按发帖人 user_id 过滤搜索帖子，供 SearchMyPosts /
 // SearchUserPosts 共用，避免重复查询体。
 //

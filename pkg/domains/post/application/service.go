@@ -140,6 +140,10 @@ type PostSearcher interface {
 	SearchMy(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
 	// SearchByUser 搜索指定用户已发布的帖子（查看「他人」发帖，强制 status=1）。
 	SearchByUser(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
+	// SearchByIDs 按 ID 列表批量查询帖子(ES terms 查询,仅未删除 + 已发布)。
+	// 顺序不保证,调用方自行按业务序重排;失效帖(被删/未发布)静默过滤。
+	// 供 history「最近浏览」列表用。
+	SearchByIDs(ctx context.Context, postIDs []uuid.UUID, size int) (*RawPostSearchResult, error)
 }
 
 // PostDetailVO 帖子详情 VO。
@@ -198,6 +202,9 @@ type PostService interface {
 	// GetPostsByIDs 按 ID 列表批量获取已组装的帖子（仅未删除 + 已发布）。
 	// 供 collect 领域「我的收藏」列表调用。顺序不保证，调用方自行按收藏时间排序；失效帖静默过滤。
 	GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error)
+	// SearchPostsByIDs 按 ID 列表从 ES 获取已组装帖子(供 history「最近浏览」列表调用)。
+	// ES terms 查询,仅未删除 + 已发布;顺序不保证,调用方自行按浏览时间排序,失效帖静默过滤。
+	SearchPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error)
 
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
@@ -222,6 +229,8 @@ type PostService interface {
 	SetPostCountPort(p CirclePostCountPort)
 	// SetCollectCache 注入收藏状态缓存（详情页 is_collected 回显用）。
 	SetCollectCache(c domain.PostCollectCache)
+	// SetHistoryRecorder 注入浏览历史记录器（详情页浏览 async 回调用）。
+	SetHistoryRecorder(r domain.HistoryRecorder)
 }
 
 // PostMeta 帖子元信息（供 comment/like 领域校验用）。
@@ -234,17 +243,18 @@ type PostMeta struct {
 }
 
 type postServiceImpl struct {
-	repo         domain.PostRepository
-	statsCache   domain.PostStatsCache
-	likeCache    domain.PostLikeCache
-	collectCache domain.PostCollectCache
-	searcher     PostSearcher
-	publisher    domain.PostEventPublisher
-	userFacade   UserFacade
-	circleFacade CircleFacade
-	memberCheck  CircleMemberChecker
-	statusCheck  CircleStatusChecker
+	repo          domain.PostRepository
+	statsCache    domain.PostStatsCache
+	likeCache     domain.PostLikeCache
+	collectCache  domain.PostCollectCache
+	searcher      PostSearcher
+	publisher     domain.PostEventPublisher
+	userFacade    UserFacade
+	circleFacade  CircleFacade
+	memberCheck   CircleMemberChecker
+	statusCheck   CircleStatusChecker
 	postCountPort CirclePostCountPort
+	historyRec    domain.HistoryRecorder
 }
 
 // NewPostService 构造 PostService。
@@ -276,6 +286,7 @@ func (s *postServiceImpl) SetMemberChecker(c CircleMemberChecker)  { s.memberChe
 func (s *postServiceImpl) SetStatusChecker(c CircleStatusChecker)  { s.statusCheck = c }
 func (s *postServiceImpl) SetPostCountPort(p CirclePostCountPort)  { s.postCountPort = p }
 func (s *postServiceImpl) SetCollectCache(c domain.PostCollectCache) { s.collectCache = c }
+func (s *postServiceImpl) SetHistoryRecorder(r domain.HistoryRecorder) { s.historyRec = r }
 
 // CreatePost 创建帖子。
 //
@@ -552,6 +563,13 @@ func (s *postServiceImpl) asyncIncrementView(postID, userID uuid.UUID) {
 		if err := s.publisher.PublishViewCount(context.Background(), postID); err != nil {
 			logger.Log.Error("Failed to publish view count event: " + err.Error())
 		}
+		// 记录浏览历史(newCount>0 即真实浏览,复用 5min 去重窗口,防刷新刷量)。
+		// 失败仅日志,不影响详情接口。
+		if s.historyRec != nil {
+			if err := s.historyRec.RecordView(context.Background(), userID, postID); err != nil {
+				logger.Log.Error("Failed to record post view history: " + err.Error())
+			}
+		}
 	}
 }
 
@@ -768,6 +786,21 @@ func (s *postServiceImpl) GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID
 		return nil, err
 	}
 	return s.assembleFromPosts(ctx, posts), nil
+}
+
+// SearchPostsByIDs 按 ID 列表从 ES 获取已组装帖子(供 history「最近浏览」列表调用)。
+//
+// 与 GetPostsByIDs(DB 来源)平行,但走 ES terms 查询,复用 assemblePostList 组装。
+// 顺序不保证,失效帖(被删/未发布)在 ES 查询时静默过滤。
+func (s *postServiceImpl) SearchPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error) {
+	if len(postIDs) == 0 {
+		return []PostListItem{}, nil
+	}
+	raw, err := s.searcher.SearchByIDs(ctx, postIDs, len(postIDs))
+	if err != nil {
+		return nil, err
+	}
+	return s.assemblePostList(ctx, raw), nil
 }
 
 // assembleFromPosts 把 DB Post 实体批量组装为 PostListItem（作者/圈子/图片信息）。

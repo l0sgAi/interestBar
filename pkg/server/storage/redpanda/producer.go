@@ -13,11 +13,12 @@ import (
 )
 
 var (
-	dialer            *kafka.Dialer
-	writer            *kafka.Writer
-	postWriter        *kafka.Writer
-	likeEventWriter   *kafka.Writer
+	dialer             *kafka.Dialer
+	writer             *kafka.Writer
+	postWriter         *kafka.Writer
+	likeEventWriter    *kafka.Writer
 	collectEventWriter *kafka.Writer
+	historyEventWriter *kafka.Writer
 )
 
 // InitRedpandaProducer 初始化Redpanda Producer
@@ -372,6 +373,70 @@ func CloseCollectEventProducer() error {
 			return err
 		}
 		logger.Log.Info("Collect event producer closed")
+	}
+	return nil
+}
+
+// ==================== 浏览历史事件消息 ====================
+
+// InitHistoryEventProducer 初始化浏览历史事件Producer
+func InitHistoryEventProducer() error {
+	historyEventWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.HistoryEventTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("History event producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.HistoryEventTopic))
+	return nil
+}
+
+// PublishPostViewHistoryEvent 发布帖子浏览历史事件消息
+func PublishPostViewHistoryEvent(userID, postID uuid.UUID) error {
+	if historyEventWriter == nil {
+		return fmt.Errorf("history event writer is not initialized")
+	}
+	return publishHistoryEvent(HistoryEventMessage{
+		Type:   HistoryEventType,
+		UserID: userID,
+		PostID: postID,
+	})
+}
+
+func publishHistoryEvent(msg HistoryEventMessage) error {
+	value, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal history event message: %w", err)
+	}
+	kafkaMsg := kafka.Message{
+		Key:   []byte(fmt.Sprintf("%s:%s", msg.UserID.String(), msg.PostID.String())),
+		Value: value,
+	}
+	if err := historyEventWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+		return fmt.Errorf("failed to write history event message: %w", err)
+	}
+	logger.Log.Debug(fmt.Sprintf("Published history event: type=%s, user=%s, post=%s",
+		msg.Type, msg.UserID.String(), msg.PostID.String()))
+	return nil
+}
+
+// CloseHistoryEventProducer 关闭浏览历史事件Producer
+func CloseHistoryEventProducer() error {
+	if historyEventWriter != nil {
+		if err := historyEventWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close history event writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("History event producer closed")
 	}
 	return nil
 }

@@ -18,6 +18,9 @@ import (
 	collectapp "interestBar/pkg/domains/collect/application"
 	collectinfra "interestBar/pkg/domains/collect/infrastructure"
 	collecthttp "interestBar/pkg/domains/collect/interfaces/http"
+	historyapp "interestBar/pkg/domains/history/application"
+	historyinfra "interestBar/pkg/domains/history/infrastructure"
+	historyhttp "interestBar/pkg/domains/history/interfaces/http"
 	likeapp "interestBar/pkg/domains/like/application"
 	likeinfra "interestBar/pkg/domains/like/infrastructure"
 	likehttp "interestBar/pkg/domains/like/interfaces/http"
@@ -54,6 +57,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	commentSvc := newCommentService(deps)
 	likeSvc := newLikeService(deps)
 	collectSvc := newCollectService(deps)
+	historySvc := newHistoryService(deps)
 
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
@@ -79,10 +83,14 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	collectSvc.SetPostTarget(&collectPostTarget{delegate: postSvc})
 	collectSvc.SetPostFetcher(&collectPostFetcher{delegate: postSvc})
 
+	// history 需要 post 组装端口（「最近浏览」列表 ES 查询）;post 需要 history 记录器（详情页 async 回调）
+	historySvc.SetPostFetcher(&historyPostFetcher{delegate: postSvc})
+	postSvc.SetHistoryRecorder(&postHistoryRecorder{delegate: historySvc})
+
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
 	if logger.Log != nil {
-		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post")
+		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post")
 	}
 
 	// 注册路由
@@ -95,6 +103,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerComment(root, commentSvc, authCheck)
 	registerLike(root, likeSvc, authCheck)
 	registerCollect(root, collectSvc, authCheck)
+	registerHistory(root, historySvc, authCheck)
 }
 
 // registerCategory 装配 category 领域。
@@ -151,6 +160,11 @@ func registerLike(root routing.RouterGroup, svc likeapp.LikeService, authCheck r
 // registerCollect 装配 collect 领域。
 func registerCollect(root routing.RouterGroup, svc collectapp.CollectService, authCheck routing.HandlerFunc) {
 	collecthttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerHistory 装配 history 领域。
+func registerHistory(root routing.RouterGroup, svc historyapp.HistoryService, authCheck routing.HandlerFunc) {
+	historyhttp.RegisterRoutes(root, svc, authCheck)
 }
 
 // ===== Service 构造函数 =====
@@ -216,4 +230,14 @@ func newCollectService(deps *Deps) collectapp.CollectService {
 	repo := collectinfra.NewPostCollectRepository(deps.DB.Get())
 	publisher := collectinfra.NewCollectEventPublisher()
 	return collectapp.NewCollectService(cache, repo, publisher)
+}
+
+// newHistoryService 构造 HistoryService。
+//
+// post 跨领域依赖（ES 帖子组装端口）通过 setter 注入（见 RegisterDomainRoutes）。
+func newHistoryService(deps *Deps) historyapp.HistoryService {
+	cache := historyinfra.NewPostHistoryCache()
+	repo := historyinfra.NewPostHistoryRepository(deps.DB.Get())
+	publisher := historyinfra.NewHistoryEventPublisher()
+	return historyapp.NewHistoryService(cache, repo, publisher)
 }

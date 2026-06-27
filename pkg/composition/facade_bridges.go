@@ -17,6 +17,7 @@ import (
 	circleapp "interestBar/pkg/domains/circle/application"
 	circledomain "interestBar/pkg/domains/circle/domain"
 	commentapp "interestBar/pkg/domains/comment/application"
+	historyapp "interestBar/pkg/domains/history/application"
 	postapp "interestBar/pkg/domains/post/application"
 	userapp "interestBar/pkg/domains/user/application"
 
@@ -270,5 +271,27 @@ type collectPostFetcher struct {
 
 func (f *collectPostFetcher) GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
 	return f.delegate.GetPostsByIDs(ctx, postIDs)
+}
+
+// ===== history ↔ post =====
+
+// postHistoryRecorder 把 history.application.HistoryService 适配为 post.domain.HistoryRecorder。
+// 供 post 域详情页浏览时 async 回调记录浏览历史。
+type postHistoryRecorder struct {
+	delegate historyapp.HistoryService
+}
+
+func (r *postHistoryRecorder) RecordView(ctx context.Context, userID, postID uuid.UUID) error {
+	return r.delegate.RecordView(ctx, userID, postID)
+}
+
+// historyPostFetcher 把 post.application.PostService 适配为 history.application.PostFetcher(ES 来源)。
+// 供 history「最近浏览」列表按 postID 从 ES 批量取已组装帖子。
+type historyPostFetcher struct {
+	delegate postapp.PostService
+}
+
+func (f *historyPostFetcher) SearchByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
+	return f.delegate.SearchPostsByIDs(ctx, postIDs)
 }
 

@@ -45,6 +45,19 @@ func (s *postSearcherES) SearchByUser(ctx context.Context, userID uuid.UUID, key
 	return toRawPostSearchResult(result), nil
 }
 
+// SearchByIDs 按 ID 列表批量查询帖子(ES terms 查询,供 history「最近浏览」列表用)。
+func (s *postSearcherES) SearchByIDs(ctx context.Context, postIDs []uuid.UUID, size int) (*application.RawPostSearchResult, error) {
+	idStrs := make([]string, 0, len(postIDs))
+	for _, id := range postIDs {
+		idStrs = append(idStrs, id.String())
+	}
+	result, err := elasticsearch.SearchPostsByIDs(idStrs, size)
+	if err != nil {
+		return nil, err
+	}
+	return toRawPostSearchResult(result), nil
+}
+
 // toRawPostSearchResult 把 ES PostListResponse 转为 application.RawPostSearchResult。
 func toRawPostSearchResult(r *elasticsearch.PostListResponse) *application.RawPostSearchResult {
 	return &application.RawPostSearchResult{

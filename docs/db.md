@@ -558,6 +558,55 @@ CREATE INDEX idx_pcollect_user_active ON domains.post_collect(user_id, create_ti
 CREATE INDEX idx_pcollect_post_active ON domains.post_collect(post_id, create_time DESC) WHERE deleted = 0;
 ```
 
+## 帖子浏览历史表
+
+> 用户「最近浏览」历史。去重模型:每对 (user_id, post_id) 仅一行,再看时 bump `update_time` + `view_count`。
+> 与 [`post_collect`](#帖子收藏表) 同构,差异:无 `deleted` 列(浏览历史无 toggle 语义,「清空历史」= 硬 DELETE);
+> 多 `view_count`(浏览次数);排序键 `update_time`(= 最近浏览时间),列表按其倒序。
+>
+> 读写策略:Redis ZSET 即时读(key `user:view:posts:{user_id}`,score=访问时间,cap 500)
+> + Redpanda MQ 异步聚合落库(复用 like/collect 事件链路,consumer 批量 `ON CONFLICT` upsert 本表)
+> + DB 冷启动回源(ZSET 过期后按 `update_time` 倒序取 top 500 回填 ZSET)。
+
+```sql
+-- 帖子浏览历史表 (post_view_history)
+DROP TABLE IF EXISTS domains.post_view_history;
+
+CREATE TABLE domains.post_view_history (
+    -- ID主键 (UUIDv7)
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
+
+    -- 核心关系
+    user_id UUID NOT NULL,           -- 浏览人ID
+    post_id UUID NOT NULL,           -- 被浏览的帖子ID (必填)
+
+    -- 浏览统计 (展示"看过 N 次"用)
+    view_count INT NOT NULL DEFAULT 1, -- 该帖被该用户浏览次数(MQ 聚合 +1)
+
+    -- 时间字段
+    -- update_time 兼作「最近浏览时间」,是「最近浏览」列表的排序键 + 冷启动回源排序键
+    create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 首次浏览时间
+    update_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP  -- 最近浏览时间(再看时 bump)
+);
+
+-- --- 注释 ---
+COMMENT ON TABLE domains.post_view_history IS '帖子浏览历史表(去重模型:每对 user+post 一行,再看时 bump update_time+view_count)';
+COMMENT ON COLUMN domains.post_view_history.id IS '主键ID(UUIDv7,应用层生成,DB默认值仅兜底)';
+COMMENT ON COLUMN domains.post_view_history.user_id IS '浏览人ID(UUID)';
+COMMENT ON COLUMN domains.post_view_history.post_id IS '被浏览的帖子ID(UUID)';
+COMMENT ON COLUMN domains.post_view_history.view_count IS '该帖被该用户浏览次数(MQ 聚合 +1)';
+COMMENT ON COLUMN domains.post_view_history.create_time IS '首次浏览时间';
+COMMENT ON COLUMN domains.post_view_history.update_time IS '最近浏览时间(再看时更新,「最近浏览」列表排序键 + 冷启动回源排序键)';
+
+-- --- 索引优化 ---
+
+-- 1. 【核心】去重约束:每对 (user_id, post_id) 仅一行,支撑 MQ consumer 的 ON CONFLICT upsert
+CREATE UNIQUE INDEX uk_pviewhist_user_post ON domains.post_view_history(user_id, post_id);
+
+-- 2. 【核心】冷启动回源:ZSET 过期后按 update_time 倒序取 top 500 回填 ZSET
+CREATE INDEX idx_pviewhist_user_time ON domains.post_view_history(user_id, update_time DESC, id DESC);
+```
+
 ---
 
 ## 附录:批量更新统计的 jsonb 类型对照

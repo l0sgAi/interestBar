@@ -1,0 +1,167 @@
+// Package application 提供 history 领域的应用服务层。
+//
+// 职责:
+//   - 记录浏览(RecordView):Redis ZSET 即时写(列表权威) + Redpanda 事件异步落库
+//   - 「最近浏览」列表(ListHistoryPosts):Redis ZSET 即时读 + 冷启动 DB 回源 + 复用 post 领域 ES 组装
+package application
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"interestBar/pkg/domains/history/domain"
+	postapp "interestBar/pkg/domains/post/application"
+	"interestBar/pkg/logger"
+
+	"github.com/google/uuid"
+)
+
+// ===== 跨领域 Facade 依赖 =====
+
+// PostFetcher history 领域需要的帖子组装能力(ES 来源,按 ID 列表)。
+type PostFetcher interface {
+	// SearchByIDs 按 ID 列表从 ES 批量获取已组装帖子(仅未删除 + 已发布)。
+	// 顺序不保证,调用方按浏览时间自行排序;失效帖静默过滤。
+	SearchByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error)
+}
+
+// ===== DTO =====
+
+// ListHistoryPostsResult 「最近浏览」列表结果。
+type ListHistoryPostsResult struct {
+	Posts      []postapp.PostListItem `json:"posts"`
+	Total      int64                  `json:"total"`
+	Size       int                    `json:"size"`
+	NextOffset *int                   `json:"next_offset,omitempty"` // 下一页 offset;无更多页时省略
+}
+
+// ===== Service 接口 =====
+
+// HistoryService 是 history 领域的应用服务接口。
+type HistoryService interface {
+	// RecordView 记录一次浏览(供 post 域详情页 async 回调)。
+	// Redis ZSET 即时写 + MQ 异步落库;失败仅记日志,不影响详情接口。
+	RecordView(ctx context.Context, userID, postID uuid.UUID) error
+	// ListHistoryPosts 查看当前用户的「最近浏览」列表(按最近访问时间倒序,ZSET offset 分页)。
+	ListHistoryPosts(ctx context.Context, userID uuid.UUID, size, offset int) (*ListHistoryPostsResult, error)
+
+	// SetPostFetcher 注入 ES 帖子组装端口(「最近浏览」列表用)。
+	SetPostFetcher(f PostFetcher)
+}
+
+type historyServiceImpl struct {
+	cache     domain.PostHistoryCache
+	repo      domain.PostHistoryRepository
+	publisher domain.HistoryEventPublisher
+	fetcher   PostFetcher
+}
+
+// NewHistoryService 构造 HistoryService。
+//
+// fetcher 是跨领域依赖,通过 setter 注入(composition 层负责把它们连起来)。
+func NewHistoryService(
+	cache domain.PostHistoryCache,
+	repo domain.PostHistoryRepository,
+	publisher domain.HistoryEventPublisher,
+) HistoryService {
+	return &historyServiceImpl{
+		cache:     cache,
+		repo:      repo,
+		publisher: publisher,
+	}
+}
+
+// Setter 方法供 composition 注入跨领域依赖。
+func (s *historyServiceImpl) SetPostFetcher(f PostFetcher) { s.fetcher = f }
+
+// RecordView 记录浏览(对称 collect.Toggle:Redis 即时写 + MQ 异步落库)。
+//
+//  1. Redis ZSET 即时写(ZADD + trim 500)——「最近浏览」列表权威源,即时可见;
+//  2. 发布 Redpanda 浏览事件——consumer 批量 ON CONFLICT upsert post_view_history(DB 最终一致)。
+//
+// Redis 写失败返回 error(上游 post 域仅记日志,不影响详情);MQ 写失败仅记日志(下次浏览补偿)。
+func (s *historyServiceImpl) RecordView(ctx context.Context, userID, postID uuid.UUID) error {
+	// 1. Redis ZSET 即时写(列表权威源,需即时可见)
+	if err := s.cache.RecordView(ctx, userID, postID); err != nil {
+		return fmt.Errorf("failed to record view in redis: %w", err)
+	}
+
+	// 2. 发布 MQ 事件(异步落库 DB,失败仅日志)
+	if err := s.publisher.PublishPostView(ctx, userID, postID); err != nil {
+		logger.Log.Error("Failed to publish post view event: " + err.Error())
+	}
+	return nil
+}
+
+// ListHistoryPosts 查看当前用户的「最近浏览」列表。
+//
+// 数据源:Redis ZSET(即时读),按最近访问时间倒序 offset 分页。
+// 冷启动(ZCARD==0)时从 DB top500 回源 + Backfill ZSET,保证 ZSET 过期后历史不丢。
+// 帖子数据走 ES(SearchByIDs),失效帖(被删/未发布)在 ES terms 查询时静默过滤。
+func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.UUID, size, offset int) (*ListHistoryPostsResult, error) {
+	if s.fetcher == nil {
+		return nil, errors.New("post fetcher is not configured")
+	}
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	postIDs, total, err := s.cache.ListViews(ctx, userID, offset, size)
+	if err != nil {
+		return nil, err
+	}
+
+	// 冷启动:ZSET 空 → DB top500 回源 + Backfill,再读一次
+	if total == 0 {
+		if ids, e := s.repo.ListTopByUserID(ctx, userID, 500); e == nil && len(ids) > 0 {
+			if be := s.cache.Backfill(ctx, userID, ids); be == nil {
+				postIDs, total, err = s.cache.ListViews(ctx, userID, offset, size)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+
+	posts := make([]postapp.PostListItem, 0, len(postIDs))
+	if len(postIDs) > 0 {
+		fetched, err := s.fetcher.SearchByIDs(ctx, postIDs)
+		if err != nil {
+			return nil, err
+		}
+		// 按 postIDs(ZSET 倒序 = 最近访问倒序)重排:SearchByIDs 不保证顺序,且会过滤失效帖。
+		posts = orderByViewTime(fetched, postIDs)
+	}
+
+	result := &ListHistoryPostsResult{
+		Posts: posts,
+		Total: total,
+		Size:  len(posts),
+	}
+	// 计算下一页 offset:还有更多数据时返回 offset+size,否则省略
+	if int64(offset+size) < total {
+		next := offset + size
+		result.NextOffset = &next
+	}
+	return result, nil
+}
+
+// orderByViewTime 把 fetched(无序、可能少于 postIDs)按 postIDs 的顺序重排。
+// 与 collect.orderByCollectTime 同构。
+func orderByViewTime(fetched []postapp.PostListItem, orderedIDs []uuid.UUID) []postapp.PostListItem {
+	byID := make(map[uuid.UUID]postapp.PostListItem, len(fetched))
+	for _, p := range fetched {
+		byID[p.ID] = p
+	}
+	result := make([]postapp.PostListItem, 0, len(fetched))
+	for _, id := range orderedIDs {
+		if p, ok := byID[id]; ok {
+			result = append(result, p)
+		}
+	}
+	return result
+}

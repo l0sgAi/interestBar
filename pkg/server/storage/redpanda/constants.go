@@ -50,3 +50,13 @@ type CollectEventMessage struct {
 	PostID uuid.UUID `json:"post_id"` // 被收藏的帖子ID
 	Amount int64     `json:"amount"`  // 1=收藏, -1=取消收藏
 }
+
+// HistoryEventType 浏览历史事件类型（固定为帖子浏览,评论无浏览历史语义）。
+const HistoryEventType = "post_view"
+
+// HistoryEventMessage 浏览历史事件消息
+type HistoryEventMessage struct {
+	Type   string    `json:"type"`    // 固定 "post_view"
+	UserID uuid.UUID `json:"user_id"`
+	PostID uuid.UUID `json:"post_id"` // 被浏览的帖子ID
+}

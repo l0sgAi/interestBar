@@ -128,6 +128,22 @@ func Run(configPath, bootstrapPath string) {
 		logger.Log.Info("View Lua scripts loaded successfully")
 	}
 
+	// 8.12 Init History event Redpanda producer
+	if err := redpanda.InitHistoryEventProducer(); err != nil {
+		logger.Log.Error("Failed to initialize history event producer: " + err.Error())
+		logger.Log.Warn("History event persistence to database is disabled.")
+	} else {
+		logger.Log.Info("History event producer initialized successfully")
+		go redpanda.StartHistoryEventConsumerWithRetry()
+	}
+
+	// 8.13 Init History Lua scripts in Redis
+	if err := redis.InitHistoryLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load history Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("History Lua scripts loaded successfully")
+	}
+
 	// 9. Init Router
 	r := router.InitRouter()
 
@@ -146,5 +162,6 @@ func Run(configPath, bootstrapPath string) {
 	redpanda.ClosePostStatsProducer()
 	redpanda.CloseLikeEventProducer()
 	redpanda.CloseCollectEventProducer()
+	redpanda.CloseHistoryEventProducer()
 	logger.Log.Info("Server shutdown complete")
 }
