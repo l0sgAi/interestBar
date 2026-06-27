@@ -4,7 +4,8 @@
 //   - 收藏/取消收藏（幂等的 Toggle 操作，Redis Lua 原子切换）
 //   - 「我的收藏」列表（DB keyset 分页 + 复用 post 领域组装）
 //   - 收藏前恢复统计缓存（避免 Lua 脚本读到不存在的 stats Hash）
-//   - 异步发布收藏事件（Redpanda → 消费者批量持久化到 DB）
+//   - 收藏流水即时入库（列表权威源，Toggle 同步 upsert post_collect）
+//   - 异步发布 collect_count 增量事件（Redpanda → 消费者批量聚合统计字段）
 package application
 
 import (
@@ -93,11 +94,14 @@ func (s *collectServiceImpl) SetPostFetcher(f PostFetcher)     { s.postFetcher =
 
 // Toggle 收藏/取消收藏（幂等操作）。
 //
-// 镜像 like.togglePostLike：
+// 与 like.togglePostLike 的差异：收藏是低频操作且「我的收藏」列表需即时可见，
+// 故 post_collect 流水同步入库（步骤 4），仅 collect_count 统计字段走异步聚合（步骤 5）。
 //  1. 校验帖子存在；
 //  2. 确保帖子统计缓存存在（Lua 脚本依赖 stats Hash）；
-//  3. 执行 Redis Lua 原子切换（ZSET 增删 + stats Hash collect_count 增减）；
-//  4. 发布 Redpanda 收藏事件（异步持久化：post_collect 流水 + collect_count）。
+//  3. 执行 Redis Lua 原子切换（ZSET 增删 + stats Hash collect_count 增减），返回方向 ±1；
+//  4. 同步 upsert post_collect 流水；DB 写失败则反向切回 Redis 补偿（保持 Redis/DB 一致），
+//     返回 error 供客户端重试；
+//  5. 发布 Redpanda collect_count 增量事件（消费者批量聚合，不再落流水）。
 func (s *collectServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input ToggleInput) (*ToggleResult, error) {
 	if s.postTarget == nil {
 		return nil, errors.New("post target is not configured")
@@ -117,13 +121,23 @@ func (s *collectServiceImpl) Toggle(ctx context.Context, userID uuid.UUID, input
 		logger.Log.Error("Failed to restore post stats cache: " + err.Error())
 	}
 
-	// 3. 原子切换收藏状态
+	// 3. 原子切换收藏状态（Redis 权威，返回方向决定 DB upsert 动作）
 	result, err := s.cache.Toggle(ctx, userID, input.PostID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to toggle post collect: %w", err)
 	}
 
-	// 4. 发布收藏事件（异步持久化）
+	// 4. 同步落库收藏流水（列表权威源，需即时可见）
+	active := result == domain.ToggleResultCollected
+	if err := s.repo.SetCollected(ctx, userID, input.PostID, active); err != nil {
+		// 补偿：反向切回 Redis（不发事件），保持 Redis/DB 一致，供客户端重试
+		if _, rbErr := s.cache.Toggle(ctx, userID, input.PostID); rbErr != nil {
+			logger.Log.Error("Failed to rollback redis after db write failure: " + rbErr.Error())
+		}
+		return nil, fmt.Errorf("failed to persist post collect: %w", err)
+	}
+
+	// 5. 发布 collect_count 增量事件（异步聚合统计字段，不再落流水）
 	if err := s.publisher.PublishPostCollect(ctx, userID, input.PostID, result.Int64()); err != nil {
 		logger.Log.Error("Failed to publish post collect event: " + err.Error())
 	}

@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"interestBar/pkg/domains/collect/domain"
+	sharedomain "interestBar/pkg/shared/domain"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -28,6 +32,47 @@ func (r *postCollectRepoGORM) IsCollected(ctx context.Context, userID, postID uu
 		Where("user_id = ? AND post_id = ? AND deleted = ?", userID, postID, domain.PostCollectActive).
 		Count(&count).Error
 	return count > 0, err
+}
+
+// SetCollected 同步 upsert 收藏流水行（供 Toggle 即时入库）。
+//
+// 复用 collect_consumer.batchUpdatePostCollects 的单条 upsert 语义：
+//   - 行存在 → UPDATE deleted 状态（active=true 恢复 / active=false 取消）；
+//   - 行不存在且 active=true → CREATE（PK 调 sharedomain.NewID()），并发下吞 duplicate key；
+//   - 行不存在且 active=false → no-op（无行可标，等价 0 行 UPDATE）。
+func (r *postCollectRepoGORM) SetCollected(ctx context.Context, userID, postID uuid.UUID, active bool) error {
+	db := r.db.WithContext(ctx)
+
+	var existing domain.PostCollect
+	err := db.Where("user_id = ? AND post_id = ?", userID, postID).First(&existing).Error
+	if err == nil {
+		deleted := domain.PostCollectActive
+		if !active {
+			deleted = domain.PostCollectCanceled
+		}
+		return db.Model(&domain.PostCollect{}).Where("id = ?", existing.ID).Update("deleted", deleted).Error
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	// 无流水行：仅收藏时新建，取消收藏 no-op
+	if !active {
+		return nil
+	}
+	err = db.Create(&domain.PostCollect{
+		ID:      sharedomain.NewID(),
+		UserID:  userID,
+		PostID:  postID,
+		Deleted: domain.PostCollectActive,
+	}).Error
+	if err != nil && strings.Contains(err.Error(), "duplicate key") {
+		return nil // 并发下对手已插入，幂等成功
+	}
+	if err != nil {
+		return fmt.Errorf("failed to create post collect: %w", err)
+	}
+	return nil
 }
 
 // collectCursor keyset 游标（base64 编码的 JSON， opaque to client）。

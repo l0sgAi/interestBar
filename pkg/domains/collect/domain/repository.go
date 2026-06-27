@@ -43,4 +43,8 @@ type PostCollectRepository interface {
 	ListCollectedPostIDs(ctx context.Context, userID uuid.UUID, size int, cursor string) (postIDs []uuid.UUID, total int64, nextCursor string, err error)
 	// IsCollected 检查用户是否收藏了帖子（DB 回源用，缓存 miss 时调用）。
 	IsCollected(ctx context.Context, userID, postID uuid.UUID) (bool, error)
+	// SetCollected 同步 upsert 收藏流水行（active=true 新增/恢复，active=false 标记取消）。
+	// 供 Toggle 即时入库：收藏流水是「我的收藏」列表的权威源，必须即时可见。
+	// 幂等：吞 (user_id, post_id) duplicate key。
+	SetCollected(ctx context.Context, userID, postID uuid.UUID, active bool) error
 }

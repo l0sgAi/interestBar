@@ -5,11 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"interestBar/pkg/conf"
-	collectdomain "interestBar/pkg/domains/collect/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/storage/db/pgsql"
-	sharedomain "interestBar/pkg/shared/domain"
-	"strings"
 	"sync"
 	"time"
 
@@ -159,39 +156,13 @@ func (a *CollectEventAggregator) flush() {
 	}
 }
 
-// batchUpdatePostCollects 单事务双写：(1) upsert post_collect 流水行；(2) 批量 UPDATE post.collect_count。
+// batchUpdatePostCollects 批量聚合 collect_count 增量到 post 表。
 //
-// 镜像 batchUpdatePostLikes：收藏流水与收藏计数在同一事务内原子落库，
-// 保证「我的收藏」列表（读 post_collect）与帖子 collect_count 一致。
+// post_collect 流水已由 collect.Toggle 即时入库，本函数只负责统计字段：
+// 按 postID 聚合事件 amount，单事务批量 UPDATE collect_count（GREATEST 防负）。
 func batchUpdatePostCollects(deltas []*collectEventDelta) error {
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
-		// 1. upsert post_collect 流水行（收藏=新增/恢复，取消=标记 deleted=1）
-		for _, d := range deltas {
-			if d.Amount > 0 {
-				var existing collectdomain.PostCollect
-				err := tx.Where("user_id = ? AND post_id = ?", d.UserID, d.PostID).First(&existing).Error
-				if err == gorm.ErrRecordNotFound {
-					if err := tx.Create(&collectdomain.PostCollect{
-						ID:      sharedomain.NewID(),
-						UserID:  d.UserID,
-						PostID:  d.PostID,
-						Deleted: collectdomain.PostCollectActive,
-					}).Error; err != nil {
-						if !strings.Contains(err.Error(), "duplicate key") {
-							return fmt.Errorf("failed to create post collect: %w", err)
-						}
-					}
-				} else if err == nil {
-					tx.Model(&collectdomain.PostCollect{}).Where("id = ?", existing.ID).Update("deleted", collectdomain.PostCollectActive)
-				}
-			} else {
-				tx.Model(&collectdomain.PostCollect{}).
-					Where("user_id = ? AND post_id = ?", d.UserID, d.PostID).
-					Update("deleted", collectdomain.PostCollectCanceled)
-			}
-		}
-
-		// 2. 按 postID 聚合 collect_count 增量，批量 UPDATE
+		// 按 postID 聚合 collect_count 增量，批量 UPDATE
 		postCountDeltas := make(map[uuid.UUID]int64)
 		for _, d := range deltas {
 			postCountDeltas[d.PostID] += d.Amount
@@ -217,7 +188,7 @@ func batchUpdatePostCollects(deltas []*collectEventDelta) error {
 			}
 		}
 
-		logger.Log.Info(fmt.Sprintf("Successfully updated %d post collects", len(deltas)))
+		logger.Log.Info(fmt.Sprintf("Successfully updated collect counts for %d posts", len(rows)))
 		return nil
 	})
 }
