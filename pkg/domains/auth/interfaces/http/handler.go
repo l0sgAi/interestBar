@@ -213,6 +213,8 @@ func writeAuthError(c appctx.AppContext, err error) {
 		httputil.BadRequest(c, "Unknown OAuth provider")
 	case application.IsFrontendRedirectNotConfiguredErr(err):
 		httputil.InternalError(c, "Frontend redirect URL not configured")
+	case application.IsOAuthProviderUnavailableErr(err):
+		httputil.ServiceUnavailable(c, "Third-party login is temporarily unavailable, please try again later")
 	default:
 		logger.Log.Error("auth service error: " + err.Error())
 		httputil.InternalError(c, "Internal error")

@@ -17,6 +17,7 @@ import (
 	circleapp "interestBar/pkg/domains/circle/application"
 	circledomain "interestBar/pkg/domains/circle/domain"
 	commentapp "interestBar/pkg/domains/comment/application"
+	historyapp "interestBar/pkg/domains/history/application"
 	postapp "interestBar/pkg/domains/post/application"
 	userapp "interestBar/pkg/domains/user/application"
 
@@ -239,5 +240,62 @@ func (t *likeCommentTarget) ExistsWithPostID(ctx context.Context, commentID uuid
 
 func (t *likeCommentTarget) RestoreStats(ctx context.Context, commentID uuid.UUID) error {
 	return t.delegate.RestoreCommentStats(ctx, commentID)
+}
+
+// ===== post → collect（帖子存在性 + 统计缓存恢复 + 列表组装）=====
+
+// collectPostTarget 把 post.application.PostService 适配为 collect.domain.PostTarget。
+//
+// 与 likePostTarget 行为完全一致（collect.PostTarget 与 like.PostTarget 签名相同），
+// 独立定义以保持命名清晰、避免跨领域类型耦合。
+type collectPostTarget struct {
+	delegate postapp.PostService
+}
+
+func (t *collectPostTarget) Exists(ctx context.Context, postID uuid.UUID) (bool, error) {
+	meta, err := t.delegate.GetPostMeta(ctx, postID)
+	if err != nil || meta == nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (t *collectPostTarget) RestoreStats(ctx context.Context, postID uuid.UUID) error {
+	return t.delegate.RestoreStats(ctx, postID)
+}
+
+// collectPostFetcher 把 post.application.PostService 适配为 collect.application.PostFetcher。
+type collectPostFetcher struct {
+	delegate postapp.PostService
+}
+
+func (f *collectPostFetcher) GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
+	return f.delegate.GetPostsByIDs(ctx, postIDs)
+}
+
+// ===== history ↔ post =====
+
+// postHistoryRecorder 把 history.application.HistoryService 适配为 post.domain.HistoryRecorder。
+// 供 post 域详情页浏览时 async 回调记录浏览历史。
+type postHistoryRecorder struct {
+	delegate historyapp.HistoryService
+}
+
+func (r *postHistoryRecorder) RecordView(ctx context.Context, userID, postID uuid.UUID) error {
+	return r.delegate.RecordView(ctx, userID, postID)
+}
+
+// historyPostFetcher 把 post.application.PostService 适配为 history.application.PostFetcher(ES 来源)。
+// 供 history「最近浏览」列表按 postID 从 ES 批量取已组装帖子。
+type historyPostFetcher struct {
+	delegate postapp.PostService
+}
+
+func (f *historyPostFetcher) SearchByIDs(ctx context.Context, postIDs []uuid.UUID) ([]postapp.PostListItem, error) {
+	return f.delegate.SearchPostsByIDs(ctx, postIDs)
+}
+
+func (f *historyPostFetcher) SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]postapp.PostListItem, int64, error) {
+	return f.delegate.SearchPostsByIDsAndKeyword(ctx, postIDs, keyword, size, offset)
 }
 

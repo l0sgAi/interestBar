@@ -140,6 +140,13 @@ type PostSearcher interface {
 	SearchMy(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
 	// SearchByUser 搜索指定用户已发布的帖子（查看「他人」发帖，强制 status=1）。
 	SearchByUser(ctx context.Context, userID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*RawPostSearchResult, error)
+	// SearchByIDs 按 ID 列表批量查询帖子(ES terms 查询,仅未删除 + 已发布)。
+	// 顺序不保证,调用方自行按业务序重排;失效帖(被删/未发布)静默过滤。
+	// 供 history「最近浏览」列表用。
+	SearchByIDs(ctx context.Context, postIDs []uuid.UUID, size int) (*RawPostSearchResult, error)
+	// SearchByIDsAndKeyword 在 ID 集合内按关键字搜索帖子(title^3/summary multi_match),
+	// 按 _score desc 排序,offset 分页。供 history「最近浏览」关键字搜索用。
+	SearchByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) (*RawPostSearchResult, error)
 }
 
 // PostDetailVO 帖子详情 VO。
@@ -168,6 +175,7 @@ type PostDetailVO struct {
 	AuthorName    string             `json:"author_name"`
 	AuthorAvatar  string             `json:"author_avatar"`
 	IsLiked       bool               `json:"is_liked"`
+	IsCollected   bool               `json:"is_collected"`
 }
 
 // CreatePostInput 发帖入参。
@@ -194,6 +202,16 @@ type PostService interface {
 	GetUserPosts(ctx context.Context, targetUserID uuid.UUID, keyword string, size int, searchAfter []interface{}) (*PostSearchResult, error)
 	// GetMediaByPostIDs 批量获取帖子图片（供 circle 领域 GetCirclePosts 调用）。
 	GetMediaByPostIDs(ctx context.Context, postIDs []string) (map[string][]string, error)
+	// GetPostsByIDs 按 ID 列表批量获取已组装的帖子（仅未删除 + 已发布）。
+	// 供 collect 领域「我的收藏」列表调用。顺序不保证，调用方自行按收藏时间排序；失效帖静默过滤。
+	GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error)
+	// SearchPostsByIDs 按 ID 列表从 ES 获取已组装帖子(供 history「最近浏览」列表调用)。
+	// ES terms 查询,仅未删除 + 已发布;顺序不保证,调用方自行按浏览时间排序,失效帖静默过滤。
+	SearchPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error)
+	// SearchPostsByIDsAndKeyword 在 ID 集合内按关键字搜索并组装帖子(供 history「最近浏览」关键字搜索)。
+	// title^3/summary multi_match + 失效帖过滤,按 _score desc 排序,offset 分页;
+	// 返回匹配总数(供上层 next_offset 计算)。keyword/postIDs 为空返回空列表。
+	SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]PostListItem, int64, error)
 
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
@@ -216,6 +234,10 @@ type PostService interface {
 	SetStatusChecker(c CircleStatusChecker)
 	// SetPostCountPort 注入圈子帖子计数端口（发帖后递增计数用）。
 	SetPostCountPort(p CirclePostCountPort)
+	// SetCollectCache 注入收藏状态缓存（详情页 is_collected 回显用）。
+	SetCollectCache(c domain.PostCollectCache)
+	// SetHistoryRecorder 注入浏览历史记录器（详情页浏览 async 回调用）。
+	SetHistoryRecorder(r domain.HistoryRecorder)
 }
 
 // PostMeta 帖子元信息（供 comment/like 领域校验用）。
@@ -228,16 +250,18 @@ type PostMeta struct {
 }
 
 type postServiceImpl struct {
-	repo         domain.PostRepository
-	statsCache   domain.PostStatsCache
-	likeCache    domain.PostLikeCache
-	searcher     PostSearcher
-	publisher    domain.PostEventPublisher
-	userFacade   UserFacade
-	circleFacade CircleFacade
-	memberCheck  CircleMemberChecker
-	statusCheck  CircleStatusChecker
+	repo          domain.PostRepository
+	statsCache    domain.PostStatsCache
+	likeCache     domain.PostLikeCache
+	collectCache  domain.PostCollectCache
+	searcher      PostSearcher
+	publisher     domain.PostEventPublisher
+	userFacade    UserFacade
+	circleFacade  CircleFacade
+	memberCheck   CircleMemberChecker
+	statusCheck   CircleStatusChecker
 	postCountPort CirclePostCountPort
+	historyRec    domain.HistoryRecorder
 }
 
 // NewPostService 构造 PostService。
@@ -248,15 +272,17 @@ func NewPostService(
 	repo domain.PostRepository,
 	statsCache domain.PostStatsCache,
 	likeCache domain.PostLikeCache,
+	collectCache domain.PostCollectCache,
 	searcher PostSearcher,
 	publisher domain.PostEventPublisher,
 ) PostService {
 	return &postServiceImpl{
-		repo:       repo,
-		statsCache: statsCache,
-		likeCache:  likeCache,
-		searcher:   searcher,
-		publisher:  publisher,
+		repo:         repo,
+		statsCache:   statsCache,
+		likeCache:    likeCache,
+		collectCache: collectCache,
+		searcher:     searcher,
+		publisher:    publisher,
 	}
 }
 
@@ -266,6 +292,8 @@ func (s *postServiceImpl) SetCircleFacade(f CircleFacade)          { s.circleFac
 func (s *postServiceImpl) SetMemberChecker(c CircleMemberChecker)  { s.memberCheck = c }
 func (s *postServiceImpl) SetStatusChecker(c CircleStatusChecker)  { s.statusCheck = c }
 func (s *postServiceImpl) SetPostCountPort(p CirclePostCountPort)  { s.postCountPort = p }
+func (s *postServiceImpl) SetCollectCache(c domain.PostCollectCache) { s.collectCache = c }
+func (s *postServiceImpl) SetHistoryRecorder(r domain.HistoryRecorder) { s.historyRec = r }
 
 // CreatePost 创建帖子。
 //
@@ -409,6 +437,9 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	// 点赞状态（缓存优先，miss 回源 DB）
 	isLiked := s.checkLiked(ctx, userID, postID)
 
+	// 收藏状态（缓存优先，miss 回源 DB）
+	isCollected := s.checkCollected(ctx, userID, postID)
+
 	// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）
 	go func() {
 		defer func() {
@@ -440,11 +471,21 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		LastReplyTime: post.LastReplyTime,
 		AuthorID: post.UserID, AuthorName: authorName, AuthorAvatar: authorAvatar,
 		IsLiked: isLiked,
+		IsCollected: isCollected,
 	}
 
-	// 用 Redis 最新浏览量覆盖 DB 值
+	// 用 Redis 实时统计覆盖 DB 值（全 4 字段）；缓存缺失则用 DB 兜底（值已在 vo）并回种 Redis。
+	// 回种用 HSetNX：async 浏览量 goroutine 会 HINCRBY view_count，普通 HSet 会 clobber 它的 +1。
 	if stats, _ := s.statsCache.Get(ctx, postID); stats != nil {
 		vo.ViewCount = stats.ViewCount
+		vo.CommentCount = stats.CommentCount
+		vo.LikeCount = stats.LikeCount
+		vo.CollectCount = stats.CollectCount
+	} else {
+		_ = s.statsCache.SetIfAbsent(ctx, postID, &domain.PostStatistics{
+			ViewCount: post.ViewCount, CommentCount: post.CommentCount,
+			LikeCount: post.LikeCount, CollectCount: post.CollectCount,
+		})
 	}
 
 	return vo, nil
@@ -477,6 +518,37 @@ func (s *postServiceImpl) checkLiked(ctx context.Context, userID, postID uuid.UU
 	return isLiked
 }
 
+// checkCollected 检查收藏状态（缓存优先，miss 回源 DB + 回填）。
+// 未注入 collectCache 时（向后兼容）直接返回 false。
+func (s *postServiceImpl) checkCollected(ctx context.Context, userID, postID uuid.UUID) bool {
+	if s.collectCache == nil {
+		return false
+	}
+	collectedMap, missed, err := s.collectCache.BatchCheck(ctx, userID, []uuid.UUID{postID})
+	if err == nil {
+		if collectedMap[postID] {
+			return true
+		}
+		if len(missed) > 0 {
+			isCollected, dbErr := s.repo.IsCollected(ctx, userID, postID)
+			if dbErr != nil {
+				return false
+			}
+			if isCollected {
+				_ = s.collectCache.Backfill(ctx, userID, []uuid.UUID{postID})
+			}
+			return isCollected
+		}
+		return false
+	}
+	// 缓存故障：直接回源 DB
+	isCollected, dbErr := s.repo.IsCollected(ctx, userID, postID)
+	if dbErr != nil {
+		return false
+	}
+	return isCollected
+}
+
 // asyncIncrementView 异步增加浏览量（含缓存恢复 + 发布事件）。
 //
 // 与旧 controller.GetPostDetail 中的 go func 行为一致。
@@ -497,6 +569,13 @@ func (s *postServiceImpl) asyncIncrementView(postID, userID uuid.UUID) {
 	if newCount > 0 {
 		if err := s.publisher.PublishViewCount(context.Background(), postID); err != nil {
 			logger.Log.Error("Failed to publish view count event: " + err.Error())
+		}
+		// 记录浏览历史(newCount>0 即真实浏览,复用 5min 去重窗口,防刷新刷量)。
+		// 失败仅日志,不影响详情接口。
+		if s.historyRec != nil {
+			if err := s.historyRec.RecordView(context.Background(), userID, postID); err != nil {
+				logger.Log.Error("Failed to record post view history: " + err.Error())
+			}
 		}
 	}
 }
@@ -651,7 +730,32 @@ func (s *postServiceImpl) assemblePostList(ctx context.Context, raw *RawPostSear
 			Images: images,
 		})
 	}
+	s.applyStatsOverlay(ctx, posts)
 	return posts
+}
+
+// applyStatsOverlay 用 Redis 实时统计覆盖列表项计数字段（view/comment/like/collect）。
+// 批量 pipeline 1 RTT；未命中的帖子保留原值（ES/DB 快照），不回种（避免读路径写放大）。
+func (s *postServiceImpl) applyStatsOverlay(ctx context.Context, posts []PostListItem) {
+	if len(posts) == 0 {
+		return
+	}
+	postIDs := make([]uuid.UUID, 0, len(posts))
+	for _, p := range posts {
+		postIDs = append(postIDs, p.ID)
+	}
+	statsMap, err := s.statsCache.BatchGet(ctx, postIDs)
+	if err != nil || len(statsMap) == 0 {
+		return
+	}
+	for i := range posts {
+		if st, ok := statsMap[posts[i].ID]; ok && st != nil {
+			posts[i].ViewCount = st.ViewCount
+			posts[i].CommentCount = st.CommentCount
+			posts[i].LikeCount = st.LikeCount
+			posts[i].CollectCount = st.CollectCount
+		}
+	}
 }
 
 // GetMediaByPostIDs 批量获取帖子图片（供 circle 领域调用）。
@@ -674,6 +778,140 @@ func (s *postServiceImpl) GetMediaByPostIDs(ctx context.Context, postIDs []strin
 		result[pid.String()] = []string(m)
 	}
 	return result, nil
+}
+
+// GetPostsByIDs 按 ID 列表批量获取已组装的帖子（DB 来源，仅未删除 + 已发布）。
+//
+// 供 collect 领域「我的收藏」列表调用。与 assemblePostList（ES 来源）平行：
+// 批量查作者/圈子/图片后组装为 PostListItem。顺序不保证，失效帖静默过滤。
+func (s *postServiceImpl) GetPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error) {
+	if len(postIDs) == 0 {
+		return []PostListItem{}, nil
+	}
+	posts, err := s.repo.ListByIDs(ctx, postIDs)
+	if err != nil {
+		return nil, err
+	}
+	return s.assembleFromPosts(ctx, posts), nil
+}
+
+// SearchPostsByIDs 按 ID 列表从 ES 获取已组装帖子(供 history「最近浏览」列表调用)。
+//
+// 与 GetPostsByIDs(DB 来源)平行,但走 ES terms 查询,复用 assemblePostList 组装。
+// 顺序不保证,失效帖(被删/未发布)在 ES 查询时静默过滤。
+func (s *postServiceImpl) SearchPostsByIDs(ctx context.Context, postIDs []uuid.UUID) ([]PostListItem, error) {
+	if len(postIDs) == 0 {
+		return []PostListItem{}, nil
+	}
+	raw, err := s.searcher.SearchByIDs(ctx, postIDs, len(postIDs))
+	if err != nil {
+		return nil, err
+	}
+	return s.assemblePostList(ctx, raw), nil
+}
+
+// SearchPostsByIDsAndKeyword 在 ID 集合内按关键字搜索并组装帖子(供 history「最近浏览」关键字搜索)。
+//
+// 与 SearchPostsByIDs 平行,但叠加 multi_match(title^3/summary) 关键字过滤,
+// 按 _score desc 排序,offset 分页;返回匹配总数(raw.Total)供上层计算 next_offset。
+// 失效帖(被删/未发布)在 ES 查询时静默过滤。
+func (s *postServiceImpl) SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]PostListItem, int64, error) {
+	if len(postIDs) == 0 || keyword == "" {
+		return []PostListItem{}, 0, nil
+	}
+	raw, err := s.searcher.SearchByIDsAndKeyword(ctx, postIDs, keyword, size, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	return s.assemblePostList(ctx, raw), raw.Total, nil
+}
+
+// assembleFromPosts 把 DB Post 实体批量组装为 PostListItem（作者/圈子/图片信息）。
+//
+// 与 assemblePostList 平行：后者喂 ES PostDoc，本方法喂 domain.Post。
+// 两者共享 batch 查询 user/circle/media 的模式，但输入类型不同，故独立实现以保证清晰。
+func (s *postServiceImpl) assembleFromPosts(ctx context.Context, posts []domain.Post) []PostListItem {
+	if len(posts) == 0 {
+		return []PostListItem{}
+	}
+
+	userIDSet := make(map[uuid.UUID]struct{})
+	circleIDSet := make(map[uuid.UUID]struct{})
+	postIDs := make([]uuid.UUID, 0, len(posts))
+	for _, p := range posts {
+		postIDs = append(postIDs, p.ID)
+		userIDSet[p.UserID] = struct{}{}
+		circleIDSet[p.CircleID] = struct{}{}
+	}
+	userIDs := keys(userIDSet)
+	circleIDs := keys(circleIDSet)
+
+	// 批量查询用户信息
+	userMap := make(map[uuid.UUID]UserBrief)
+	if s.userFacade != nil && len(userIDs) > 0 {
+		if briefs, err := s.userFacade.GetBriefs(ctx, toStrings(userIDs)); err == nil {
+			for idStr, b := range briefs {
+				if uid, err := uuid.Parse(idStr); err == nil {
+					userMap[uid] = UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}
+				}
+			}
+		}
+	}
+
+	// 批量查询圈子信息
+	circleMap := make(map[uuid.UUID]CircleBrief)
+	if s.circleFacade != nil && len(circleIDs) > 0 {
+		if briefs, err := s.circleFacade.GetBriefs(ctx, toStrings(circleIDs)); err == nil {
+			for idStr, b := range briefs {
+				if cid, err := uuid.Parse(idStr); err == nil {
+					circleMap[cid] = CircleBrief{ID: b.ID, Name: b.Name, AvatarURL: b.AvatarURL}
+				}
+			}
+		}
+	}
+
+	// 批量查询帖子媒体
+	mediaMap := make(map[uuid.UUID][]string)
+	if len(postIDs) > 0 {
+		if media, err := s.repo.GetMediaByPostIDs(ctx, postIDs); err == nil {
+			for pid, m := range media {
+				mediaMap[pid] = []string(m)
+			}
+		}
+	}
+
+	// 组装
+	result := make([]PostListItem, 0, len(posts))
+	for _, p := range posts {
+		var authorName, authorAvatar string
+		if a, ok := userMap[p.UserID]; ok {
+			authorName = a.Username
+			authorAvatar = a.AvatarURL
+		}
+		var circleName, circleAvatar string
+		if c, ok := circleMap[p.CircleID]; ok {
+			circleName = c.Name
+			circleAvatar = c.AvatarURL
+		}
+		var images []string
+		if m, ok := mediaMap[p.ID]; ok {
+			images = m
+		}
+
+		result = append(result, PostListItem{
+			ID: p.ID, CircleID: p.CircleID, UserID: p.UserID, Type: p.Type,
+			Title: p.Title, Summary: p.Summary, Content: p.Content,
+			ViewCount: p.ViewCount, CommentCount: p.CommentCount,
+			LikeCount: p.LikeCount, CollectCount: p.CollectCount,
+			IsPinned: p.IsPinned, IsEssence: p.IsEssence, IsLock: p.IsLock,
+			Status: p.Status, CreateTime: p.CreateTime,
+			AuthorName: authorName, AuthorAvatar: authorAvatar,
+			CircleName: circleName, CircleAvatar: circleAvatar,
+			Images: images,
+		})
+	}
+	s.applyStatsOverlay(ctx, result)
+	return result
 }
 
 // GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。

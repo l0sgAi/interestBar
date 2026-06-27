@@ -39,3 +39,24 @@ type LikeEventMessage struct {
 	PostID   uuid.UUID `json:"post_id"`   // 仅评论点赞时使用（冗余字段）
 	Amount   int64     `json:"amount"`    // 1=点赞, -1=取消点赞
 }
+
+// CollectEventType 收藏事件类型（固定为帖子收藏，评论无收藏语义）。
+const CollectEventType = "post_collect"
+
+// CollectEventMessage 收藏事件消息
+type CollectEventMessage struct {
+	Type   string    `json:"type"`    // 固定 "post_collect"
+	UserID uuid.UUID `json:"user_id"`
+	PostID uuid.UUID `json:"post_id"` // 被收藏的帖子ID
+	Amount int64     `json:"amount"`  // 1=收藏, -1=取消收藏
+}
+
+// HistoryEventType 浏览历史事件类型（固定为帖子浏览,评论无浏览历史语义）。
+const HistoryEventType = "post_view"
+
+// HistoryEventMessage 浏览历史事件消息
+type HistoryEventMessage struct {
+	Type   string    `json:"type"`    // 固定 "post_view"
+	UserID uuid.UUID `json:"user_id"`
+	PostID uuid.UUID `json:"post_id"` // 被浏览的帖子ID
+}

@@ -105,11 +105,43 @@ func Run(configPath, bootstrapPath string) {
 		logger.Log.Info("Like Lua scripts loaded successfully")
 	}
 
+	// 8.10 Init Collect event Redpanda producer
+	if err := redpanda.InitCollectEventProducer(); err != nil {
+		logger.Log.Error("Failed to initialize collect event producer: " + err.Error())
+		logger.Log.Warn("Collect event persistence to database is disabled.")
+	} else {
+		logger.Log.Info("Collect event producer initialized successfully")
+		go redpanda.StartCollectEventConsumerWithRetry()
+	}
+
+	// 8.11 Init Collect Lua scripts in Redis
+	if err := redis.InitCollectLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load collect Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("Collect Lua scripts loaded successfully")
+	}
+
 	// 8.9 Init View Lua scripts in Redis
 	if err := redis.InitViewLuaScripts(); err != nil {
 		logger.Log.Error("Failed to load view Lua scripts: " + err.Error())
 	} else {
 		logger.Log.Info("View Lua scripts loaded successfully")
+	}
+
+	// 8.12 Init History event Redpanda producer
+	if err := redpanda.InitHistoryEventProducer(); err != nil {
+		logger.Log.Error("Failed to initialize history event producer: " + err.Error())
+		logger.Log.Warn("History event persistence to database is disabled.")
+	} else {
+		logger.Log.Info("History event producer initialized successfully")
+		go redpanda.StartHistoryEventConsumerWithRetry()
+	}
+
+	// 8.13 Init History Lua scripts in Redis
+	if err := redis.InitHistoryLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load history Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("History Lua scripts loaded successfully")
 	}
 
 	// 9. Init Router
@@ -129,5 +161,7 @@ func Run(configPath, bootstrapPath string) {
 	redpanda.CloseRedpandaProducer()
 	redpanda.ClosePostStatsProducer()
 	redpanda.CloseLikeEventProducer()
+	redpanda.CloseCollectEventProducer()
+	redpanda.CloseHistoryEventProducer()
 	logger.Log.Info("Server shutdown complete")
 }

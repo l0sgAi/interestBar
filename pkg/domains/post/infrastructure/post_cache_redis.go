@@ -46,6 +46,32 @@ func (c *postStatsCacheRedis) Set(ctx context.Context, postID uuid.UUID, stats *
 	})
 }
 
+func (c *postStatsCacheRedis) BatchGet(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID]*domain.PostStatistics, error) {
+	raw, err := redispkg.GetPostStatisticsBatch(postIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[uuid.UUID]*domain.PostStatistics, len(raw))
+	for pid, st := range raw {
+		result[pid] = &domain.PostStatistics{
+			ViewCount:    st.ViewCount,
+			CommentCount: st.CommentCount,
+			LikeCount:    st.LikeCount,
+			CollectCount: st.CollectCount,
+		}
+	}
+	return result, nil
+}
+
+func (c *postStatsCacheRedis) SetIfAbsent(ctx context.Context, postID uuid.UUID, stats *domain.PostStatistics) error {
+	return redispkg.SeedPostStatisticsIfAbsent(postID, &redispkg.PostStatistics{
+		ViewCount:    stats.ViewCount,
+		CommentCount: stats.CommentCount,
+		LikeCount:    stats.LikeCount,
+		CollectCount: stats.CollectCount,
+	})
+}
+
 func (c *postStatsCacheRedis) IncrViewCount(ctx context.Context, postID, userID uuid.UUID) (int64, error) {
 	return redispkg.IncrementPostViewCount(postID, userID)
 }
@@ -68,4 +94,20 @@ func (c *postLikeCacheRedis) BatchCheck(ctx context.Context, userID uuid.UUID, p
 
 func (c *postLikeCacheRedis) Backfill(ctx context.Context, userID uuid.UUID, likedPostIDs []uuid.UUID) error {
 	return redispkg.BackfillPostLikes(userID, likedPostIDs)
+}
+
+// postCollectCacheRedis 基于 Redis ZSET 的 PostCollectCache 实现（只读 BatchCheck/Backfill）。
+type postCollectCacheRedis struct{}
+
+// NewPostCollectCache 构造 PostCollectCache。
+func NewPostCollectCache() domain.PostCollectCache {
+	return &postCollectCacheRedis{}
+}
+
+func (c *postCollectCacheRedis) BatchCheck(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) (map[uuid.UUID]bool, []uuid.UUID, error) {
+	return redispkg.BatchCheckPostCollected(userID, postIDs)
+}
+
+func (c *postCollectCacheRedis) Backfill(ctx context.Context, userID uuid.UUID, collectedPostIDs []uuid.UUID) error {
+	return redispkg.BackfillPostCollects(userID, collectedPostIDs)
 }

@@ -8,14 +8,20 @@ package application
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
+	"net"
 	"net/mail"
+	"net/url"
 	"strings"
+	"time"
 
 	"interestBar/pkg/domains/auth/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/util/password"
+
+	"go.uber.org/zap"
 )
 
 // LoginInput 邮箱密码登录入参。
@@ -76,11 +82,11 @@ type AuthService interface {
 }
 
 type authServiceImpl struct {
-	session    domain.SaTokenSession
-	userStore  domain.UserSessionStore
-	verify     domain.VerificationStore
-	email      domain.EmailSender
-	oauthReg   domain.OAuthProviderRegistry
+	session   domain.SaTokenSession
+	userStore domain.UserSessionStore
+	verify    domain.VerificationStore
+	email     domain.EmailSender
+	oauthReg  domain.OAuthProviderRegistry
 }
 
 // NewAuthService 构造一个 AuthService。
@@ -323,14 +329,27 @@ func (s *authServiceImpl) OAuthCallback(ctx context.Context, providerName, code,
 		return "", errUnknownOAuthProvider
 	}
 
-	token, err := p.Exchange(ctx, code)
+	// OAuth 出站调用（换 token + 拉用户信息）单独限时，避免 provider 不可达时
+	// 被 OS 层 TCP 超时拖到 ~30s；后续 DB/session 仍用原 ctx。
+	oauthCtx, cancel := context.WithTimeout(ctx, oauthCallTimeout)
+	defer cancel()
+
+	token, err := p.Exchange(oauthCtx, code)
 	if err != nil {
-		return "", err
+		logger.Log.Error("oauth exchange failed",
+			zap.String("provider", providerName),
+			zap.Error(err),
+		)
+		return "", classifyOAuthError(err)
 	}
 
-	userInfo, err := p.FetchUser(ctx, token)
+	userInfo, err := p.FetchUser(oauthCtx, token)
 	if err != nil {
-		return "", err
+		logger.Log.Error("oauth fetch user failed",
+			zap.String("provider", providerName),
+			zap.Error(err),
+		)
+		return "", classifyOAuthError(err)
 	}
 
 	// 通过 UserSessionStore 按 (providerID OR email) 查询。
@@ -371,12 +390,12 @@ func (s *authServiceImpl) findOrCreateOAuthUser(p domain.OAuthProvider, info *do
 	// 这段逻辑交给 userStore 实现（它知道 SysUser 结构）。
 	// auth 层只负责调用，不关心具体表结构。
 	user, err := s.userStore.FindOrCreateForOAuth(domain.OAuthUserLookup{
-		Provider:     p.Name(),
-		LookupField:  p.UserLookupField(),
-		ProviderID:   info.ProviderID,
-		Email:        info.Email,
-		Name:         info.Name,
-		AvatarURL:    info.AvatarURL,
+		Provider:    p.Name(),
+		LookupField: p.UserLookupField(),
+		ProviderID:  info.ProviderID,
+		Email:       info.Email,
+		Name:        info.Name,
+		AvatarURL:   info.AvatarURL,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("find or create oauth user: %w", err)
@@ -389,8 +408,32 @@ func (s *authServiceImpl) LogoutByToken(ctx context.Context, token string) error
 	return s.session.LogoutByToken(token)
 }
 
+// oauthCallTimeout 限制单次 OAuth 回调中出站调用（换 token + 拉用户信息）的总耗时。
+const oauthCallTimeout = 15 * time.Second
+
 // oauthStateDelimiter 用于 OAuth state 中编码 device 的分隔符（与旧 controller 一致）。
 const oauthStateDelimiter = ":"
+
+// classifyOAuthError 把 OAuth provider 的底层网络/超时错误归一为
+// errOAuthProviderUnavailable，便于 handler 层返回 503（而非笼统的 500）。
+// 非网络类错误（如 token 类型不符）原样返回。
+func classifyOAuthError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return errOAuthProviderUnavailable
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return errOAuthProviderUnavailable
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return errOAuthProviderUnavailable
+	}
+	return err
+}
 
 // resolveDevice 返回有效 device 值，空值/非法值默认为 web。
 func resolveDevice(device string) string {

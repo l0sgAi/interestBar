@@ -58,8 +58,9 @@ func (a *oauthProviderAdapter) AuthCodeURL(state string) string {
 // 但它实际只把 c 当 context.Context 用（传给 oauth2.Config.Exchange）。
 // 这里传入标准库 context.Context，类型满足 oauth2.Config.Exchange 的要求。
 func (a *oauthProviderAdapter) Exchange(ctx context.Context, code string) (interface{}, error) {
-	// oauth2.Config.Exchange 接收 context.Context，与我们的 ctx 兼容。
-	return a.legacy.OAuthConfig().Exchange(ctx, code)
+	// 注入代理感知的 OAuth HTTP 客户端（conf.Oauth.ProxyURL 为空时等同直连），
+	// 使换 token 的出站请求走配置的代理。oauth2.Config.Exchange 接收 context.Context。
+	return a.legacy.OAuthConfig().Exchange(auth.WithHTTPClient(ctx), code)
 }
 
 // FetchUser 用 token 拉取用户信息。
@@ -68,7 +69,8 @@ func (a *oauthProviderAdapter) FetchUser(ctx context.Context, token interface{})
 	if !ok {
 		return nil, errInvalidTokenType
 	}
-	info, err := a.legacy.FetchUser(ctx, t)
+	// 注入代理感知 client，使拉取用户信息的出站请求同样走配置的代理。
+	info, err := a.legacy.FetchUser(auth.WithHTTPClient(ctx), t)
 	if err != nil {
 		return nil, err
 	}

@@ -36,7 +36,9 @@ func (p *GithubProvider) OAuthConfig() *oauth2.Config {
 }
 
 func (p *GithubProvider) FetchUser(ctx context.Context, token *oauth2.Token) (*OAuthUserInfo, error) {
-	gu, err := GetGithubUser(token)
+	// ctx 已携带代理感知 client（由适配器注入）与超时；用它构造带 token 的 client。
+	client := p.OAuthConfig().Client(ctx, token)
+	gu, err := GetGithubUser(client)
 	if err != nil {
 		return nil, err
 	}
@@ -94,9 +96,9 @@ func GetGithubOAuthConfig() *oauth2.Config {
 	}
 }
 
-// GetGithubUser fetches user info from GitHub using the access token
-func GetGithubUser(token *oauth2.Token) (*GithubUser, error) {
-	client := GetGithubOAuthConfig().Client(context.Background(), token)
+// GetGithubUser fetches user info from GitHub using the access token.
+// client 由调用方传入（携带 OAuth 代理与超时配置）。
+func GetGithubUser(client *http.Client) (*GithubUser, error) {
 	resp, err := client.Get("https://api.github.com/user")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user info: %v", err)

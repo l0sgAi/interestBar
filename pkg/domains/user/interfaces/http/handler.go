@@ -49,6 +49,10 @@ type UpdateProfileRequest struct {
 	Phone     *string    `json:"phone" binding:"omitempty"`
 	Gender    *int       `json:"gender" binding:"omitempty,min=0,max=3"`
 	Birthdate *time.Time `json:"birthdate" binding:"omitempty"`
+	// Password / ConfirmPassword 重置密码：两者同时传入才生效。
+	// 长度/一致性校验在 service 层完成（与 auth 注册一致），故 binding 仅 omitempty。
+	Password        *string `json:"password" binding:"omitempty"`
+	ConfirmPassword *string `json:"confirm_password" binding:"omitempty"`
 }
 
 // SearchUsersRequest 搜索用户的请求结构。
@@ -73,11 +77,13 @@ func (h *Handler) UpdateProfile(c appctx.AppContext) {
 	}
 
 	result, err := h.svc.UpdateProfile(c, userID, application.UpdateProfileInput{
-		Username:  req.Username,
-		AvatarURL: req.AvatarURL,
-		Phone:     req.Phone,
-		Gender:    req.Gender,
-		Birthdate: req.Birthdate,
+		Username:        req.Username,
+		AvatarURL:       req.AvatarURL,
+		Phone:           req.Phone,
+		Gender:          req.Gender,
+		Birthdate:       req.Birthdate,
+		Password:        req.Password,
+		ConfirmPassword: req.ConfirmPassword,
 	})
 	if err != nil {
 		writeUpdateProfileError(c, err)
@@ -149,6 +155,12 @@ func writeUpdateProfileError(c appctx.AppContext, err error) {
 		httputil.BadRequest(c, "Gender must be 0 (unknown), 1 (male), or 2 (female) 3 (others)")
 	case application.IsBirthdateFutureErr(err):
 		httputil.BadRequest(c, "Birthdate cannot be in the future")
+	case application.IsPasswordTooShortErr(err):
+		httputil.BadRequest(c, "Password must be at least 6 characters")
+	case application.IsPasswordMismatchErr(err):
+		httputil.BadRequest(c, "Password and confirm password do not match")
+	case application.IsPasswordIncompleteErr(err):
+		httputil.BadRequest(c, "password and confirm_password must be provided together")
 	default:
 		httputil.InternalError(c, "Failed to update user info")
 	}

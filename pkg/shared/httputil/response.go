@@ -269,6 +269,15 @@ func InternalError(c appctx.AppContext, message ...string) {
 	ErrorWithMessage(c, CodeInternalError, msg)
 }
 
+// ServiceUnavailable 发送 503 Service Unavailable 响应。
+func ServiceUnavailable(c appctx.AppContext, message ...string) {
+	msg := MsgServiceUnavailable
+	if len(message) > 0 && message[0] != "" {
+		msg = message[0]
+	}
+	ErrorWithMessage(c, CodeServiceUnavailable, msg)
+}
+
 // Conflict 发送 409 Conflict 响应。
 func Conflict(c appctx.AppContext, message ...string) {
 	msg := MsgConflict

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"interestBar/pkg/domains/user/domain"
+	"interestBar/pkg/util/password"
 
 	"github.com/google/uuid"
 )
@@ -70,6 +71,10 @@ type UpdateProfileInput struct {
 	Phone     *string
 	Gender    *int
 	Birthdate *time.Time
+	// Password / ConfirmPassword 重置密码：两者须同时提供、相等且达到
+	// password.MinLength；任一为 nil 表示本次不改密码（纯重置语义，不校验旧密码）。
+	Password        *string
+	ConfirmPassword *string
 }
 
 // UpdateProfileResult 修改资料的返回值。
@@ -245,7 +250,8 @@ func (s *userServiceImpl) GetByIDStr(ctx context.Context, loginID string) (*doma
 //   - gender 在 [0,3]；
 //   - birthdate 不在未来。
 func (s *userServiceImpl) UpdateProfile(ctx context.Context, userID uuid.UUID, input UpdateProfileInput) (*UpdateProfileResult, error) {
-	if input.Username == nil && input.AvatarURL == nil && input.Phone == nil && input.Gender == nil && input.Birthdate == nil {
+	if input.Username == nil && input.AvatarURL == nil && input.Phone == nil && input.Gender == nil && input.Birthdate == nil &&
+		input.Password == nil && input.ConfirmPassword == nil {
 		return nil, errAtLeastOneField
 	}
 
@@ -280,6 +286,25 @@ func (s *userServiceImpl) UpdateProfile(ctx context.Context, userID uuid.UUID, i
 			return nil, errBirthdateFuture
 		}
 		updateData["birthdate"] = *input.Birthdate
+	}
+
+	// 重置密码：两者必须同时提供（仅传一个 → 报错），长度达标且一致才写入哈希。
+	// 不 trim：密码中的空格是有意义的字符；与 auth 注册保持一致。
+	if input.Password != nil || input.ConfirmPassword != nil {
+		if input.Password == nil || input.ConfirmPassword == nil {
+			return nil, errPasswordIncomplete
+		}
+		if len(*input.Password) < password.MinLength {
+			return nil, errPasswordTooShort
+		}
+		if *input.Password != *input.ConfirmPassword {
+			return nil, errPasswordMismatch
+		}
+		hash, err := password.Hash(*input.Password)
+		if err != nil {
+			return nil, err
+		}
+		updateData["pwd"] = hash
 	}
 
 	if err := s.repo.UpdateFields(ctx, userID, updateData); err != nil {

@@ -49,6 +49,10 @@ type Log struct {
 
 // 新增：对应 yaml 中的 oauth 层级
 type Oauth struct {
+	// ProxyURL OAuth 出站（换 token / 拉用户信息）使用的 HTTP 代理。
+	// 为空则直连。本地开发在网络受限时可配置（如 http://127.0.0.1:6268）。
+	ProxyURL string `mapstructure:"proxy_url" json:"proxy_url" yaml:"proxy_url"`
+
 	Google    Google    `mapstructure:"google" json:"google" yaml:"google"`
 	Github    Github    `mapstructure:"github" json:"github" yaml:"github"`
 	Microsoft Microsoft `mapstructure:"microsoft" json:"microsoft" yaml:"microsoft"`
@@ -138,6 +142,12 @@ type Redpanda struct {
 	LikeEventTopic         string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
 	LikeEventConsumerGroup string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
 	LikeEventFlushInterval int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
+	CollectEventTopic         string   `mapstructure:"collect_event_topic" json:"collect_event_topic" yaml:"collect_event_topic"`
+	CollectEventConsumerGroup string   `mapstructure:"collect_event_consumer_group" json:"collect_event_consumer_group" yaml:"collect_event_consumer_group"`
+	CollectEventFlushInterval int      `mapstructure:"collect_event_flush_interval" json:"collect_event_flush_interval" yaml:"collect_event_flush_interval"`
+	HistoryEventTopic         string   `mapstructure:"history_event_topic" json:"history_event_topic" yaml:"history_event_topic"`
+	HistoryEventConsumerGroup string   `mapstructure:"history_event_consumer_group" json:"history_event_consumer_group" yaml:"history_event_consumer_group"`
+	HistoryEventFlushInterval int      `mapstructure:"history_event_flush_interval" json:"history_event_flush_interval" yaml:"history_event_flush_interval"`
 }
 
 // Mailtrap 邮件发送配置
