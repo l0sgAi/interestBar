@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"interestBar/pkg/domains/history/domain"
 	postapp "interestBar/pkg/domains/post/application"
@@ -28,12 +29,21 @@ type PostFetcher interface {
 
 // ===== DTO =====
 
+// HistoryPostItem 「最近浏览」列表项。
+//
+// 嵌入 PostListItem(JSON 字段平铺到顶层,前端可直接复用帖子卡片组件),
+// 附加 viewed_at(最近访问时间,取自 ZSET score / DB update_time)。
+type HistoryPostItem struct {
+	ViewedAt time.Time `json:"viewed_at"` // 最近访问时间(RFC3339Nano)
+	postapp.PostListItem
+}
+
 // ListHistoryPostsResult 「最近浏览」列表结果。
 type ListHistoryPostsResult struct {
-	Posts      []postapp.PostListItem `json:"posts"`
-	Total      int64                  `json:"total"`
-	Size       int                    `json:"size"`
-	NextOffset *int                   `json:"next_offset,omitempty"` // 下一页 offset;无更多页时省略
+	Posts      []HistoryPostItem `json:"posts"`
+	Total      int64             `json:"total"`
+	Size       int               `json:"size"`
+	NextOffset *int              `json:"next_offset,omitempty"` // 下一页 offset;无更多页时省略
 }
 
 // ===== Service 接口 =====
@@ -96,8 +106,8 @@ func (s *historyServiceImpl) RecordView(ctx context.Context, userID, postID uuid
 
 // ListHistoryPosts 查看当前用户的「最近浏览」列表。
 //
-// 数据源:Redis ZSET(即时读),按最近访问时间倒序 offset 分页。
-// 冷启动(ZCARD==0)时从 DB top500 回源 + Backfill ZSET,保证 ZSET 过期后历史不丢。
+// 数据源:Redis ZSET(即时读),按最近访问时间倒序 offset 分页,每条带 viewed_at(ZSET score 还原)。
+// 冷启动(ZCARD==0)时从 DB top500 回源(update_time 作 score)+ Backfill,保证访问时间一致。
 // 帖子数据走 ES(SearchByIDs),失效帖(被删/未发布)在 ES terms 查询时静默过滤。
 func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.UUID, size, offset int) (*ListHistoryPostsResult, error) {
 	if s.fetcher == nil {
@@ -110,16 +120,16 @@ func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.U
 		offset = 0
 	}
 
-	postIDs, total, err := s.cache.ListViews(ctx, userID, offset, size)
+	entries, total, err := s.cache.ListViews(ctx, userID, offset, size)
 	if err != nil {
 		return nil, err
 	}
 
-	// 冷启动:ZSET 空 → DB top500 回源 + Backfill,再读一次
+	// 冷启动:ZSET 空 → DB top500 回源(ViewedAt = update_time)+ Backfill,再读一次
 	if total == 0 {
-		if ids, e := s.repo.ListTopByUserID(ctx, userID, 500); e == nil && len(ids) > 0 {
-			if be := s.cache.Backfill(ctx, userID, ids); be == nil {
-				postIDs, total, err = s.cache.ListViews(ctx, userID, offset, size)
+		if dbEntries, e := s.repo.ListTopByUserID(ctx, userID, 500); e == nil && len(dbEntries) > 0 {
+			if be := s.cache.Backfill(ctx, userID, dbEntries); be == nil {
+				entries, total, err = s.cache.ListViews(ctx, userID, offset, size)
 				if err != nil {
 					return nil, err
 				}
@@ -127,14 +137,26 @@ func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.U
 		}
 	}
 
-	posts := make([]postapp.PostListItem, 0, len(postIDs))
-	if len(postIDs) > 0 {
+	posts := make([]HistoryPostItem, 0, len(entries))
+	if len(entries) > 0 {
+		postIDs := make([]uuid.UUID, 0, len(entries))
+		for _, e := range entries {
+			postIDs = append(postIDs, e.PostID)
+		}
 		fetched, err := s.fetcher.SearchByIDs(ctx, postIDs)
 		if err != nil {
 			return nil, err
 		}
-		// 按 postIDs(ZSET 倒序 = 最近访问倒序)重排:SearchByIDs 不保证顺序,且会过滤失效帖。
-		posts = orderByViewTime(fetched, postIDs)
+		// 按 entries 顺序(ZSET 倒序 = 最近访问倒序)组装,附 viewed_at;失效帖静默过滤。
+		byID := make(map[uuid.UUID]postapp.PostListItem, len(fetched))
+		for _, p := range fetched {
+			byID[p.ID] = p
+		}
+		for _, e := range entries {
+			if p, ok := byID[e.PostID]; ok {
+				posts = append(posts, HistoryPostItem{ViewedAt: e.ViewedAt, PostListItem: p})
+			}
+		}
 	}
 
 	result := &ListHistoryPostsResult{
@@ -148,20 +170,4 @@ func (s *historyServiceImpl) ListHistoryPosts(ctx context.Context, userID uuid.U
 		result.NextOffset = &next
 	}
 	return result, nil
-}
-
-// orderByViewTime 把 fetched(无序、可能少于 postIDs)按 postIDs 的顺序重排。
-// 与 collect.orderByCollectTime 同构。
-func orderByViewTime(fetched []postapp.PostListItem, orderedIDs []uuid.UUID) []postapp.PostListItem {
-	byID := make(map[uuid.UUID]postapp.PostListItem, len(fetched))
-	for _, p := range fetched {
-		byID[p.ID] = p
-	}
-	result := make([]postapp.PostListItem, 0, len(fetched))
-	for _, id := range orderedIDs {
-		if p, ok := byID[id]; ok {
-			result = append(result, p)
-		}
-	}
-	return result
 }

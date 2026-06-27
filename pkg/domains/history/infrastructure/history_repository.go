@@ -19,13 +19,13 @@ func NewPostHistoryRepository(db *gorm.DB) domain.PostHistoryRepository {
 	return &postViewHistoryRepoGORM{db: db}
 }
 
-// ListTopByUserID 按 update_time DESC, id DESC 取该用户最近 size 条浏览历史的 postID。
-// 供冷启动回源:ZCARD==0 时从 DB 恢复 top500 回填 ZSET。
+// ListTopByUserID 按 update_time DESC, id DESC 取该用户最近 size 条浏览历史(postID + 访问时间)。
+// 供冷启动回源:ZCARD==0 时从 DB 恢复 top500,update_time 作 ZSET score 回填,保证访问时间一致。
 // (update_time, id) 复合排序配合索引 idx_pviewhist_user_time。
-func (r *postViewHistoryRepoGORM) ListTopByUserID(ctx context.Context, userID uuid.UUID, size int) ([]uuid.UUID, error) {
+func (r *postViewHistoryRepoGORM) ListTopByUserID(ctx context.Context, userID uuid.UUID, size int) ([]domain.ViewEntry, error) {
 	var rows []domain.PostViewHistory
 	err := r.db.WithContext(ctx).
-		Select("id, post_id").
+		Select("post_id, update_time").
 		Where("user_id = ?", userID).
 		Order("update_time DESC, id DESC").
 		Limit(size).
@@ -33,9 +33,9 @@ func (r *postViewHistoryRepoGORM) ListTopByUserID(ctx context.Context, userID uu
 	if err != nil {
 		return nil, err
 	}
-	postIDs := make([]uuid.UUID, 0, len(rows))
+	entries := make([]domain.ViewEntry, 0, len(rows))
 	for _, row := range rows {
-		postIDs = append(postIDs, row.PostID)
+		entries = append(entries, domain.ViewEntry{PostID: row.PostID, ViewedAt: row.UpdateTime})
 	}
-	return postIDs, nil
+	return entries, nil
 }

@@ -25,22 +25,28 @@ func (c *postHistoryCacheRedis) RecordView(ctx context.Context, userID, postID u
 	return redispkg.RecordPostView(userID, postID)
 }
 
-func (c *postHistoryCacheRedis) ListViews(ctx context.Context, userID uuid.UUID, offset, size int) ([]uuid.UUID, int64, error) {
+func (c *postHistoryCacheRedis) ListViews(ctx context.Context, userID uuid.UUID, offset, size int) ([]domain.ViewEntry, int64, error) {
 	_ = ctx
-	members, total, err := redispkg.ListPostViews(userID, int64(offset), int64(size))
+	raw, total, err := redispkg.ListPostViews(userID, int64(offset), int64(size))
 	if err != nil {
 		return nil, 0, err
 	}
-	postIDs := make([]uuid.UUID, 0, len(members))
-	for _, m := range members {
-		if id, perr := uuid.Parse(m); perr == nil {
-			postIDs = append(postIDs, id)
+	entries := make([]domain.ViewEntry, 0, len(raw))
+	for _, e := range raw {
+		id, perr := uuid.Parse(e.ID)
+		if perr != nil {
+			continue
 		}
+		entries = append(entries, domain.ViewEntry{PostID: id, ViewedAt: e.ViewedAt})
 	}
-	return postIDs, total, nil
+	return entries, total, nil
 }
 
-func (c *postHistoryCacheRedis) Backfill(ctx context.Context, userID uuid.UUID, postIDs []uuid.UUID) error {
+func (c *postHistoryCacheRedis) Backfill(ctx context.Context, userID uuid.UUID, entries []domain.ViewEntry) error {
 	_ = ctx
-	return redispkg.BackfillPostViews(userID, postIDs)
+	raw := make([]redispkg.PostViewEntry, 0, len(entries))
+	for _, e := range entries {
+		raw = append(raw, redispkg.PostViewEntry{ID: e.PostID.String(), ViewedAt: e.ViewedAt})
+	}
+	return redispkg.BackfillPostViews(userID, raw)
 }

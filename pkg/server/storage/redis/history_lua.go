@@ -79,14 +79,21 @@ func RecordPostView(userID, postID uuid.UUID) error {
 	return nil
 }
 
-// ListPostViews 倒序取浏览历史 ZSET 的 [offset, offset+size-1] 区间 postID。
-// 返回 postID 字符串列表(按最近访问时间倒序)、总数(ZCARD)、error。
-// 用于「最近浏览」列表 offset 分页。
-func ListPostViews(userID uuid.UUID, offset, size int64) ([]string, int64, error) {
+// PostViewEntry 浏览历史条目(postID + 最近访问时间)。
+// ViewedAt 由 ZSET score(Unix 毫秒)还原;冷启动回源时由 DB update_time 还原。
+type PostViewEntry struct {
+	ID       string
+	ViewedAt time.Time
+}
+
+// ListPostViews 倒序取浏览历史 ZSET 的 [offset, offset+size-1] 区间条目(含访问时间)。
+// 返回 PostViewEntry 列表(按最近访问时间倒序)、总数(ZCARD)、error。
+// 用于「最近浏览」列表 offset 分页 + 展示「N 分钟前看过」。
+func ListPostViews(userID uuid.UUID, offset, size int64) ([]PostViewEntry, int64, error) {
 	zsetKey := GetUserPostViewListKey(userID)
 
 	pipe := Client.Pipeline()
-	zrevRange := pipe.ZRevRange(ctx, zsetKey, offset, offset+size-1)
+	zrevRange := pipe.ZRevRangeWithScores(ctx, zsetKey, offset, offset+size-1)
 	zcard := pipe.ZCard(ctx, zsetKey)
 	pipe.Expire(ctx, zsetKey, postStatsTTL)
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -101,24 +108,37 @@ func ListPostViews(userID uuid.UUID, offset, size int64) ([]string, int64, error
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to get post view total: %w", err)
 	}
-	return members, total, nil
+
+	entries := make([]PostViewEntry, 0, len(members))
+	for _, z := range members {
+		id, ok := z.Member.(string)
+		if !ok {
+			continue
+		}
+		entries = append(entries, PostViewEntry{
+			ID:       id,
+			ViewedAt: time.UnixMilli(int64(z.Score)),
+		})
+	}
+	return entries, total, nil
 }
 
-// BackfillPostViews 将 DB 回源确认的浏览历史 postID 批量回填到 ZSET。
+// BackfillPostViews 将 DB 回源确认的浏览历史批量回填到 ZSET。
 // 用于 ZSET 冷启动(ZCARD==0)时从 DB top500 恢复。
 //
-// postIDs 须已按 update_time DESC 排序(由 repo 保证),这里按 index 递减分配 score,
-// 使回填后 ZSET 的 score 倒序与 DB 排序一致;后续真实浏览(score=now)会自然冒泡到顶部。
-func BackfillPostViews(userID uuid.UUID, postIDs []uuid.UUID) error {
-	if len(postIDs) == 0 {
+// 与旧版差异:用每条的 ViewedAt(= DB update_time)作 score,而非统一时间,
+// 保证冷热路径 viewed_at 一致;ZSET score 降序自然等于 update_time 倒序(DB 入参已排序)。
+func BackfillPostViews(userID uuid.UUID, entries []PostViewEntry) error {
+	if len(entries) == 0 {
 		return nil
 	}
 	zsetKey := GetUserPostViewListKey(userID)
-	base := float64(time.Now().UnixMilli())
-	members := make([]redis.Z, len(postIDs))
-	for i, id := range postIDs {
-		// index 越大(越久未访)score 越小,保证倒序与入参顺序一致
-		members[i] = redis.Z{Score: base - float64(i), Member: id.String()}
+	members := make([]redis.Z, 0, len(entries))
+	for _, e := range entries {
+		members = append(members, redis.Z{
+			Score:  float64(e.ViewedAt.UnixMilli()),
+			Member: e.ID,
+		})
 	}
 	pipe := Client.Pipeline()
 	pipe.ZAdd(ctx, zsetKey, members...)
