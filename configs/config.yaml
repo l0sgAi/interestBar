@@ -152,6 +152,7 @@ recommend:
     quota_c4: 10                   # 最新配额(%)
     quota_c5: 15                   # CF 相似配额(%)
     exclude_interacted: true       # 剔除已点赞/收藏/浏览过的帖
+    interest_circles_ttl_minutes: 120 # C3 行为圈子缓存 TTL(分钟)
 
 # 安全相关配置
 security:

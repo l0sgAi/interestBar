@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"sort"
+	"time"
 
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
@@ -29,10 +30,14 @@ func (s *recommendServiceImpl) recallAll(ctx context.Context, userID uuid.UUID) 
 	// 2. joined circles（C1 + C3 共用）
 	joinedCircles := s.safeJoined(ctx, userID, 50)
 
-	// 3. 五路召回（每路内部 try/log，返回有序 IDs）
+	// 3. 行为圈子（C3）：seed 帖子反查 circle_id（带 TTL 缓存）− joined
+	behaviorCircles := s.cachedBehaviorCircles(ctx, userID, seedIDs)
+	c3Circles := dedupPreserveOrder(filterOut(behaviorCircles, toSet(joinedCircles)))
+
+	// 4. 五路召回（每路内部 try/log，返回有序 IDs）
 	c1 := s.channelC1(ctx, joinedCircles, channelSize(poolSize, feedCfg.QuotaC1, 35))
 	c2 := s.channelC2(ctx, channelSize(poolSize, feedCfg.QuotaC2, 25))
-	c3 := s.channelC3(ctx, seedIDs, joinedCircles, channelSize(poolSize, feedCfg.QuotaC3, 15))
+	c3 := s.channelC3(ctx, c3Circles, channelSize(poolSize, feedCfg.QuotaC3, 15))
 	c4 := s.channelC4(ctx, channelSize(poolSize, feedCfg.QuotaC4, 10))
 	c5 := s.channelC5(ctx, seedIDs, channelSize(poolSize, feedCfg.QuotaC5, 15))
 
@@ -86,34 +91,42 @@ func (s *recommendServiceImpl) channelC2(ctx context.Context, size int) []uuid.U
 	return ids
 }
 
-// channelC3 行为圈子：seed 帖子的 circle_id − joined → 这些圈子的热门。
-func (s *recommendServiceImpl) channelC3(ctx context.Context, seedIDs, joinedCircles []uuid.UUID, size int) []uuid.UUID {
-	if size <= 0 || len(seedIDs) == 0 {
+// channelC3 行为圈子热门：在 c3Circles（seed 反查 circle_id − joined，已缓存）范围内 rank_score desc。
+func (s *recommendServiceImpl) channelC3(ctx context.Context, circles []uuid.UUID, size int) []uuid.UUID {
+	if size <= 0 || len(circles) == 0 {
 		return nil
 	}
-	all, err := s.postMeta.ListCircleIDsByPostIDs(ctx, seedIDs)
-	if err != nil {
-		logger.Log.Error("recall C3 (post→circle): " + err.Error())
-		return nil
-	}
-	joinedSet := toSet(joinedCircles)
-	diff := make([]uuid.UUID, 0, len(all))
-	for _, c := range all {
-		if _, ok := joinedSet[c]; !ok {
-			diff = append(diff, c)
-		}
-	}
-	// 去重（多个 seed 同圈）
-	diff = dedupPreserveOrder(diff)
-	if len(diff) == 0 {
-		return nil
-	}
-	ids, _, err := s.searcher.Search(ctx, "hot", diff, size, nil)
+	ids, _, err := s.searcher.Search(ctx, "hot", circles, size, nil)
 	if err != nil {
 		logger.Log.Error("recall C3 (behavior circles hot): " + err.Error())
 		return nil
 	}
 	return ids
+}
+
+// cachedBehaviorCircles 用户行为兴趣圈子（seed 帖子 → circle_id），带 TTL 缓存。
+//
+// miss 时从 DB 反查（ListCircleIDsByPostIDs）并落缓存，避免每轮 recall 都查 DB。
+// 兴趣随点赞/收藏漂移，TTL 可配（默认 2h）。返回原始集合，调用方读路径再减 joined 得 C3 候选圈。
+func (s *recommendServiceImpl) cachedBehaviorCircles(ctx context.Context, userID uuid.UUID, seedIDs []uuid.UUID) []uuid.UUID {
+	if len(seedIDs) == 0 {
+		return nil
+	}
+	if exists, _ := s.intCache.Exists(ctx, userID); exists {
+		if ids, err := s.intCache.Get(ctx, userID); err == nil {
+			return ids
+		}
+	}
+	all, err := s.postMeta.ListCircleIDsByPostIDs(ctx, seedIDs)
+	if err != nil {
+		logger.Log.Error("behavior circles (post→circle): " + err.Error())
+		return nil
+	}
+	ttl := time.Duration(defaultInt(conf.Config.Recommend.Feed.InterestCirclesTTLMinutes, 120)) * time.Minute
+	if err := s.intCache.Set(ctx, userID, all, ttl); err != nil {
+		logger.Log.Error("set interest circles cache: " + err.Error())
+	}
+	return all
 }
 
 // channelC4 最新：create_time desc（新鲜度补充，防信息茧房）。

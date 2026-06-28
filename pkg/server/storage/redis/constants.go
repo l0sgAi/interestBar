@@ -169,6 +169,17 @@ func GetRecommendFeedTokenKey(userID uuid.UUID) string {
 	return RecommendFeedTokenPrefix + userID.String()
 }
 
+// UserInterestCirclesPrefix 用户「行为兴趣圈子」SET key 前缀。
+// 完整 key 格式: user:interest_circles:{user_id}
+// SET: 由用户点赞/收藏的 seed 帖子反查得到的 circle_id 集合（C3 行为圈子召回用）。
+// miss 时从 DB 反查并落缓存；TTL interest_circles_ttl_minutes(默认 120)。读路径减去 joined circles。
+const UserInterestCirclesPrefix = "user:interest_circles:"
+
+// GetUserInterestCirclesKey 获取用户行为兴趣圈子 SET 的完整 key。
+func GetUserInterestCirclesKey(userID uuid.UUID) string {
+	return UserInterestCirclesPrefix + userID.String()
+}
+
 // GetPostViewDedupeKey 获取帖子浏览去重 key
 func GetPostViewDedupeKey(postID, userID uuid.UUID) string {
 	return fmt.Sprintf("%s%s:%s", PostViewDedupePrefix, postID.String(), userID.String())

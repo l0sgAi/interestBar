@@ -34,11 +34,12 @@ type recommendServiceImpl struct {
 	hydrator domain.PostHydrator
 	checker  domain.InteractionChecker
 	feed     domain.FeedCache
+	intCache domain.InterestCircleCache
 }
 
 // NewRecommendService 构造 RecommendService。
 //
-// searcher/seed/checker/feed 为 recommend 同域 infra（直构）；
+// searcher/seed/checker/feed/intCache 为 recommend 同域 infra（直构）；
 // circle/postMeta/hydrator 为跨域桥接器（composition 注入）。
 func NewRecommendService(
 	searcher domain.HomeFeedSearcher,
@@ -48,6 +49,7 @@ func NewRecommendService(
 	hydrator domain.PostHydrator,
 	checker domain.InteractionChecker,
 	feed domain.FeedCache,
+	intCache domain.InterestCircleCache,
 ) RecommendService {
 	return &recommendServiceImpl{
 		searcher: searcher,
@@ -57,6 +59,7 @@ func NewRecommendService(
 		hydrator: hydrator,
 		checker:  checker,
 		feed:     feed,
+		intCache: intCache,
 	}
 }
 

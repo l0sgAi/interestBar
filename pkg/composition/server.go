@@ -187,6 +187,7 @@ func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.Circle
 		&recommendPostHydrator{delegate: postSvc},   // PostHydrator
 		recommendinfra.NewInteractionChecker(),      // InteractionChecker
 		recommendinfra.NewFeedCache(),               // FeedCache
+		recommendinfra.NewInterestCircleCache(),     // InterestCircleCache
 	)
 }
 

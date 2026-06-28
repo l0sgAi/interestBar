@@ -98,3 +98,13 @@ type FeedCache interface {
 	Token(ctx context.Context, userID uuid.UUID) (string, error)
 	Build(ctx context.Context, userID uuid.UUID, ids []uuid.UUID, ttl time.Duration) (string, error)
 }
+
+// InterestCircleCache 用户行为兴趣圈子缓存（C3 用）。
+//
+// 缓存「seed 帖子 → circle_id」反查结果，避免每轮 recall 都查 DB。
+// 读路径在内存中减去 joined circles 得 C3 候选圈。兴趣随点赞/收藏漂移，TTL 可配。
+type InterestCircleCache interface {
+	Exists(ctx context.Context, userID uuid.UUID) (bool, error)
+	Get(ctx context.Context, userID uuid.UUID) ([]uuid.UUID, error)
+	Set(ctx context.Context, userID uuid.UUID, circleIDs []uuid.UUID, ttl time.Duration) error
+}

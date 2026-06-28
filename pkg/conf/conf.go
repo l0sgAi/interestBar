@@ -194,14 +194,15 @@ type Recommend struct {
 
 // Feed 推荐流候选池 + 多路召回配额配置。
 type Feed struct {
-	PoolSize          int  `mapstructure:"pool_size" json:"pool_size" yaml:"pool_size"`                            // 候选池大小（每路按配额比例填充）
-	TTLMinutes        int  `mapstructure:"ttl_minutes" json:"ttl_minutes" yaml:"ttl_minutes"`                      // 候选池 TTL(分钟)
-	QuotaC1           int  `mapstructure:"quota_c1" json:"quota_c1" yaml:"quota_c1"`                               // 兴趣圈子热门配额(百分比)
-	QuotaC2           int  `mapstructure:"quota_c2" json:"quota_c2" yaml:"quota_c2"`                               // 全局热门配额(百分比)
-	QuotaC3           int  `mapstructure:"quota_c3" json:"quota_c3" yaml:"quota_c3"`                               // 行为圈子配额(百分比)
-	QuotaC4           int  `mapstructure:"quota_c4" json:"quota_c4" yaml:"quota_c4"`                               // 最新配额(百分比)
-	QuotaC5           int  `mapstructure:"quota_c5" json:"quota_c5" yaml:"quota_c5"`                               // CF 相似配额(百分比)
-	ExcludeInteracted bool `mapstructure:"exclude_interacted" json:"exclude_interacted" yaml:"exclude_interacted"` // 剔除已点赞/收藏/浏览过的帖
+	PoolSize                  int  `mapstructure:"pool_size" json:"pool_size" yaml:"pool_size"`                                                          // 候选池大小（每路按配额比例填充）
+	TTLMinutes                int  `mapstructure:"ttl_minutes" json:"ttl_minutes" yaml:"ttl_minutes"`                                                    // 候选池 TTL(分钟)
+	QuotaC1                   int  `mapstructure:"quota_c1" json:"quota_c1" yaml:"quota_c1"`                                                             // 兴趣圈子热门配额(百分比)
+	QuotaC2                   int  `mapstructure:"quota_c2" json:"quota_c2" yaml:"quota_c2"`                                                             // 全局热门配额(百分比)
+	QuotaC3                   int  `mapstructure:"quota_c3" json:"quota_c3" yaml:"quota_c3"`                                                             // 行为圈子配额(百分比)
+	QuotaC4                   int  `mapstructure:"quota_c4" json:"quota_c4" yaml:"quota_c4"`                                                             // 最新配额(百分比)
+	QuotaC5                   int  `mapstructure:"quota_c5" json:"quota_c5" yaml:"quota_c5"`                                                             // CF 相似配额(百分比)
+	ExcludeInteracted         bool `mapstructure:"exclude_interacted" json:"exclude_interacted" yaml:"exclude_interacted"`                               // 剔除已点赞/收藏/浏览过的帖
+	InterestCirclesTTLMinutes int  `mapstructure:"interest_circles_ttl_minutes" json:"interest_circles_ttl_minutes" yaml:"interest_circles_ttl_minutes"` // C3 行为圈子缓存 TTL(分钟)
 }
 
 // CF item-based 协同过滤配置。设计见 docs/cf-item-based-design.md。
