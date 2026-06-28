@@ -3,6 +3,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -18,9 +19,11 @@ var ErrTabNotSupported = errors.New("home feed tab not supported")
 
 // RecommendService 推荐流应用服务。
 type RecommendService interface {
-	// GetHomeFeed 首页推荐流分页。
-	// tab 当前仅 "recommend"；poolToken 客户端回传的池版本（空=首次）。
-	GetHomeFeed(ctx context.Context, userID uuid.UUID, tab string, size, offset int, poolToken string) (*domain.FeedPage, error)
+	// GetHomeFeed 首页信息流分页（按 tab 分发）。
+	//   tab=recommend  → 候选池 offset 翻页（用 poolToken）
+	//   tab=hot|latest  → ES search_after 翻页（用 searchAfter），全局
+	//   tab=following   → ES search_after 翻页（用 searchAfter），限定已加入圈子
+	GetHomeFeed(ctx context.Context, userID uuid.UUID, tab string, size, offset int, poolToken string, searchAfter []interface{}) (*domain.FeedPage, error)
 }
 
 type recommendServiceImpl struct {
@@ -57,11 +60,24 @@ func NewRecommendService(
 	}
 }
 
-// GetHomeFeed 编排：确保候选池（miss/过期→重建）→ LRANGE → hydrate → 补交互态 → 返回。
-func (s *recommendServiceImpl) GetHomeFeed(ctx context.Context, userID uuid.UUID, tab string, size, offset int, poolToken string) (*domain.FeedPage, error) {
-	if tab != "recommend" {
+// GetHomeFeed 按 tab 分发：recommend 走候选池 offset；hot/latest/following 走 ES search_after。
+func (s *recommendServiceImpl) GetHomeFeed(ctx context.Context, userID uuid.UUID, tab string, size, offset int, poolToken string, searchAfter []interface{}) (*domain.FeedPage, error) {
+	switch tab {
+	case "recommend":
+		return s.getRecommend(ctx, userID, size, offset, poolToken)
+	case "hot":
+		return s.getSimpleFeed(ctx, userID, "hot", nil, size, searchAfter)
+	case "latest":
+		return s.getSimpleFeed(ctx, userID, "latest", nil, size, searchAfter)
+	case "following":
+		return s.getFollowing(ctx, userID, size, searchAfter)
+	default:
 		return nil, ErrTabNotSupported
 	}
+}
+
+// getRecommend 推荐流（候选池 offset 翻页）。编排：确保池 → LRANGE → hydrate → 补交互态。
+func (s *recommendServiceImpl) getRecommend(ctx context.Context, userID uuid.UUID, size, offset int, poolToken string) (*domain.FeedPage, error) {
 	if size <= 0 || size > 100 {
 		size = 20
 	}
@@ -168,4 +184,51 @@ func defaultInt(v, def int) int {
 		return def
 	}
 	return v
+}
+
+// getSimpleFeed hot/latest 简单流（ES search_after 翻页，可选 circle 过滤）。
+// 单次 ES 检索 → 提取 ID → hydrate → 补交互态。非个性化，无候选池。
+func (s *recommendServiceImpl) getSimpleFeed(ctx context.Context, userID uuid.UUID, sort string, circleIDs []uuid.UUID, size int, searchAfter []interface{}) (*domain.FeedPage, error) {
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+	ids, next, err := s.searcher.Search(ctx, sort, circleIDs, size, searchAfter)
+	if err != nil {
+		return nil, err
+	}
+	posts := s.hydrateOrdered(ctx, ids)
+	if len(posts) > 0 {
+		liked, collected, _ := s.checker.BatchCheck(ctx, userID, ids)
+		for i := range posts {
+			posts[i].IsLiked = liked[posts[i].ID]
+			posts[i].IsCollected = collected[posts[i].ID]
+		}
+	}
+	return &domain.FeedPage{
+		Posts:       posts,
+		SearchAfter: marshalSearchAfter(next),
+		HasMore:     len(ids) == size, // 满页才可能有更多
+	}, nil
+}
+
+// getFollowing 关注流（已加入圈子，按发帖时间倒序）。
+// 项目无 user-follow，关注 = 已加圈子（唯一可行映射）。0 圈子 → 空列表。
+func (s *recommendServiceImpl) getFollowing(ctx context.Context, userID uuid.UUID, size int, searchAfter []interface{}) (*domain.FeedPage, error) {
+	circles := s.safeJoined(ctx, userID, 200) // 关注流取更多圈子
+	if len(circles) == 0 {
+		return &domain.FeedPage{Posts: []domain.FeedPostItem{}, HasMore: false}, nil
+	}
+	return s.getSimpleFeed(ctx, userID, "latest", circles, size, searchAfter)
+}
+
+// marshalSearchAfter 把 ES sort values 序列化为不透明 JSON 字符串（search_after 游标）。
+func marshalSearchAfter(arr []interface{}) string {
+	if len(arr) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(arr)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }

@@ -43,11 +43,15 @@ type FeedPostItem struct {
 }
 
 // FeedPage 推荐流分页结果。
+//
+// recommend tab 用 PoolToken + offset 翻页（候选池）；
+// hot/latest/following tab 用 SearchAfter 翻页（ES search_after，稳定序）。
 type FeedPage struct {
 	Posts         []FeedPostItem `json:"posts"`
-	PoolToken     string         `json:"pool_token"`               // 候选池版本 token，客户端翻页回传
-	HasMore       bool           `json:"has_more"`                 // 池内是否还有更多
-	PoolRefreshed bool           `json:"pool_refreshed,omitempty"` // 池已重建，本次回 offset=0
+	PoolToken     string         `json:"pool_token,omitempty"`     // recommend：候选池版本 token
+	SearchAfter   string         `json:"search_after,omitempty"`   // hot/latest/following：ES search_after 游标
+	HasMore       bool           `json:"has_more"`                 // 是否还有更多
+	PoolRefreshed bool           `json:"pool_refreshed,omitempty"` // recommend：池已重建，本次回 offset=0
 }
 
 // HomeFeedSearcher 推荐流 ES 检索（返回有序 postID，searcher 边界提取 PostDoc.ID 做纯 ID 合并）。
