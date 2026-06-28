@@ -27,6 +27,9 @@ import (
 	postapp "interestBar/pkg/domains/post/application"
 	postinfra "interestBar/pkg/domains/post/infrastructure"
 	posthttp "interestBar/pkg/domains/post/interfaces/http"
+	recommendapp "interestBar/pkg/domains/recommend/application"
+	recommendinfra "interestBar/pkg/domains/recommend/infrastructure"
+	recommendhttp "interestBar/pkg/domains/recommend/interfaces/http"
 	storageapp "interestBar/pkg/domains/storage/application"
 	storageinfra "interestBar/pkg/domains/storage/infrastructure"
 	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
@@ -93,6 +96,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post")
 	}
 
+	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
+	recommendSvc := newRecommendService(postSvc, circleSvc)
+
 	// 注册路由
 	registerCategory(root, deps, authCheck)
 	registerStorage(root, deps, authCheck)
@@ -104,6 +110,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerLike(root, likeSvc, authCheck)
 	registerCollect(root, collectSvc, authCheck)
 	registerHistory(root, historySvc, authCheck)
+	registerRecommend(root, recommendSvc, authCheck)
 }
 
 // registerCategory 装配 category 领域。
@@ -165,6 +172,27 @@ func registerCollect(root routing.RouterGroup, svc collectapp.CollectService, au
 // registerHistory 装配 history 领域。
 func registerHistory(root routing.RouterGroup, svc historyapp.HistoryService, authCheck routing.HandlerFunc) {
 	historyhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// newRecommendService 构造 RecommendService。
+//
+// searcher/seed/checker/feed 为 recommend 同域 infra（直构，走全局 ES/Redis 客户端）；
+// circle/postMeta/hydrator 为跨域桥接器（包 post/circle service）。
+func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.CircleService) recommendapp.RecommendService {
+	return recommendapp.NewRecommendService(
+		recommendinfra.NewHomeFeedSearcher(),        // HomeFeedSearcher
+		&recommendCircleLookup{delegate: circleSvc}, // CircleLookup
+		&recommendPostMetaReader{delegate: postSvc}, // PostMetaReader
+		recommendinfra.NewSeedReader(),              // SeedReader
+		&recommendPostHydrator{delegate: postSvc},   // PostHydrator
+		recommendinfra.NewInteractionChecker(),      // InteractionChecker
+		recommendinfra.NewFeedCache(),               // FeedCache
+	)
+}
+
+// registerRecommend 装配 recommend 领域。
+func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendService, authCheck routing.HandlerFunc) {
+	recommendhttp.RegisterRoutes(root, svc, authCheck)
 }
 
 // ===== Service 构造函数 =====

@@ -81,10 +81,10 @@ type CircleDoc struct {
 
 // CircleSearchResult 圈子列表搜索结果。
 type CircleSearchResult struct {
-	Circles     []CircleDoc  `json:"circles"`
-	Total       int64        `json:"total"`
-	Size        int          `json:"size"`
-	SearchAfter string       `json:"search_after"`
+	Circles     []CircleDoc `json:"circles"`
+	Total       int64       `json:"total"`
+	Size        int         `json:"size"`
+	SearchAfter string      `json:"search_after"`
 }
 
 // MyCircleDoc 我加入的圈子结果项。
@@ -271,6 +271,9 @@ type CircleService interface {
 	GetCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*CirclePostResult, error)
 	// ListActiveCircles 近期活跃圈子分页列表（按近 N 天发帖数排序）。
 	ListActiveCircles(ctx context.Context, size, offset int) (*ActiveCircleResult, error)
+	// ListJoinedCircleIDs 用户已加入的圈子 ID 列表（按加入时间倒序，limit 条）。
+	// 供 recommend 域 C1 兴趣圈子召回用。ZSET miss 时从 DB 全量重建。
+	ListJoinedCircleIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error)
 
 	// SetUserFacade 注入 user Facade（GetCirclePosts 组装作者信息用）。
 	SetUserFacade(f UserFacade)
@@ -281,15 +284,15 @@ type CircleService interface {
 }
 
 type circleServiceImpl struct {
-	repo       domain.CircleRepository
-	memberRepo domain.MemberRepository
-	baseCache  domain.CircleBaseCache
-	statsCache domain.CircleStatsCache
+	repo        domain.CircleRepository
+	memberRepo  domain.MemberRepository
+	baseCache   domain.CircleBaseCache
+	statsCache  domain.CircleStatsCache
 	joinedCache domain.JoinedCirclesCache
-	searcher   CircleSearcher
-	publisher  domain.CircleEventPublisher
-	userFacade UserFacade         // 可为 nil（GetCirclePosts 用）
-	postFetcher PostMediaFetcher  // 可为 nil（GetCirclePosts 用）
+	searcher    CircleSearcher
+	publisher   domain.CircleEventPublisher
+	userFacade  UserFacade       // 可为 nil（GetCirclePosts 用）
+	postFetcher PostMediaFetcher // 可为 nil（GetCirclePosts 用）
 }
 
 // NewCircleService 构造 CircleService。
@@ -747,6 +750,18 @@ func (s *circleServiceImpl) ensureJoinedWarm(ctx context.Context, userID uuid.UU
 		logger.Log.Error("Failed to rebuild joined circles cache: " + err.Error())
 	}
 	return nil
+}
+
+// ListJoinedCircleIDs 用户已加入的圈子 ID 列表（按加入时间倒序，limit 条）。
+// 供 recommend 域 C1 兴趣圈子召回用。ZSET miss 时 ensureJoinedWarm 从 DB 重建。
+func (s *circleServiceImpl) ListJoinedCircleIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	if err := s.ensureJoinedWarm(ctx, userID); err != nil {
+		return nil, err
+	}
+	return s.joinedCache.PageByRank(ctx, userID, 0, int64(limit))
 }
 
 // tryAddJoined 增量加圈到 ZSET。仅当 ZSET 已 warm 时写入；

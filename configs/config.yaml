@@ -143,6 +143,15 @@ recommend:
     zset_ttl_hours: 48             # cf:item ZSET TTL(小时)
     sync_interval_hours: 24        # ItemCFSyncer 运行间隔(小时)
     cleanup_days: 120              # interaction 行保留天数(超出删除)
+  feed:
+    pool_size: 150                 # 候选池大小（各路按配额比例填充）
+    ttl_minutes: 30                # 候选池 TTL(分钟)
+    quota_c1: 35                   # 兴趣圈子热门配额(%)
+    quota_c2: 25                   # 全局热门配额(%)
+    quota_c3: 15                   # 行为圈子配额(%)
+    quota_c4: 10                   # 最新配额(%)
+    quota_c5: 15                   # CF 相似配额(%)
+    exclude_interacted: true       # 剔除已点赞/收藏/浏览过的帖
 
 # 安全相关配置
 security:

@@ -148,6 +148,27 @@ func GetCFItemKey(postID uuid.UUID) string {
 	return CFItemPrefix + postID.String()
 }
 
+// RecommendFeedPrefix 推荐流候选池 LIST key 前缀。
+// 完整 key 格式: feed:recommend:{user_id}
+// LIST: 按推荐序 RPUSH 的 post_id(uuid 字符串)；LRANGE offset 分页；TTL ttl_minutes(默认 30)。
+// 池 miss/过期时由 RecommendService 触发重建（5 路召回 + 交错合并）。
+const RecommendFeedPrefix = "feed:recommend:"
+
+// RecommendFeedTokenPrefix 推荐流候选池版本 token key 前缀。
+// 完整 key: feed:recommend:token:{user_id}（string），与池同 TTL。
+// 客户端翻页回传 token，服务端比对：不一致 → 池已重建 → 回 offset=0（防翻页错位）。
+const RecommendFeedTokenPrefix = "feed:recommend:token:"
+
+// GetRecommendFeedKey 获取推荐流候选池 LIST 的完整 key。
+func GetRecommendFeedKey(userID uuid.UUID) string {
+	return RecommendFeedPrefix + userID.String()
+}
+
+// GetRecommendFeedTokenKey 获取推荐流候选池版本 token 的完整 key。
+func GetRecommendFeedTokenKey(userID uuid.UUID) string {
+	return RecommendFeedTokenPrefix + userID.String()
+}
+
 // GetPostViewDedupeKey 获取帖子浏览去重 key
 func GetPostViewDedupeKey(postID, userID uuid.UUID) string {
 	return fmt.Sprintf("%s%s:%s", PostViewDedupePrefix, postID.String(), userID.String())

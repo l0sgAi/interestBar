@@ -369,5 +369,26 @@ P0、P1 可在推荐流本体之前独立推进；P2 等推荐流落地。
   - 附带清理：每轮 `DELETE WHERE ts < cleanup_days`
 - 装配：[server.go](../cmd/apps/server.go) 8.18（仅 `recommend.cf.enabled=true` 启动）；关停 `StopItemCFSyncer`
 
-**P2（C5 召回接入推荐 tab）⏳ TODO**
-- 依赖推荐流本体（C1~C4 多路召回 + 交错合并）先落地；CF 召回路代码未写，配置项 `seed_collect/seed_like/recall_top` 已预留。
+**P2（推荐流本体 + C5 召回接入）✅**
+
+新建 `recommend` 域（跨域编排器，无聚合根），端点 `GET /post/home?tab=recommend`：
+
+- **新域 8 文件**：
+  - [domain/ports.go](../pkg/domains/recommend/domain/ports.go) — 端口 HomeFeedSearcher/PostHydrator/PostMetaReader/CircleLookup/SeedReader/InteractionChecker/FeedCache + DTO（FeedPostItem 含 IsLiked/IsCollected、FeedPage）
+  - [application/service.go](../pkg/domains/recommend/application/service.go) — GetHomeFeed：池 miss/token 过期→重建 → LRANGE → hydrate → 补交互态 → 返回（含 pool_token）
+  - [application/recall.go](../pkg/domains/recommend/application/recall.go) — 5 路（C1 兴趣圈子/C2 全局热门/C3 行为圈子/C4 最新/C5 CF）+ 交错/dedup/剔除已交互/C2 兜底；每路 try/log
+  - [infrastructure/home_feed_searcher_es.go](../pkg/domains/recommend/infrastructure/home_feed_searcher_es.go) — wrap SearchHomeFeed，返回纯 ID
+  - [infrastructure/feed_cache_redis.go](../pkg/domains/recommend/infrastructure/feed_cache_redis.go) — wrap feed:recommend:{uid} LIST + token
+  - [infrastructure/seed_reader_redis.go](../pkg/domains/recommend/infrastructure/seed_reader_redis.go) — like/collect/view ZSET 读 + cf:item pipeline 聚合
+  - [infrastructure/interaction_checker_redis.go](../pkg/domains/recommend/infrastructure/interaction_checker_redis.go) — BatchCheck is_liked/is_collected
+  - [interfaces/http/{handler,routes}.go](../pkg/domains/recommend/interfaces/http/routes.go) — GET /post/home
+- **基建（P0 之外新增）**：
+  - [elasticsearch/post.go](../pkg/server/storage/elasticsearch/post.go) — `SearchHomeFeed(sort, circleIDs, size, searchAfter)` 泛化 SearchCirclePosts（circleIDs 可选 + hot/latest）
+  - [redis/history_lua.go](../pkg/server/storage/redis/history_lua.go) — `ListPostLikedIDs/ListPostCollectedIDs`（镜像 ListPostViews）
+  - [redis/feed_pool.go](../pkg/server/storage/redis/feed_pool.go) — 候选池 LIST + 版本 token（Build/Len/Range/Token/Exists）
+  - [redis/constants.go](../pkg/server/storage/redis/constants.go) — `feed:recommend:` + token key
+  - [conf.go](../pkg/conf/conf.go) — `Recommend.Feed`（pool_size/ttl/quotas/exclude_interacted）
+- **跨域方法**：[circle.ListJoinedCircleIDs](../pkg/domains/circle/application/service.go)（joinedCache + 重建）、[post.ListCircleIDsByPostIDs](../pkg/domains/post/application/service.go)（C3 反查）
+- **装配**：[composition](../pkg/composition/facade_bridges.go) 3 桥接（recommendPostHydrator/recommendCircleLookup/recommendPostMetaReader）+ newRecommendService + registerRecommend
+
+**关键决策落地**：候选池 + pool_token 防翻页错位（token 不匹配回 offset=0 + pool_refreshed）；C3 走 DB ListByIDs 反查 circle_id；is_liked/is_collected 由 recommend 域 InteractionChecker 自补（不改 post.PostListItem 签名）；channel 独立降级 + C2 兜底，feed 永不空；匿名 401。
