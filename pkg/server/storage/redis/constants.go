@@ -136,6 +136,18 @@ func GetCircleHotKey(circleID uuid.UUID) string {
 	return CircleHotPrefix + circleID.String()
 }
 
+// CFItemPrefix item-based 协同过滤「相似帖」ZSET key 前缀。
+// 完整 key 格式: cf:item:{post_id}
+// ZSET: member=相似 post_id(uuid 字符串), score=相似度(0..1]
+// 由 ItemCFSyncer 夜级全量计算写入；TTL zset_ttl_hours(默认 48h)。
+// 召回时：用户 seed 帖(点赞/收藏) → ZREVRANGE cf:item:{seed} 取 top 相似帖。
+const CFItemPrefix = "cf:item:"
+
+// GetCFItemKey 获取帖子协同过滤相似帖 ZSET 的完整 key。
+func GetCFItemKey(postID uuid.UUID) string {
+	return CFItemPrefix + postID.String()
+}
+
 // GetPostViewDedupeKey 获取帖子浏览去重 key
 func GetPostViewDedupeKey(postID, userID uuid.UUID) string {
 	return fmt.Sprintf("%s%s:%s", PostViewDedupePrefix, postID.String(), userID.String())

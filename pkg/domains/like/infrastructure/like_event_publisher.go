@@ -40,6 +40,12 @@ func (p *likeEventPublisherRedpanda) PublishPostLike(ctx context.Context, userID
 			logger.Log.Error("Failed to publish post_like hot: " + err.Error())
 		}
 	}
+	// CF 互动：仅正向（点赞）写互动矩阵；取消赞不删行（隐反馈），故负向不发。
+	if amount > 0 {
+		if err := redpanda.PublishPostInteraction(userID, postID, redpanda.InteractionLike, redpanda.InteractionWeightLike); err != nil {
+			logger.Log.Error("Failed to publish post_like interaction: " + err.Error())
+		}
+	}
 	return nil
 }
 
@@ -54,6 +60,12 @@ func (p *likeEventPublisherRedpanda) PublishCommentLike(ctx context.Context, use
 	} else if delta != 0 {
 		if err := redpanda.PublishPostHot(postID, delta); err != nil {
 			logger.Log.Error("Failed to publish comment_like hot: " + err.Error())
+		}
+	}
+	// CF 互动：仅正向（评论点赞）写互动矩阵。
+	if amount > 0 {
+		if err := redpanda.PublishPostInteraction(userID, postID, redpanda.InteractionCommentLike, redpanda.InteractionWeightCommentLike); err != nil {
+			logger.Log.Error("Failed to publish comment_like interaction: " + err.Error())
 		}
 	}
 	return nil

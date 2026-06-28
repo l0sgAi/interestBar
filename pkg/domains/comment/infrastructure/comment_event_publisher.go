@@ -34,3 +34,12 @@ func (p *commentEventPublisherRedpanda) PublishCommentHot(ctx context.Context, p
 	}
 	return nil
 }
+
+// PublishCommentInteraction 发布评论者对帖子的 CF 互动（weight=comment，正向写矩阵）。
+func (p *commentEventPublisherRedpanda) PublishCommentInteraction(ctx context.Context, userID, postID uuid.UUID) error {
+	_ = ctx
+	if err := redpanda.PublishPostInteraction(userID, postID, redpanda.InteractionComment, redpanda.InteractionWeightComment); err != nil {
+		logger.Log.Error("Failed to publish comment interaction: " + err.Error())
+	}
+	return nil
+}

@@ -607,6 +607,47 @@ CREATE UNIQUE INDEX uk_pviewhist_user_post ON domains.post_view_history(user_id,
 CREATE INDEX idx_pviewhist_user_time ON domains.post_view_history(user_id, update_time DESC, id DESC);
 ```
 
+## 帖子互动表（CF 协同过滤物化矩阵）
+
+> 用户×帖子交互矩阵，item-based 协同过滤的隐反馈评分表。设计见 docs/cf-item-based-design.md。
+> 5 张交互事实表（post_like/post_collect/comment/comment_like/post_view_history）的事件驱动双写聚合而来：
+> 各 event publisher 额外发 `post_interaction` topic → InteractionConsumer 批量 `ON CONFLICT` upsert 本表。
+>
+> - PK (user_id, post_id)：一对一行，weight = 历史最强信号（max-ever），ts = 最近互动时间。
+> - 不带 deleted/active：取消赞/收藏**不删行**（隐反馈哲学：瞬时点赞仍是兴趣信号）。
+> - 失效帖（删/封）不主动清理：CF 读路径用 SearchPostsByIDs 过滤，自然不展示。
+> - 时间窗：CF 共现计算回溯 `interaction_window_days`（默认 90 天）；超过 `cleanup_days`（默认 120 天）的行定期 DELETE。
+
+```sql
+-- 帖子互动表 (post_interaction) —— CF 协同过滤交互矩阵
+DROP TABLE IF EXISTS domains.post_interaction;
+
+CREATE TABLE domains.post_interaction (
+    user_id UUID        NOT NULL,                     -- 互动用户ID
+    post_id UUID        NOT NULL,                     -- 被互动帖子ID
+    weight  SMALLINT    NOT NULL,                     -- 该 user-post 对最强信号强度（1..5：view1/comment_like2/like3/comment4/collect5）
+    ts      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, -- 最近一次互动时间（CF 共现回溯窗口 + 清理锚点）
+    PRIMARY KEY (user_id, post_id)
+);
+
+COMMENT ON TABLE domains.post_interaction IS '用户×帖子交互矩阵（item-based CF 隐反馈评分表，事件驱动双写聚合）';
+COMMENT ON COLUMN domains.post_interaction.user_id IS '互动用户ID(UUID)';
+COMMENT ON COLUMN domains.post_interaction.post_id IS '被互动帖子ID(UUID)';
+COMMENT ON COLUMN domains.post_interaction.weight IS '该 user-post 对最强信号强度（1..5：view1/comment_like2/like3/comment4/collect5）';
+COMMENT ON COLUMN domains.post_interaction.ts IS '最近一次互动时间（CF 共现回溯窗口 + 清理锚点）';
+
+-- --- 索引优化 ---
+
+-- 1. CF 共现自连接：按 post_id 取该帖所有互动者
+CREATE INDEX idx_post_interaction_post    ON domains.post_interaction (post_id);
+
+-- 2. 候选筛选 / 时间窗扫描
+CREATE INDEX idx_post_interaction_post_ts ON domains.post_interaction (post_id, ts DESC);
+
+-- 3. 清理：按 ts 删除过期行
+CREATE INDEX idx_post_interaction_ts      ON domains.post_interaction (ts);
+```
+
 ---
 
 ## 附录:批量更新统计的 jsonb 类型对照

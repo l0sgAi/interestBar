@@ -13,13 +13,14 @@ import (
 )
 
 var (
-	dialer             *kafka.Dialer
-	writer             *kafka.Writer
-	postWriter         *kafka.Writer
-	likeEventWriter    *kafka.Writer
-	collectEventWriter *kafka.Writer
-	historyEventWriter *kafka.Writer
-	postHotWriter      *kafka.Writer
+	dialer                *kafka.Dialer
+	writer                *kafka.Writer
+	postWriter            *kafka.Writer
+	likeEventWriter       *kafka.Writer
+	collectEventWriter    *kafka.Writer
+	historyEventWriter    *kafka.Writer
+	postHotWriter         *kafka.Writer
+	postInteractionWriter *kafka.Writer
 )
 
 // InitRedpandaProducer 初始化Redpanda Producer
@@ -501,6 +502,72 @@ func ClosePostHotProducer() error {
 			return err
 		}
 		logger.Log.Info("Post hot producer closed")
+	}
+	return nil
+}
+
+// ==================== 帖子互动事件消息（CF 灌数） ====================
+
+// InitPostInteractionProducer 初始化帖子互动事件 Producer。
+func InitPostInteractionProducer() error {
+	postInteractionWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.PostInteractionTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("Post interaction producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.PostInteractionTopic))
+	return nil
+}
+
+// PublishPostInteraction 发布帖子互动事件（CF 灌数）。
+// weight 由调用方按动作类型映射传入（见 InteractionWeight* 常量）。
+func PublishPostInteraction(userID, postID uuid.UUID, action InteractionAction, weight int16) error {
+	if postInteractionWriter == nil {
+		return fmt.Errorf("post interaction writer is not initialized")
+	}
+
+	value, err := json.Marshal(PostInteractionMessage{
+		UserID: userID,
+		PostID: postID,
+		Action: action,
+		Weight: weight,
+		Ts:     time.Now().UnixMilli(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal post interaction message: %w", err)
+	}
+
+	kafkaMsg := kafka.Message{
+		Key:   []byte(postID.String()), // key=postID 保序 + 热点分片
+		Value: value,
+	}
+	if err := postInteractionWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+		return fmt.Errorf("failed to write post interaction message: %w", err)
+	}
+
+	logger.Log.Debug(fmt.Sprintf("Published post interaction: user=%s, post=%s, action=%s, weight=%d",
+		userID.String(), postID.String(), action, weight))
+	return nil
+}
+
+// ClosePostInteractionProducer 关闭帖子互动事件 Producer。
+func ClosePostInteractionProducer() error {
+	if postInteractionWriter != nil {
+		if err := postInteractionWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close post interaction writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("Post interaction producer closed")
 	}
 	return nil
 }

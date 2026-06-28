@@ -40,6 +40,39 @@ type PostHotMessage struct {
 	Delta  int64     `json:"delta"`   // 已 clamp 的热度增量（可正可负）
 }
 
+// InteractionAction 互动动作类型（CF 协同过滤交互矩阵的动作标签）。
+type InteractionAction string
+
+const (
+	InteractionView        InteractionAction = "view"         // 浏览（隐式弱）
+	InteractionLike        InteractionAction = "like"         // 帖子点赞
+	InteractionCollect     InteractionAction = "collect"      // 帖子收藏（最强）
+	InteractionComment     InteractionAction = "comment"      // 评论
+	InteractionCommentLike InteractionAction = "comment_like" // 评论点赞（冗余 post_id）
+)
+
+// 互动权重（CF 隐反馈评分表 weight 列取值，max-ever）。
+const (
+	InteractionWeightView        int16 = 1
+	InteractionWeightCommentLike int16 = 2
+	InteractionWeightLike        int16 = 3
+	InteractionWeightComment     int16 = 4
+	InteractionWeightCollect     int16 = 5
+)
+
+// PostInteractionMessage 帖子互动事件消息（CF 灌数）。
+//
+// 每个正向互动（点赞/收藏/评论/评论点赞/浏览）由对应 event publisher 额外发布；
+// InteractionConsumer 批量 ON CONFLICT GREATEST upsert 到 domains.post_interaction。
+// 仅正向互动发：取消赞/收藏不删行（隐反馈哲学），故不发布负向消息。
+type PostInteractionMessage struct {
+	UserID uuid.UUID         `json:"user_id"` // 互动用户ID
+	PostID uuid.UUID         `json:"post_id"` // 被互动帖子ID
+	Action InteractionAction `json:"action"`  // 动作类型（仅作可观测标签，落库只用 weight）
+	Weight int16             `json:"weight"`  // 信号强度（1..5）
+	Ts     int64             `json:"ts"`      // 事件时间 Unix 毫秒
+}
+
 // LikeEventMessage 点赞事件消息
 type LikeEventMessage struct {
 	Type     string    `json:"type"` // "comment_like" 或 "post_like"
