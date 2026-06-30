@@ -10,6 +10,7 @@ import (
 // 路由清单（与旧 routers.go 中 /circle 组一致）：
 //   POST /circle/create       创建圈子（需登录）
 //   GET  /circle/list         搜索圈子列表（需登录）
+//   GET  /circle/active       近期活跃圈子列表（需登录）
 //   GET  /circle/detail/:id   获取圈子详情（需登录）
 //   GET  /circle/my           我加入的圈子列表（需登录）
 //   GET  /circle/user         任意用户加入圈子列表（需登录）
@@ -27,6 +28,7 @@ func RegisterRoutes(
 	{
 		cir.POST("/create", h.CreateCircle)
 		cir.GET("/list", h.GetCircles)
+		cir.GET("/active", h.GetActiveCircles)
 		cir.GET("/detail/:id", h.GetCircleDetail)
 		cir.GET("/my", h.GetMyCircles)
 		cir.GET("/user", h.GetUserCircles)

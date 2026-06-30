@@ -277,6 +277,36 @@ func (h *Handler) GetCirclePosts(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
+// GetActiveCirclesRequest 近期活跃圈子列表请求。
+type GetActiveCirclesRequest struct {
+	Size   int `query:"size"`
+	Offset int `query:"offset"`
+}
+
+// GetActiveCircles GET /circle/active —— 近期活跃圈子分页列表（按近 7 天发帖数排序）。
+func (h *Handler) GetActiveCircles(c appctx.AppContext) {
+	var req GetActiveCirclesRequest
+	if err := c.BindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	size := normalizeSize(req.Size)
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	result, err := h.svc.ListActiveCircles(c, size, offset)
+	if err != nil {
+		logger.Log.Error("Failed to list active circles: " + err.Error())
+		httputil.InternalError(c, "Failed to list active circles")
+		return
+	}
+	httputil.Success(c, result)
+}
+
 // ===== 辅助函数 =====
 
 func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {

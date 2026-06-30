@@ -112,6 +112,10 @@ redpanda:
   post_hot_flush_messages: 500 # 帖子热度批量刷新条数阈值
   circle_hot_flush_interval: 34 # 圈子热度落库间隔(分钟)
   circle_hot_ttl: 50 # 圈子热度累加器key TTL(小时)
+  post_interaction_topic: "post_interaction" # 帖子互动事件topic（CF 灌数）
+  post_interaction_consumer_group: "post_interaction_consumer_group" # 帖子互动消费者组
+  post_interaction_flush_interval: 2 # 帖子互动刷新间隔(分钟)
+  post_interaction_flush_messages: 1000 # 帖子互动批量刷新条数阈值
 
 # 热度计算配置（权重 + 上限）
 hot:
@@ -124,6 +128,31 @@ hot:
   cap:
     comment: 5000     # 评论 hot 贡献上限（=1000 条，weight 整数倍）
     comment_like: 25000 # 评论点赞 hot 贡献上限（weight 整数倍）
+
+# 推荐流配置（首页「推荐」tab）
+recommend:
+  cf:
+    enabled: true                  # 是否启用 CF（灌数 + Syncer 全开关）
+    interaction_window_days: 90    # 共现计算回溯窗口(天)
+    candidate_fresh_days: 30       # 候选帖创建时间窗(天)，防爆
+    min_cooccur: 2                 # 最小共现次数(砍噪声)
+    topk: 50                       # 每帖保留相似帖数
+    seed_collect: 20               # C5 召回取收藏 seed 数(P2)
+    seed_like: 30                  # C5 召回取点赞 seed 数(P2)
+    recall_top: 40                 # C5 输出候选数(P2)
+    zset_ttl_hours: 48             # cf:item ZSET TTL(小时)
+    sync_interval_hours: 24        # ItemCFSyncer 运行间隔(小时)
+    cleanup_days: 120              # interaction 行保留天数(超出删除)
+  feed:
+    pool_size: 150                 # 候选池大小（各路按配额比例填充）
+    ttl_minutes: 30                # 候选池 TTL(分钟)
+    quota_c1: 35                   # 兴趣圈子热门配额(%)
+    quota_c2: 25                   # 全局热门配额(%)
+    quota_c3: 15                   # 行为圈子配额(%)
+    quota_c4: 10                   # 最新配额(%)
+    quota_c5: 15                   # CF 相似配额(%)
+    exclude_interacted: true       # 剔除已点赞/收藏/浏览过的帖
+    interest_circles_ttl_minutes: 120 # C3 行为圈子缓存 TTL(分钟)
 
 # 安全相关配置
 security:

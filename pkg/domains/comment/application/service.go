@@ -262,6 +262,10 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 		if err := s.publisher.PublishCommentHot(ctx, input.PostID, 1); err != nil {
 			logger.Log.Error("Failed to publish comment hot: " + err.Error())
 		}
+		// CF 互动：评论者对该帖写互动矩阵（weight=comment，正向）。
+		if err := s.publisher.PublishCommentInteraction(ctx, userID, input.PostID); err != nil {
+			logger.Log.Error("Failed to publish comment interaction: " + err.Error())
+		}
 	}
 
 	return comment.ID, nil

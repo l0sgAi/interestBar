@@ -146,3 +146,32 @@ func BackfillPostViews(userID uuid.UUID, entries []PostViewEntry) error {
 	_, err := pipe.Exec(ctx)
 	return err
 }
+
+// ListPostLikedIDs 倒序取用户「点赞过的帖子」ZSET 的前 limit 个 postID（供推荐流 CF seed / 行为圈子）。
+//
+// ZSET user:like:posts:{user_id}，score=最近访问时间ms；ZREVRANGE 取最近点赞。
+// 仅返回 postID 字符串（推荐召回只关心 ID，不需要时间）。
+func ListPostLikedIDs(userID uuid.UUID, limit int64) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	members, err := Client.ZRevRange(ctx, GetUserPostLikeListKey(userID), 0, limit-1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list liked post ids: %w", err)
+	}
+	return members, nil
+}
+
+// ListPostCollectedIDs 倒序取用户「收藏过的帖子」ZSET 的前 limit 个 postID（供推荐流 CF seed）。
+//
+// ZSET user:collect:posts:{user_id}，score=最近访问时间ms；ZREVRANGE 取最近收藏。
+func ListPostCollectedIDs(userID uuid.UUID, limit int64) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	members, err := Client.ZRevRange(ctx, GetUserPostCollectListKey(userID), 0, limit-1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list collected post ids: %w", err)
+	}
+	return members, nil
+}

@@ -151,31 +151,31 @@ type PostSearcher interface {
 
 // PostDetailVO 帖子详情 VO。
 type PostDetailVO struct {
-	ID            uuid.UUID          `json:"id"`
-	CircleID      uuid.UUID          `json:"circle_id"`
-	UserID        uuid.UUID          `json:"user_id"`
-	Type          int16              `json:"type"`
-	Title         string             `json:"title"`
-	Summary       string             `json:"summary"`
-	Content       string             `json:"content"`
+	ID            uuid.UUID             `json:"id"`
+	CircleID      uuid.UUID             `json:"circle_id"`
+	UserID        uuid.UUID             `json:"user_id"`
+	Type          int16                 `json:"type"`
+	Title         string                `json:"title"`
+	Summary       string                `json:"summary"`
+	Content       string                `json:"content"`
 	MediaExtra    domain.MediaExtraJSON `json:"media_extra"`
-	ViewCount     int                `json:"view_count"`
-	CommentCount  int                `json:"comment_count"`
-	LikeCount     int                `json:"like_count"`
-	CollectCount  int                `json:"collect_count"`
-	IsPinned      int16              `json:"is_pinned"`
-	IsEssence     int16              `json:"is_essence"`
-	IsLock        int16              `json:"is_lock"`
-	Status        int16              `json:"status"`
-	Deleted       int16              `json:"deleted"`
-	CreateTime    time.Time          `json:"create_time"`
-	UpdateTime    time.Time          `json:"update_time"`
-	LastReplyTime *time.Time         `json:"last_reply_time,omitempty"`
-	AuthorID      uuid.UUID          `json:"author_id"`
-	AuthorName    string             `json:"author_name"`
-	AuthorAvatar  string             `json:"author_avatar"`
-	IsLiked       bool               `json:"is_liked"`
-	IsCollected   bool               `json:"is_collected"`
+	ViewCount     int                   `json:"view_count"`
+	CommentCount  int                   `json:"comment_count"`
+	LikeCount     int                   `json:"like_count"`
+	CollectCount  int                   `json:"collect_count"`
+	IsPinned      int16                 `json:"is_pinned"`
+	IsEssence     int16                 `json:"is_essence"`
+	IsLock        int16                 `json:"is_lock"`
+	Status        int16                 `json:"status"`
+	Deleted       int16                 `json:"deleted"`
+	CreateTime    time.Time             `json:"create_time"`
+	UpdateTime    time.Time             `json:"update_time"`
+	LastReplyTime *time.Time            `json:"last_reply_time,omitempty"`
+	AuthorID      uuid.UUID             `json:"author_id"`
+	AuthorName    string                `json:"author_name"`
+	AuthorAvatar  string                `json:"author_avatar"`
+	IsLiked       bool                  `json:"is_liked"`
+	IsCollected   bool                  `json:"is_collected"`
 }
 
 // CreatePostInput 发帖入参。
@@ -212,6 +212,9 @@ type PostService interface {
 	// title^3/summary multi_match + 失效帖过滤,按 _score desc 排序,offset 分页;
 	// 返回匹配总数(供上层 next_offset 计算)。keyword/postIDs 为空返回空列表。
 	SearchPostsByIDsAndKeyword(ctx context.Context, postIDs []uuid.UUID, keyword string, size, offset int) ([]PostListItem, int64, error)
+	// ListCircleIDsByPostIDs 批量取帖子所属 circle_id（去重，仅未删除+已发布）。
+	// 供 recommend 域 C3 行为圈子召回用（seed 帖子 → 圈子）。
+	ListCircleIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) ([]uuid.UUID, error)
 
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
@@ -287,12 +290,12 @@ func NewPostService(
 }
 
 // Setter 方法供 composition 注入跨领域依赖。
-func (s *postServiceImpl) SetUserFacade(f UserFacade)              { s.userFacade = f }
-func (s *postServiceImpl) SetCircleFacade(f CircleFacade)          { s.circleFacade = f }
-func (s *postServiceImpl) SetMemberChecker(c CircleMemberChecker)  { s.memberCheck = c }
-func (s *postServiceImpl) SetStatusChecker(c CircleStatusChecker)  { s.statusCheck = c }
-func (s *postServiceImpl) SetPostCountPort(p CirclePostCountPort)  { s.postCountPort = p }
-func (s *postServiceImpl) SetCollectCache(c domain.PostCollectCache) { s.collectCache = c }
+func (s *postServiceImpl) SetUserFacade(f UserFacade)                  { s.userFacade = f }
+func (s *postServiceImpl) SetCircleFacade(f CircleFacade)              { s.circleFacade = f }
+func (s *postServiceImpl) SetMemberChecker(c CircleMemberChecker)      { s.memberCheck = c }
+func (s *postServiceImpl) SetStatusChecker(c CircleStatusChecker)      { s.statusCheck = c }
+func (s *postServiceImpl) SetPostCountPort(p CirclePostCountPort)      { s.postCountPort = p }
+func (s *postServiceImpl) SetCollectCache(c domain.PostCollectCache)   { s.collectCache = c }
 func (s *postServiceImpl) SetHistoryRecorder(r domain.HistoryRecorder) { s.historyRec = r }
 
 // CreatePost 创建帖子。
@@ -469,8 +472,8 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		Status: post.Status, Deleted: post.Deleted,
 		CreateTime: post.CreateTime, UpdateTime: post.UpdateTime,
 		LastReplyTime: post.LastReplyTime,
-		AuthorID: post.UserID, AuthorName: authorName, AuthorAvatar: authorAvatar,
-		IsLiked: isLiked,
+		AuthorID:      post.UserID, AuthorName: authorName, AuthorAvatar: authorAvatar,
+		IsLiked:     isLiked,
 		IsCollected: isCollected,
 	}
 
@@ -824,6 +827,28 @@ func (s *postServiceImpl) SearchPostsByIDsAndKeyword(ctx context.Context, postID
 		return nil, 0, err
 	}
 	return s.assemblePostList(ctx, raw), raw.Total, nil
+}
+
+// ListCircleIDsByPostIDs 批量取帖子所属 circle_id（去重，仅未删除+已发布）。
+// 供 recommend 域 C3 行为圈子召回：seed 帖子 → circle_id 集合 → 减 joined → 热门检索。
+func (s *postServiceImpl) ListCircleIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) ([]uuid.UUID, error) {
+	if len(postIDs) == 0 {
+		return []uuid.UUID{}, nil
+	}
+	posts, err := s.repo.ListByIDs(ctx, postIDs)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[uuid.UUID]struct{}, len(posts))
+	out := make([]uuid.UUID, 0, len(posts))
+	for _, p := range posts {
+		if _, ok := seen[p.CircleID]; ok {
+			continue
+		}
+		seen[p.CircleID] = struct{}{}
+		out = append(out, p.CircleID)
+	}
+	return out, nil
 }
 
 // assembleFromPosts 把 DB Post 实体批量组装为 PostListItem（作者/圈子/图片信息）。

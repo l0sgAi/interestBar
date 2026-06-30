@@ -36,5 +36,11 @@ func (p *collectEventPublisherRedpanda) PublishPostCollect(ctx context.Context, 
 			logger.Log.Error("Failed to publish post_collect hot: " + err.Error())
 		}
 	}
+	// CF 互动：仅正向（收藏）写互动矩阵；取消收藏不删行（隐反馈），故负向不发。
+	if amount > 0 {
+		if err := redpanda.PublishPostInteraction(userID, postID, redpanda.InteractionCollect, redpanda.InteractionWeightCollect); err != nil {
+			logger.Log.Error("Failed to publish post_collect interaction: " + err.Error())
+		}
+	}
 	return nil
 }
