@@ -163,6 +163,9 @@ func Run(configPath, bootstrapPath string) {
 	// 8.16 Start Circle hot syncer（定时把 circle:hot 累加器落库 + 刷缓存）
 	go redpanda.StartCircleHotSyncerWithRetry()
 
+	// 8.16.1 Start Trending rank syncer（定时 ES 聚合 → 覆盖写 trending:* ZSET 榜单）
+	go redpanda.StartTrendingSyncerWithRetry()
+
 	// 8.17 Init Post interaction Redpanda producer（CF 灌数：互动事件 → post_interaction 表）
 	if err := redpanda.InitPostInteractionProducer(); err != nil {
 		logger.Log.Error("Failed to initialize post interaction producer: " + err.Error())
@@ -203,5 +206,6 @@ func Run(configPath, bootstrapPath string) {
 	redpanda.ClosePostInteractionProducer()
 	redpanda.StopCircleHotSyncer()
 	redpanda.StopItemCFSyncer()
+	redpanda.StopTrendingSyncer()
 	logger.Log.Info("Server shutdown complete")
 }

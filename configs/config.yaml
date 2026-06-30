@@ -154,6 +154,14 @@ recommend:
     exclude_interacted: true       # 剔除已点赞/收藏/浏览过的帖
     interest_circles_ttl_minutes: 120 # C3 行为圈子缓存 TTL(分钟)
 
+# 热点榜配置（trending 领域 + TrendingRankSyncer）。设计见 docs/trending-design.md §九
+trending:
+  flush_interval_minutes: 5        # TrendingRankSyncer 周期(分钟)
+  top_n: 100                       # 每个 ZSET 榜单保留条数(> max_size 留翻页余量)
+  windows: ["24h", "7d"]           # 启用的时间窗
+  default_size: 20                 # 接口默认 size
+  max_size: 50                     # 接口 size 上限
+
 # 安全相关配置
 security:
   # 密码哈希参数 (Argon2id, OWASP 2024 推荐 RFC 9106)

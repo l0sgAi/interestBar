@@ -31,6 +31,9 @@ import (
 	recommendinfra "interestBar/pkg/domains/recommend/infrastructure"
 	recommendhttp "interestBar/pkg/domains/recommend/interfaces/http"
 	storageapp "interestBar/pkg/domains/storage/application"
+	trendingapp "interestBar/pkg/domains/trending/application"
+	trendinginfra "interestBar/pkg/domains/trending/infrastructure"
+	trendinghttp "interestBar/pkg/domains/trending/interfaces/http"
 	storageinfra "interestBar/pkg/domains/storage/infrastructure"
 	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
 	userapp "interestBar/pkg/domains/user/application"
@@ -99,6 +102,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
 	recommendSvc := newRecommendService(postSvc, circleSvc)
 
+	// trending 需要 post（hydrate + 交互态）+ circle（GetByIDs）+ user（GetBriefs），均为只读消费者。
+	trendingSvc := newTrendingService(postSvc, circleRepo, userFacade)
+
 	// 注册路由
 	registerCategory(root, deps, authCheck)
 	registerStorage(root, deps, authCheck)
@@ -111,6 +117,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerCollect(root, collectSvc, authCheck)
 	registerHistory(root, historySvc, authCheck)
 	registerRecommend(root, recommendSvc, authCheck)
+	registerTrending(root, trendingSvc, authCheck)
 }
 
 // registerCategory 装配 category 领域。
@@ -194,6 +201,25 @@ func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.Circle
 // registerRecommend 装配 recommend 领域。
 func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendService, authCheck routing.HandlerFunc) {
 	recommendhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// newTrendingService 构造 TrendingService。
+//
+// boardStore 为 trending 同域 infra（直构，走全局 Redis 客户端）；
+// hydrator/checker/circle/user 为跨域桥接器（包 post/circle/user service + redispkg）。
+func newTrendingService(postSvc postapp.PostService, circleRepo circledomain.CircleRepository, userFacade userapp.UserFacade) trendingapp.TrendingService {
+	return trendingapp.NewTrendingService(
+		trendinginfra.NewBoardStore(),              // BoardStore
+		&trendingPostHydrator{delegate: postSvc},   // PostHydrator
+		&trendingInteractionChecker{},              // InteractionChecker
+		&trendingCircleLookup{repo: circleRepo},    // CircleLookup
+		&trendingUserLookup{delegate: userFacade},  // UserLookup
+	)
+}
+
+// registerTrending 装配 trending 领域。
+func registerTrending(root routing.RouterGroup, svc trendingapp.TrendingService, authCheck routing.HandlerFunc) {
+	trendinghttp.RegisterRoutes(root, svc, authCheck)
 }
 
 // ===== Service 构造函数 =====

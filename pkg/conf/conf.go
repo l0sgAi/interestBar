@@ -25,6 +25,7 @@ type AppConfig struct {
 	Redpanda      Redpanda      `mapstructure:"redpanda" json:"redpanda" yaml:"redpanda"`
 	Hot           Hot           `mapstructure:"hot" json:"hot" yaml:"hot"`
 	Recommend     Recommend     `mapstructure:"recommend" json:"recommend" yaml:"recommend"`
+	Trending      Trending      `mapstructure:"trending" json:"trending" yaml:"trending"`
 	Mailtrap      Mailtrap      `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
 	Security      Security      `mapstructure:"security" json:"security" yaml:"security"`
 }
@@ -218,6 +219,15 @@ type CF struct {
 	ZsetTTLHours          int  `mapstructure:"zset_ttl_hours" json:"zset_ttl_hours" yaml:"zset_ttl_hours"`                            // cf:item ZSET TTL(小时)
 	SyncIntervalHours     int  `mapstructure:"sync_interval_hours" json:"sync_interval_hours" yaml:"sync_interval_hours"`             // ItemCFSyncer 运行间隔(小时)
 	CleanupDays           int  `mapstructure:"cleanup_days" json:"cleanup_days" yaml:"cleanup_days"`                                  // interaction 行保留天数(超出删除)
+}
+
+// Trending 热点榜配置（trending 领域 + TrendingRankSyncer）。设计见 docs/trending-design.md §九。
+type Trending struct {
+	FlushIntervalMinutes int      `mapstructure:"flush_interval_minutes" json:"flush_interval_minutes" yaml:"flush_interval_minutes"` // TrendingRankSyncer 周期(分钟)
+	TopN                 int      `mapstructure:"top_n" json:"top_n" yaml:"top_n"`                                                      // 每个 ZSET 榜单保留条数(> max_size 留翻页余量)
+	Windows              []string `mapstructure:"windows" json:"windows" yaml:"windows"`                                                // 启用的时间窗(24h/7d)
+	DefaultSize          int      `mapstructure:"default_size" json:"default_size" yaml:"default_size"`                                 // 接口默认 size
+	MaxSize              int      `mapstructure:"max_size" json:"max_size" yaml:"max_size"`                                             // 接口 size 上限
 }
 
 // Mailtrap 邮件发送配置
