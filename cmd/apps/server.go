@@ -12,15 +12,24 @@ import (
 	redpanda "interestBar/pkg/server/storage/redpanda"
 	s3storage "interestBar/pkg/server/storage/s3"
 	emailutil "interestBar/pkg/util/email"
-	"os"
-	"os/signal"
+	"interestBar/pkg/util/password"
 	"strings"
-	"syscall"
 )
 
 func Run(configPath, bootstrapPath string) {
 	// 1. Init Config (优先 Nacos，不可用时回退本地文件)
 	conf.InitConfig(configPath, bootstrapPath)
+
+	// 1.5 应用密码哈希参数（从 conf.Security.PasswordHash 注入）。
+	// 任一字段为 0 时 password 包内部回退到默认值。
+	ph := conf.Config.Security.PasswordHash
+	password.SetParams(password.Params{
+		Time:    ph.Time,
+		Memory:  ph.Memory,
+		Threads: ph.Threads,
+		KeyLen:  ph.KeyLen,
+		SaltLen: ph.SaltLen,
+	})
 
 	// 2. Init Logger
 	logger.InitLogger()
@@ -96,11 +105,79 @@ func Run(configPath, bootstrapPath string) {
 		logger.Log.Info("Like Lua scripts loaded successfully")
 	}
 
+	// 8.10 Init Collect event Redpanda producer
+	if err := redpanda.InitCollectEventProducer(); err != nil {
+		logger.Log.Error("Failed to initialize collect event producer: " + err.Error())
+		logger.Log.Warn("Collect event persistence to database is disabled.")
+	} else {
+		logger.Log.Info("Collect event producer initialized successfully")
+		go redpanda.StartCollectEventConsumerWithRetry()
+	}
+
+	// 8.11 Init Collect Lua scripts in Redis
+	if err := redis.InitCollectLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load collect Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("Collect Lua scripts loaded successfully")
+	}
+
 	// 8.9 Init View Lua scripts in Redis
 	if err := redis.InitViewLuaScripts(); err != nil {
 		logger.Log.Error("Failed to load view Lua scripts: " + err.Error())
 	} else {
 		logger.Log.Info("View Lua scripts loaded successfully")
+	}
+
+	// 8.12 Init History event Redpanda producer
+	if err := redpanda.InitHistoryEventProducer(); err != nil {
+		logger.Log.Error("Failed to initialize history event producer: " + err.Error())
+		logger.Log.Warn("History event persistence to database is disabled.")
+	} else {
+		logger.Log.Info("History event producer initialized successfully")
+		go redpanda.StartHistoryEventConsumerWithRetry()
+	}
+
+	// 8.13 Init History Lua scripts in Redis
+	if err := redis.InitHistoryLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load history Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("History Lua scripts loaded successfully")
+	}
+
+	// 8.14 Init Hot Lua scripts（热度加权 × 方向 × clamp 原子脚本）
+	if err := redis.InitHotLuaScripts(); err != nil {
+		logger.Log.Error("Failed to load hot Lua scripts: " + err.Error())
+	} else {
+		logger.Log.Info("Hot Lua scripts loaded successfully")
+	}
+
+	// 8.15 Init Post hot Redpanda producer（帖子热度增量异步落库 + circle fan-out）
+	if err := redpanda.InitPostHotProducer(); err != nil {
+		logger.Log.Error("Failed to initialize post hot producer: " + err.Error())
+		logger.Log.Warn("Post hot persistence to database is disabled.")
+	} else {
+		logger.Log.Info("Post hot producer initialized successfully")
+		go redpanda.StartPostHotConsumerWithRetry()
+	}
+
+	// 8.16 Start Circle hot syncer（定时把 circle:hot 累加器落库 + 刷缓存）
+	go redpanda.StartCircleHotSyncerWithRetry()
+
+	// 8.17 Init Post interaction Redpanda producer（CF 灌数：互动事件 → post_interaction 表）
+	if err := redpanda.InitPostInteractionProducer(); err != nil {
+		logger.Log.Error("Failed to initialize post interaction producer: " + err.Error())
+		logger.Log.Warn("Post interaction persistence to database is disabled. CF feed disabled.")
+	} else {
+		logger.Log.Info("Post interaction producer initialized successfully")
+		go redpanda.StartPostInteractionConsumerWithRetry()
+	}
+
+	// 8.18 Start Item CF syncer（定时算 post↔post 共现相似度 → cf:item ZSET；P1）
+	// 仅在 CF 开关打开时启动；依赖 post_interaction 表有数据（P0 灌数）。
+	if conf.Config.Recommend.CF.Enabled {
+		go redpanda.StartItemCFSyncerWithRetry()
+	} else {
+		logger.Log.Info("Item CF syncer disabled by config (recommend.cf.enabled=false)")
 	}
 
 	// 9. Init Router
@@ -110,23 +187,21 @@ func Run(configPath, bootstrapPath string) {
 	addr := fmt.Sprintf(":%d", conf.Config.Server.Port)
 	logger.Log.Info("Server starting on " + addr)
 
-	go func() {
-		if err := r.Run(addr); err != nil {
-			logger.Log.Fatal("Server start failed: " + err.Error())
-		}
-	}()
+	// Spin() 内部处理 SIGINT/SIGTERM 并优雅关停（阻塞直到收到信号）。
+	r.Spin()
 
-	// Wait for interrupt signal to gracefully shutdown the server
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	// 收到信号后 Spin 返回，执行资源清理。
 	logger.Log.Info("Shutdown Server ...")
-
-	// Close resources
 	redis.CloseRedis()
 	auth.CloseSaToken()
 	redpanda.CloseRedpandaProducer()
 	redpanda.ClosePostStatsProducer()
 	redpanda.CloseLikeEventProducer()
+	redpanda.CloseCollectEventProducer()
+	redpanda.CloseHistoryEventProducer()
+	redpanda.ClosePostHotProducer()
+	redpanda.ClosePostInteractionProducer()
+	redpanda.StopCircleHotSyncer()
+	redpanda.StopItemCFSyncer()
 	logger.Log.Info("Server shutdown complete")
 }

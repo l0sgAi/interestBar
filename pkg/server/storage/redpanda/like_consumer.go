@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"interestBar/pkg/conf"
+	commentdomain "interestBar/pkg/domains/comment/domain"
+	postdomain "interestBar/pkg/domains/post/domain"
 	"interestBar/pkg/logger"
-	"interestBar/pkg/server/model"
 	"interestBar/pkg/server/storage/db/pgsql"
+	sharedomain "interestBar/pkg/shared/domain"
 	"strings"
 	"sync"
 	"time"
@@ -177,26 +179,27 @@ func batchUpdateCommentLikes(deltas []*likeEventDelta) error {
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
 		for _, d := range deltas {
 			if d.Amount > 0 {
-				var existing model.CommentLike
+				var existing commentdomain.CommentLike
 				err := tx.Where("user_id = ? AND comment_id = ?", d.UserID, d.TargetID).First(&existing).Error
 				if err == gorm.ErrRecordNotFound {
-					if err := tx.Create(&model.CommentLike{
+					if err := tx.Create(&commentdomain.CommentLike{
+						ID:        sharedomain.NewID(),
 						UserID:    d.UserID,
 						CommentID: d.TargetID,
 						PostID:    &d.PostID,
-						Deleted:   model.CommentLikeActive,
+						Deleted:   commentdomain.CommentLikeActive,
 					}).Error; err != nil {
 						if !strings.Contains(err.Error(), "duplicate key") {
 							return fmt.Errorf("failed to create comment like: %w", err)
 						}
 					}
 				} else if err == nil {
-					tx.Model(&model.CommentLike{}).Where("id = ?", existing.ID).Update("deleted", model.CommentLikeActive)
+					tx.Model(&commentdomain.CommentLike{}).Where("id = ?", existing.ID).Update("deleted", commentdomain.CommentLikeActive)
 				}
 			} else {
-				tx.Model(&model.CommentLike{}).
+				tx.Model(&commentdomain.CommentLike{}).
 					Where("user_id = ? AND comment_id = ?", d.UserID, d.TargetID).
-					Update("deleted", model.CommentLikeCanceled)
+					Update("deleted", commentdomain.CommentLikeCanceled)
 			}
 		}
 
@@ -235,25 +238,26 @@ func batchUpdatePostLikes(deltas []*likeEventDelta) error {
 	return pgsql.DB.Transaction(func(tx *gorm.DB) error {
 		for _, d := range deltas {
 			if d.Amount > 0 {
-				var existing model.PostLike
+				var existing postdomain.PostLike
 				err := tx.Where("user_id = ? AND post_id = ?", d.UserID, d.TargetID).First(&existing).Error
 				if err == gorm.ErrRecordNotFound {
-					if err := tx.Create(&model.PostLike{
+					if err := tx.Create(&postdomain.PostLike{
+						ID:      sharedomain.NewID(),
 						UserID:  d.UserID,
 						PostID:  d.TargetID,
-						Deleted: model.PostLikeActive,
+						Deleted: postdomain.PostLikeActive,
 					}).Error; err != nil {
 						if !strings.Contains(err.Error(), "duplicate key") {
 							return fmt.Errorf("failed to create post like: %w", err)
 						}
 					}
 				} else if err == nil {
-					tx.Model(&model.PostLike{}).Where("id = ?", existing.ID).Update("deleted", model.PostLikeActive)
+					tx.Model(&postdomain.PostLike{}).Where("id = ?", existing.ID).Update("deleted", postdomain.PostLikeActive)
 				}
 			} else {
-				tx.Model(&model.PostLike{}).
+				tx.Model(&postdomain.PostLike{}).
 					Where("user_id = ? AND post_id = ?", d.UserID, d.TargetID).
-					Update("deleted", model.PostLikeCanceled)
+					Update("deleted", postdomain.PostLikeCanceled)
 			}
 		}
 

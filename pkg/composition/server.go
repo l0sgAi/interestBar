@@ -1,0 +1,273 @@
+// Package composition 的 server.go：装配各领域依赖并注册路由。
+package composition
+
+import (
+	authapp "interestBar/pkg/domains/auth/application"
+	authinfra "interestBar/pkg/domains/auth/infrastructure"
+	authhttp "interestBar/pkg/domains/auth/interfaces/http"
+	categoryapp "interestBar/pkg/domains/category/application"
+	categoryinfra "interestBar/pkg/domains/category/infrastructure"
+	categoryhttp "interestBar/pkg/domains/category/interfaces/http"
+	circleapp "interestBar/pkg/domains/circle/application"
+	circledomain "interestBar/pkg/domains/circle/domain"
+	circleinfra "interestBar/pkg/domains/circle/infrastructure"
+	circlehttp "interestBar/pkg/domains/circle/interfaces/http"
+	collectapp "interestBar/pkg/domains/collect/application"
+	collectinfra "interestBar/pkg/domains/collect/infrastructure"
+	collecthttp "interestBar/pkg/domains/collect/interfaces/http"
+	commentapp "interestBar/pkg/domains/comment/application"
+	commentinfra "interestBar/pkg/domains/comment/infrastructure"
+	commenthttp "interestBar/pkg/domains/comment/interfaces/http"
+	historyapp "interestBar/pkg/domains/history/application"
+	historyinfra "interestBar/pkg/domains/history/infrastructure"
+	historyhttp "interestBar/pkg/domains/history/interfaces/http"
+	likeapp "interestBar/pkg/domains/like/application"
+	likeinfra "interestBar/pkg/domains/like/infrastructure"
+	likehttp "interestBar/pkg/domains/like/interfaces/http"
+	postapp "interestBar/pkg/domains/post/application"
+	postinfra "interestBar/pkg/domains/post/infrastructure"
+	posthttp "interestBar/pkg/domains/post/interfaces/http"
+	recommendapp "interestBar/pkg/domains/recommend/application"
+	recommendinfra "interestBar/pkg/domains/recommend/infrastructure"
+	recommendhttp "interestBar/pkg/domains/recommend/interfaces/http"
+	storageapp "interestBar/pkg/domains/storage/application"
+	storageinfra "interestBar/pkg/domains/storage/infrastructure"
+	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
+	userapp "interestBar/pkg/domains/user/application"
+	userinfra "interestBar/pkg/domains/user/infrastructure"
+	userhttp "interestBar/pkg/domains/user/interfaces/http"
+	"interestBar/pkg/logger"
+	"interestBar/pkg/shared/routing"
+)
+
+// RegisterDomainRoutes 把所有"已搬迁到 domains/"的领域路由挂到 Web server 上。
+//
+// root 是框架无关的 RouterGroup（由入口层用 composition/hertzadapter.ForEngine
+// 从 *server.Hertz 包装而来）。这样本函数彻底不感知底层框架。
+func RegisterDomainRoutes(root routing.RouterGroup) {
+	deps := NewDeps()
+	authCheck := RequireLogin
+
+	// 先构造各领域 Service（不立即注册路由，因为要互注 Facade）
+	userSvc := newUserService(deps)
+	userFacade := userapp.NewUserFacade(userSvc)
+
+	circleSvc, circleRepo, memberRepo := newCircleService(deps)
+	circleFacade := circleapp.NewCircleFacade(circleRepo)
+
+	postSvc := newPostService(deps)
+
+	commentSvc := newCommentService(deps)
+	likeSvc := newLikeService(deps)
+	collectSvc := newCollectService(deps)
+	historySvc := newHistoryService(deps)
+
+	// 互注跨领域 Facade
+	// circle 需要 user Facade + post 媒体查询器
+	circleSvc.SetUserFacade(&circleUserFacade{delegate: userFacade})
+	circleSvc.SetPostFetcher(&postMediaFetcherForCircle{delegate: postSvc})
+
+	// post 需要 user Facade + circle Facade + 成员/状态校验器 + 帖子计数端口
+	postSvc.SetUserFacade(&postUserFacade{delegate: userFacade})
+	postSvc.SetCircleFacade(&postCircleFacade{delegate: circleFacade})
+	postSvc.SetMemberChecker(&circleMemberCheckerForPost{memberRepo: memberRepo})
+	postSvc.SetStatusChecker(&circleStatusCheckerForPost{circleRepo: circleRepo})
+	postSvc.SetPostCountPort(&circlePostCountPortForPost{svc: circleSvc})
+
+	// comment 需要 user Facade + post 查询端口（帖子校验 + 评论计数）
+	commentSvc.SetUserFacade(&commentUserFacade{delegate: userFacade})
+	commentSvc.SetPostLookup(&commentPostLookup{delegate: postSvc})
+
+	// like 需要 post 查询端口 + comment 查询端口（目标存在性校验 + 统计缓存恢复）
+	likeSvc.SetPostTarget(&likePostTarget{delegate: postSvc})
+	likeSvc.SetCommentTarget(&likeCommentTarget{delegate: commentSvc})
+
+	// collect 需要 post 查询端口（存在性校验 + 统计缓存恢复）+ post 组装端口（「我的收藏」列表）
+	collectSvc.SetPostTarget(&collectPostTarget{delegate: postSvc})
+	collectSvc.SetPostFetcher(&collectPostFetcher{delegate: postSvc})
+
+	// history 需要 post 组装端口（「最近浏览」列表 ES 查询）;post 需要 history 记录器（详情页 async 回调）
+	historySvc.SetPostFetcher(&historyPostFetcher{delegate: postSvc})
+	postSvc.SetHistoryRecorder(&postHistoryRecorder{delegate: historySvc})
+
+	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
+	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
+	if logger.Log != nil {
+		logger.Log.Info("cross-domain facades injected: circle<-user/post, post<-user/circle, comment<-user/post, like<-post/comment, collect<-post, history<-post")
+	}
+
+	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
+	recommendSvc := newRecommendService(postSvc, circleSvc)
+
+	// 注册路由
+	registerCategory(root, deps, authCheck)
+	registerStorage(root, deps, authCheck)
+	registerUser(root, userSvc, authCheck)
+	registerAuth(root, deps, authCheck)
+	registerCircle(root, circleSvc, authCheck)
+	registerPost(root, postSvc, authCheck)
+	registerComment(root, commentSvc, authCheck)
+	registerLike(root, likeSvc, authCheck)
+	registerCollect(root, collectSvc, authCheck)
+	registerHistory(root, historySvc, authCheck)
+	registerRecommend(root, recommendSvc, authCheck)
+}
+
+// registerCategory 装配 category 领域。
+func registerCategory(root routing.RouterGroup, deps *Deps, authCheck routing.HandlerFunc) {
+	repo := categoryinfra.NewCategoryRepository(deps.DB.Get())
+	cache := categoryinfra.NewCategoryCache()
+	svc := categoryapp.NewCategoryService(repo, cache)
+	categoryhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerStorage 装配 storage 领域。
+func registerStorage(root routing.RouterGroup, deps *Deps, authCheck routing.HandlerFunc) {
+	storage := storageinfra.NewObjectStorage()
+	svc := storageapp.NewStorageService(storage)
+	storagehttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerUser 装配 user 领域。
+func registerUser(root routing.RouterGroup, svc userapp.UserService, authCheck routing.HandlerFunc) {
+	userhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerAuth 装配 auth 领域。
+func registerAuth(root routing.RouterGroup, deps *Deps, authCheck routing.HandlerFunc) {
+	session := authinfra.NewSaTokenSession()
+	userStore := NewUserSessionStore(deps.DB.Get())
+	verify := authinfra.NewVerificationStore()
+	email := authinfra.NewEmailSender()
+	oauthReg := authinfra.NewOAuthProviderRegistry()
+	svc := authapp.NewAuthService(session, userStore, verify, email, oauthReg)
+	authhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerCircle 装配 circle 领域。
+func registerCircle(root routing.RouterGroup, svc circleapp.CircleService, authCheck routing.HandlerFunc) {
+	circlehttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerPost 装配 post 领域。
+func registerPost(root routing.RouterGroup, svc postapp.PostService, authCheck routing.HandlerFunc) {
+	posthttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerComment 装配 comment 领域。
+func registerComment(root routing.RouterGroup, svc commentapp.CommentService, authCheck routing.HandlerFunc) {
+	commenthttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerLike 装配 like 领域。
+func registerLike(root routing.RouterGroup, svc likeapp.LikeService, authCheck routing.HandlerFunc) {
+	likehttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerCollect 装配 collect 领域。
+func registerCollect(root routing.RouterGroup, svc collectapp.CollectService, authCheck routing.HandlerFunc) {
+	collecthttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerHistory 装配 history 领域。
+func registerHistory(root routing.RouterGroup, svc historyapp.HistoryService, authCheck routing.HandlerFunc) {
+	historyhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// newRecommendService 构造 RecommendService。
+//
+// searcher/seed/checker/feed 为 recommend 同域 infra（直构，走全局 ES/Redis 客户端）；
+// circle/postMeta/hydrator 为跨域桥接器（包 post/circle service）。
+func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.CircleService) recommendapp.RecommendService {
+	return recommendapp.NewRecommendService(
+		recommendinfra.NewHomeFeedSearcher(),        // HomeFeedSearcher
+		&recommendCircleLookup{delegate: circleSvc}, // CircleLookup
+		&recommendPostMetaReader{delegate: postSvc}, // PostMetaReader
+		recommendinfra.NewSeedReader(),              // SeedReader
+		&recommendPostHydrator{delegate: postSvc},   // PostHydrator
+		recommendinfra.NewInteractionChecker(),      // InteractionChecker
+		recommendinfra.NewFeedCache(),               // FeedCache
+		recommendinfra.NewInterestCircleCache(),     // InterestCircleCache
+	)
+}
+
+// registerRecommend 装配 recommend 领域。
+func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendService, authCheck routing.HandlerFunc) {
+	recommendhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// ===== Service 构造函数 =====
+
+func newUserService(deps *Deps) userapp.UserService {
+	repo := userinfra.NewUserRepository(deps.DB.Get())
+	cache := userinfra.NewUserCache()
+	searcher := userinfra.NewUserSearcher()
+	return userapp.NewUserService(repo, cache, searcher)
+}
+
+// newCircleService 构造 CircleService 并返回其依赖的 repo（供桥接器使用）。
+func newCircleService(deps *Deps) (circleapp.CircleService, circledomain.CircleRepository, circledomain.MemberRepository) {
+	circleRepo := circleinfra.NewCircleRepository(deps.DB.Get())
+	memberRepo := circleinfra.NewMemberRepository(deps.DB.Get())
+	baseCache := circleinfra.NewCircleBaseCache()
+	statsCache := circleinfra.NewCircleStatsCache()
+	joinedCache := circleinfra.NewJoinedCirclesCache()
+	searcher := circleinfra.NewCircleSearcher()
+	publisher := circleinfra.NewCircleEventPublisher()
+
+	svc := circleapp.NewCircleService(
+		circleRepo, memberRepo, baseCache, statsCache, joinedCache, searcher, publisher,
+	)
+	return svc, circleRepo, memberRepo
+}
+
+func newPostService(deps *Deps) postapp.PostService {
+	repo := postinfra.NewPostRepository(deps.DB.Get())
+	statsCache := postinfra.NewPostStatsCache()
+	likeCache := postinfra.NewPostLikeCache()
+	collectCache := postinfra.NewPostCollectCache()
+	searcher := postinfra.NewPostSearcher()
+	publisher := postinfra.NewPostEventPublisher()
+	return postapp.NewPostService(repo, statsCache, likeCache, collectCache, searcher, publisher)
+}
+
+// newCommentService 构造 CommentService。
+//
+// user/post 跨领域依赖通过 setter 注入（见 RegisterDomainRoutes）。
+func newCommentService(deps *Deps) commentapp.CommentService {
+	repo := commentinfra.NewCommentRepository(deps.DB.Get())
+	statsCache := commentinfra.NewCommentStatsCache()
+	likeCache := commentinfra.NewCommentLikeCache()
+	publisher := commentinfra.NewCommentEventPublisher()
+	return commentapp.NewCommentService(repo, statsCache, likeCache, publisher)
+}
+
+// newLikeService 构造 LikeService。
+//
+// post/comment 跨领域依赖通过 setter 注入（见 RegisterDomainRoutes）。
+func newLikeService(deps *Deps) likeapp.LikeService {
+	postCache := likeinfra.NewPostLikeCache()
+	commentCache := likeinfra.NewCommentLikeCache()
+	publisher := likeinfra.NewLikeEventPublisher()
+	return likeapp.NewLikeService(postCache, commentCache, publisher)
+}
+
+// newCollectService 构造 CollectService。
+//
+// post 跨领域依赖（查询端口 + 组装端口）通过 setter 注入（见 RegisterDomainRoutes）。
+func newCollectService(deps *Deps) collectapp.CollectService {
+	cache := collectinfra.NewPostCollectCache()
+	repo := collectinfra.NewPostCollectRepository(deps.DB.Get())
+	publisher := collectinfra.NewCollectEventPublisher()
+	return collectapp.NewCollectService(cache, repo, publisher)
+}
+
+// newHistoryService 构造 HistoryService。
+//
+// post 跨领域依赖（ES 帖子组装端口）通过 setter 注入（见 RegisterDomainRoutes）。
+func newHistoryService(deps *Deps) historyapp.HistoryService {
+	cache := historyinfra.NewPostHistoryCache()
+	repo := historyinfra.NewPostHistoryRepository(deps.DB.Get())
+	publisher := historyinfra.NewHistoryEventPublisher()
+	return historyapp.NewHistoryService(cache, repo, publisher)
+}

@@ -23,7 +23,10 @@ type AppConfig struct {
 	S3            S3            `mapstructure:"s3" json:"s3" yaml:"s3"`
 	Elasticsearch Elasticsearch `mapstructure:"elasticsearch" json:"elasticsearch" yaml:"elasticsearch"`
 	Redpanda      Redpanda      `mapstructure:"redpanda" json:"redpanda" yaml:"redpanda"`
+	Hot           Hot           `mapstructure:"hot" json:"hot" yaml:"hot"`
+	Recommend     Recommend     `mapstructure:"recommend" json:"recommend" yaml:"recommend"`
 	Mailtrap      Mailtrap      `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
+	Security      Security      `mapstructure:"security" json:"security" yaml:"security"`
 }
 
 type Server struct {
@@ -48,6 +51,10 @@ type Log struct {
 
 // 新增：对应 yaml 中的 oauth 层级
 type Oauth struct {
+	// ProxyURL OAuth 出站（换 token / 拉用户信息）使用的 HTTP 代理。
+	// 为空则直连。本地开发在网络受限时可配置（如 http://127.0.0.1:6268）。
+	ProxyURL string `mapstructure:"proxy_url" json:"proxy_url" yaml:"proxy_url"`
+
 	Google    Google    `mapstructure:"google" json:"google" yaml:"google"`
 	Github    Github    `mapstructure:"github" json:"github" yaml:"github"`
 	Microsoft Microsoft `mapstructure:"microsoft" json:"microsoft" yaml:"microsoft"`
@@ -125,18 +132,92 @@ type Elasticsearch struct {
 
 // Redpanda Redpanda配置
 type Redpanda struct {
-	Brokers                []string `mapstructure:"brokers" json:"brokers" yaml:"brokers"`
-	Topic                  string   `mapstructure:"topic" json:"topic" yaml:"topic"`
-	ConsumerGroup          string   `mapstructure:"consumer_group" json:"consumer_group" yaml:"consumer_group"`
-	FlushInterval          int      `mapstructure:"flush_interval" json:"flush_interval" yaml:"flush_interval"`
-	FlushMessages          int      `mapstructure:"flush_messages" json:"flush_messages" yaml:"flush_messages"`
-	PostTopic              string   `mapstructure:"post_topic" json:"post_topic" yaml:"post_topic"`
-	PostConsumerGroup      string   `mapstructure:"post_consumer_group" json:"post_consumer_group" yaml:"post_consumer_group"`
-	PostFlushInterval      int      `mapstructure:"post_flush_interval" json:"post_flush_interval" yaml:"post_flush_interval"`
-	PostStatsTTL           int      `mapstructure:"post_stats_ttl" json:"post_stats_ttl" yaml:"post_stats_ttl"`
-	LikeEventTopic         string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
-	LikeEventConsumerGroup string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
-	LikeEventFlushInterval int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
+	Brokers                   []string `mapstructure:"brokers" json:"brokers" yaml:"brokers"`
+	Topic                     string   `mapstructure:"topic" json:"topic" yaml:"topic"`
+	ConsumerGroup             string   `mapstructure:"consumer_group" json:"consumer_group" yaml:"consumer_group"`
+	FlushInterval             int      `mapstructure:"flush_interval" json:"flush_interval" yaml:"flush_interval"`
+	FlushMessages             int      `mapstructure:"flush_messages" json:"flush_messages" yaml:"flush_messages"`
+	PostTopic                 string   `mapstructure:"post_topic" json:"post_topic" yaml:"post_topic"`
+	PostConsumerGroup         string   `mapstructure:"post_consumer_group" json:"post_consumer_group" yaml:"post_consumer_group"`
+	PostFlushInterval         int      `mapstructure:"post_flush_interval" json:"post_flush_interval" yaml:"post_flush_interval"`
+	PostStatsTTL              int      `mapstructure:"post_stats_ttl" json:"post_stats_ttl" yaml:"post_stats_ttl"`
+	LikeEventTopic            string   `mapstructure:"like_event_topic" json:"like_event_topic" yaml:"like_event_topic"`
+	LikeEventConsumerGroup    string   `mapstructure:"like_event_consumer_group" json:"like_event_consumer_group" yaml:"like_event_consumer_group"`
+	LikeEventFlushInterval    int      `mapstructure:"like_event_flush_interval" json:"like_event_flush_interval" yaml:"like_event_flush_interval"`
+	CollectEventTopic         string   `mapstructure:"collect_event_topic" json:"collect_event_topic" yaml:"collect_event_topic"`
+	CollectEventConsumerGroup string   `mapstructure:"collect_event_consumer_group" json:"collect_event_consumer_group" yaml:"collect_event_consumer_group"`
+	CollectEventFlushInterval int      `mapstructure:"collect_event_flush_interval" json:"collect_event_flush_interval" yaml:"collect_event_flush_interval"`
+	HistoryEventTopic         string   `mapstructure:"history_event_topic" json:"history_event_topic" yaml:"history_event_topic"`
+	HistoryEventConsumerGroup string   `mapstructure:"history_event_consumer_group" json:"history_event_consumer_group" yaml:"history_event_consumer_group"`
+	HistoryEventFlushInterval int      `mapstructure:"history_event_flush_interval" json:"history_event_flush_interval" yaml:"history_event_flush_interval"`
+
+	PostHotTopic           string `mapstructure:"post_hot_topic" json:"post_hot_topic" yaml:"post_hot_topic"`                                  // 帖子热度增量 topic
+	PostHotConsumerGroup   string `mapstructure:"post_hot_consumer_group" json:"post_hot_consumer_group" yaml:"post_hot_consumer_group"`       // 帖子热度消费者组
+	PostHotFlushInterval   int    `mapstructure:"post_hot_flush_interval" json:"post_hot_flush_interval" yaml:"post_hot_flush_interval"`       // 帖子热度刷新间隔(分钟)
+	PostHotFlushMessages   int    `mapstructure:"post_hot_flush_messages" json:"post_hot_flush_messages" yaml:"post_hot_flush_messages"`       // 帖子热度批量刷新条数阈值
+	CircleHotFlushInterval int    `mapstructure:"circle_hot_flush_interval" json:"circle_hot_flush_interval" yaml:"circle_hot_flush_interval"` // 圈子热度落库间隔(分钟)
+	CircleHotTTL           int    `mapstructure:"circle_hot_ttl" json:"circle_hot_ttl" yaml:"circle_hot_ttl"`                                  // 圈子热度累加器 key TTL(小时)
+
+	PostInteractionTopic         string `mapstructure:"post_interaction_topic" json:"post_interaction_topic" yaml:"post_interaction_topic"`                            // 帖子互动事件 topic（CF 灌数）
+	PostInteractionConsumerGroup string `mapstructure:"post_interaction_consumer_group" json:"post_interaction_consumer_group" yaml:"post_interaction_consumer_group"` // 帖子互动事件消费者组
+	PostInteractionFlushInterval int    `mapstructure:"post_interaction_flush_interval" json:"post_interaction_flush_interval" yaml:"post_interaction_flush_interval"` // 帖子互动刷新间隔(分钟)
+	PostInteractionFlushMessages int    `mapstructure:"post_interaction_flush_messages" json:"post_interaction_flush_messages" yaml:"post_interaction_flush_messages"` // 帖子互动批量刷新条数阈值
+}
+
+// Hot 热度计算配置（权重 + 上限）。
+type Hot struct {
+	Weight HotWeight `mapstructure:"weight" json:"weight" yaml:"weight"`
+	Cap    HotCap    `mapstructure:"cap" json:"cap" yaml:"cap"`
+}
+
+// HotWeight 各互动事件的热度权重（hot Δ = weight × 方向）。
+type HotWeight struct {
+	PostLike    int `mapstructure:"post_like" json:"post_like" yaml:"post_like"`          // 帖子点赞
+	PostCollect int `mapstructure:"post_collect" json:"post_collect" yaml:"post_collect"` // 帖子收藏
+	PostShare   int `mapstructure:"post_share" json:"post_share" yaml:"post_share"`       // 帖子分享（TODO: 分享功能未实现）
+	Comment     int `mapstructure:"comment" json:"comment" yaml:"comment"`                // 评论
+	CommentLike int `mapstructure:"comment_like" json:"comment_like" yaml:"comment_like"` // 评论点赞
+}
+
+// HotCap 热度贡献上限（per-post，防刷分）。
+// 不变式：cap 必须为对应 weight 的整数倍，否则 undo 与 clamp 边界产生漂移。
+type HotCap struct {
+	Comment     int `mapstructure:"comment" json:"comment" yaml:"comment"`                // 评论 hot 贡献上限
+	CommentLike int `mapstructure:"comment_like" json:"comment_like" yaml:"comment_like"` // 评论点赞 hot 贡献上限
+}
+
+// Recommend 推荐流配置（首页「推荐」tab 召回/排序参数）。
+type Recommend struct {
+	CF   CF   `mapstructure:"cf" json:"cf" yaml:"cf"`
+	Feed Feed `mapstructure:"feed" json:"feed" yaml:"feed"`
+}
+
+// Feed 推荐流候选池 + 多路召回配额配置。
+type Feed struct {
+	PoolSize                  int  `mapstructure:"pool_size" json:"pool_size" yaml:"pool_size"`                                                          // 候选池大小（每路按配额比例填充）
+	TTLMinutes                int  `mapstructure:"ttl_minutes" json:"ttl_minutes" yaml:"ttl_minutes"`                                                    // 候选池 TTL(分钟)
+	QuotaC1                   int  `mapstructure:"quota_c1" json:"quota_c1" yaml:"quota_c1"`                                                             // 兴趣圈子热门配额(百分比)
+	QuotaC2                   int  `mapstructure:"quota_c2" json:"quota_c2" yaml:"quota_c2"`                                                             // 全局热门配额(百分比)
+	QuotaC3                   int  `mapstructure:"quota_c3" json:"quota_c3" yaml:"quota_c3"`                                                             // 行为圈子配额(百分比)
+	QuotaC4                   int  `mapstructure:"quota_c4" json:"quota_c4" yaml:"quota_c4"`                                                             // 最新配额(百分比)
+	QuotaC5                   int  `mapstructure:"quota_c5" json:"quota_c5" yaml:"quota_c5"`                                                             // CF 相似配额(百分比)
+	ExcludeInteracted         bool `mapstructure:"exclude_interacted" json:"exclude_interacted" yaml:"exclude_interacted"`                               // 剔除已点赞/收藏/浏览过的帖
+	InterestCirclesTTLMinutes int  `mapstructure:"interest_circles_ttl_minutes" json:"interest_circles_ttl_minutes" yaml:"interest_circles_ttl_minutes"` // C3 行为圈子缓存 TTL(分钟)
+}
+
+// CF item-based 协同过滤配置。设计见 docs/cf-item-based-design.md。
+type CF struct {
+	Enabled               bool `mapstructure:"enabled" json:"enabled" yaml:"enabled"`                                                 // 是否启用 CF（灌数 + Syncer 全开关）
+	InteractionWindowDays int  `mapstructure:"interaction_window_days" json:"interaction_window_days" yaml:"interaction_window_days"` // 共现计算回溯窗口(天)
+	CandidateFreshDays    int  `mapstructure:"candidate_fresh_days" json:"candidate_fresh_days" yaml:"candidate_fresh_days"`          // 候选帖创建时间窗(天)，防爆
+	MinCooccur            int  `mapstructure:"min_cooccur" json:"min_cooccur" yaml:"min_cooccur"`                                     // 最小共现次数(砍噪声)
+	TopK                  int  `mapstructure:"topk" json:"topk" yaml:"topk"`                                                          // 每帖保留相似帖数
+	SeedCollect           int  `mapstructure:"seed_collect" json:"seed_collect" yaml:"seed_collect"`                                  // C5 召回取收藏 seed 数(P2)
+	SeedLike              int  `mapstructure:"seed_like" json:"seed_like" yaml:"seed_like"`                                           // C5 召回取点赞 seed 数(P2)
+	RecallTop             int  `mapstructure:"recall_top" json:"recall_top" yaml:"recall_top"`                                        // C5 输出候选数(P2)
+	ZsetTTLHours          int  `mapstructure:"zset_ttl_hours" json:"zset_ttl_hours" yaml:"zset_ttl_hours"`                            // cf:item ZSET TTL(小时)
+	SyncIntervalHours     int  `mapstructure:"sync_interval_hours" json:"sync_interval_hours" yaml:"sync_interval_hours"`             // ItemCFSyncer 运行间隔(小时)
+	CleanupDays           int  `mapstructure:"cleanup_days" json:"cleanup_days" yaml:"cleanup_days"`                                  // interaction 行保留天数(超出删除)
 }
 
 // Mailtrap 邮件发送配置
@@ -157,6 +238,30 @@ type MailtrapTemplates struct {
 type MailtrapTemplate struct {
 	Zh string `mapstructure:"zh" json:"zh" yaml:"zh"`
 	En string `mapstructure:"en" json:"en" yaml:"en"`
+}
+
+// Security 安全相关配置（密码哈希、加密参数等）。
+type Security struct {
+	// PasswordHash 密码哈希配置。
+	PasswordHash PasswordHash `mapstructure:"password_hash" json:"password_hash" yaml:"password_hash"`
+}
+
+// PasswordHash 密码哈希算法参数（Argon2id）。
+//
+// OWASP 2024 推荐参数：time=2, memory=19MB, threads=1（最低）。
+// 本项目默认 time=3, memory=64MB, threads=4，单次约 150ms，比推荐更强。
+// 所有字段为 0 时使用默认值，便于配置文件不写时正常工作。
+type PasswordHash struct {
+	// Time Argon2id 迭代次数（time cost），建议 >=2，默认 3。
+	Time uint32 `mapstructure:"time" json:"time" yaml:"time"`
+	// Memory Argon2id 内存消耗（KiB），建议 >=19456 (19MB)，默认 65536 (64MB)。
+	Memory uint32 `mapstructure:"memory" json:"memory" yaml:"memory"`
+	// Threads Argon2id 并行度，建议 1-4，默认 4。
+	Threads uint8 `mapstructure:"threads" json:"threads" yaml:"threads"`
+	// KeyLen 输出哈希长度（字节），默认 32。
+	KeyLen uint32 `mapstructure:"key_len" json:"key_len" yaml:"key_len"`
+	// SaltLen 随机 salt 长度（字节），默认 16。
+	SaltLen uint32 `mapstructure:"salt_len" json:"salt_len" yaml:"salt_len"`
 }
 
 // InitConfig 是配置加载入口。

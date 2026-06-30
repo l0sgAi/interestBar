@@ -510,6 +510,69 @@ func GetPostStatistics(postID uuid.UUID) (*PostStatistics, error) {
 	return stats, nil
 }
 
+// GetPostStatisticsBatch 批量获取帖子统计（pipeline 打包 N 个 HMGet，1 RTT）。
+// 仅返回字段齐全的 postID -> stats；缺失/部分缺失的不计入（调用方走 DB/ES baseline）。
+func GetPostStatisticsBatch(postIDs []uuid.UUID) (map[uuid.UUID]*PostStatistics, error) {
+	result := make(map[uuid.UUID]*PostStatistics, len(postIDs))
+	if len(postIDs) == 0 {
+		return result, nil
+	}
+
+	pipe := Client.Pipeline()
+	cmds := make([]*redis.SliceCmd, len(postIDs))
+	for i, pid := range postIDs {
+		cmds[i] = pipe.HMGet(ctx, GetPostStatsKey(pid), "view_count", "comment_count", "like_count", "collect_count")
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, fmt.Errorf("failed to batch get post statistics: %w", err)
+	}
+
+	for i, cmd := range cmds {
+		values, err := cmd.Result()
+		if err != nil || len(values) < 4 {
+			continue
+		}
+		// 任一字段缺失视为该帖缓存未建立，不计入
+		if values[0] == nil || values[1] == nil || values[2] == nil || values[3] == nil {
+			continue
+		}
+		result[postIDs[i]] = &PostStatistics{
+			ViewCount:    parseStatCount(values[0]),
+			CommentCount: parseStatCount(values[1]),
+			LikeCount:    parseStatCount(values[2]),
+			CollectCount: parseStatCount(values[3]),
+		}
+	}
+	return result, nil
+}
+
+// SeedPostStatisticsIfAbsent 仅当字段不存在时回种（HSetNX）。
+// 用于详情读路径 miss 时回种：async 浏览量 goroutine 会 HINCRBY view_count，
+// 普通 HSet 会 clobber 掉它的 +1；HSetNX 保证只写"尚未建立"的字段。
+func SeedPostStatisticsIfAbsent(postID uuid.UUID, statistics *PostStatistics) error {
+	key := GetPostStatsKey(postID)
+	pipe := Client.Pipeline()
+	pipe.HSetNX(ctx, key, "view_count", statistics.ViewCount)
+	pipe.HSetNX(ctx, key, "comment_count", statistics.CommentCount)
+	pipe.HSetNX(ctx, key, "like_count", statistics.LikeCount)
+	pipe.HSetNX(ctx, key, "collect_count", statistics.CollectCount)
+	pipe.Expire(ctx, key, postStatsTTL)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to seed post statistics: %w", err)
+	}
+	return nil
+}
+
+// parseStatCount 把 HMGet 返回的 interface{} 解析为 int（非法/空→0）。
+func parseStatCount(v interface{}) int {
+	if s, ok := v.(string); ok {
+		if n, err := strconv.Atoi(s); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
 // IncrementPostViewCount 增加帖子浏览量（原子操作，带去重和上限检查）
 // 返回值：>0=新浏览量, 0=去重跳过, -1=已达上限
 // 注意：此函数需要先调用 restorePostStatsIfNeed 确保 Redis 缓存存在
@@ -654,7 +717,8 @@ func BatchUpdatePostStatistics(updates map[uuid.UUID]*PostStatistics) error {
 // ==================== 评论统计信息操作 ====================
 
 // CommentStatisticsExists 检查评论统计信息Hash是否存在
-func CommentStatisticsExists(commentID uuid.UUID) (bool, error) {
+// ctx 由调用方传入，使超时/取消得以传播（覆盖包级 background ctx）。
+func CommentStatisticsExists(ctx context.Context, commentID uuid.UUID) (bool, error) {
 	key := GetCommentStatsKey(commentID)
 	exists, err := Client.Exists(ctx, key).Result()
 	if err != nil {
@@ -664,7 +728,8 @@ func CommentStatisticsExists(commentID uuid.UUID) (bool, error) {
 }
 
 // UpdateCommentStatistics 更新评论统计信息缓存到Hash
-func UpdateCommentStatistics(commentID uuid.UUID, likeCount int) error {
+// ctx 由调用方传入，使超时/取消得以传播（覆盖包级 background ctx）。
+func UpdateCommentStatistics(ctx context.Context, commentID uuid.UUID, likeCount int) error {
 	key := GetCommentStatsKey(commentID)
 	pipe := Client.Pipeline()
 	pipe.HSet(ctx, key, "like_count", likeCount)

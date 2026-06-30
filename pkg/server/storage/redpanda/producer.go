@@ -13,10 +13,14 @@ import (
 )
 
 var (
-	dialer          *kafka.Dialer
-	writer          *kafka.Writer
-	postWriter      *kafka.Writer
-	likeEventWriter *kafka.Writer
+	dialer                *kafka.Dialer
+	writer                *kafka.Writer
+	postWriter            *kafka.Writer
+	likeEventWriter       *kafka.Writer
+	collectEventWriter    *kafka.Writer
+	historyEventWriter    *kafka.Writer
+	postHotWriter         *kafka.Writer
+	postInteractionWriter *kafka.Writer
 )
 
 // InitRedpandaProducer 初始化Redpanda Producer
@@ -172,18 +176,6 @@ func PublishPostViewCount(postID uuid.UUID) error {
 	})
 }
 
-// PublishPostCommentCount 发布帖子评论数变化消息
-func PublishPostCommentCount(postID uuid.UUID, value int64) error {
-	if postWriter == nil {
-		return fmt.Errorf("post stats writer is not initialized")
-	}
-	return publishPostMessage(PostStatisticsMessage{
-		Type:   StatisticsTypePostComment,
-		PostID: postID,
-		Value:  value,
-	})
-}
-
 // PublishPostLikeCount 发布帖子点赞数变化消息
 func PublishPostLikeCount(postID uuid.UUID, value int64) error {
 	if postWriter == nil {
@@ -318,6 +310,264 @@ func CloseLikeEventProducer() error {
 			return err
 		}
 		logger.Log.Info("Like event producer closed")
+	}
+	return nil
+}
+
+// ==================== 收藏事件消息 ====================
+
+// InitCollectEventProducer 初始化收藏事件Producer
+func InitCollectEventProducer() error {
+	collectEventWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.CollectEventTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("Collect event producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.CollectEventTopic))
+	return nil
+}
+
+// PublishPostCollectEvent 发布帖子收藏事件消息
+func PublishPostCollectEvent(userID, postID uuid.UUID, amount int64) error {
+	if collectEventWriter == nil {
+		return fmt.Errorf("collect event writer is not initialized")
+	}
+	return publishCollectEvent(CollectEventMessage{
+		Type:   CollectEventType,
+		UserID: userID,
+		PostID: postID,
+		Amount: amount,
+	})
+}
+
+func publishCollectEvent(msg CollectEventMessage) error {
+	value, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal collect event message: %w", err)
+	}
+	kafkaMsg := kafka.Message{
+		Key:   []byte(fmt.Sprintf("%s:%s", msg.UserID.String(), msg.PostID.String())),
+		Value: value,
+	}
+	if err := collectEventWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+		return fmt.Errorf("failed to write collect event message: %w", err)
+	}
+	logger.Log.Debug(fmt.Sprintf("Published collect event: type=%s, user=%s, post=%s, amount=%d",
+		msg.Type, msg.UserID.String(), msg.PostID.String(), msg.Amount))
+	return nil
+}
+
+// CloseCollectEventProducer 关闭收藏事件Producer
+func CloseCollectEventProducer() error {
+	if collectEventWriter != nil {
+		if err := collectEventWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close collect event writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("Collect event producer closed")
+	}
+	return nil
+}
+
+// ==================== 浏览历史事件消息 ====================
+
+// InitHistoryEventProducer 初始化浏览历史事件Producer
+func InitHistoryEventProducer() error {
+	historyEventWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.HistoryEventTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("History event producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.HistoryEventTopic))
+	return nil
+}
+
+// PublishPostViewHistoryEvent 发布帖子浏览历史事件消息
+func PublishPostViewHistoryEvent(userID, postID uuid.UUID) error {
+	if historyEventWriter == nil {
+		return fmt.Errorf("history event writer is not initialized")
+	}
+	return publishHistoryEvent(HistoryEventMessage{
+		Type:   HistoryEventType,
+		UserID: userID,
+		PostID: postID,
+	})
+}
+
+func publishHistoryEvent(msg HistoryEventMessage) error {
+	value, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal history event message: %w", err)
+	}
+	kafkaMsg := kafka.Message{
+		Key:   []byte(fmt.Sprintf("%s:%s", msg.UserID.String(), msg.PostID.String())),
+		Value: value,
+	}
+	if err := historyEventWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+		return fmt.Errorf("failed to write history event message: %w", err)
+	}
+	logger.Log.Debug(fmt.Sprintf("Published history event: type=%s, user=%s, post=%s",
+		msg.Type, msg.UserID.String(), msg.PostID.String()))
+	return nil
+}
+
+// CloseHistoryEventProducer 关闭浏览历史事件Producer
+func CloseHistoryEventProducer() error {
+	if historyEventWriter != nil {
+		if err := historyEventWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close history event writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("History event producer closed")
+	}
+	return nil
+}
+
+// ==================== 帖子热度增量消息 ====================
+
+// InitPostHotProducer 初始化帖子热度 Producer。
+func InitPostHotProducer() error {
+	postHotWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.PostHotTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("Post hot producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.PostHotTopic))
+	return nil
+}
+
+// PublishPostHot 发布帖子热度增量消息。
+// delta 为 ApplyHotDelta 计算后的最终签名 Δ（已 clamp）。
+func PublishPostHot(postID uuid.UUID, delta int64) error {
+	if postHotWriter == nil {
+		return fmt.Errorf("post hot writer is not initialized")
+	}
+	if delta == 0 {
+		return nil // cap 截断或权重 0，无变化不发
+	}
+
+	value, err := json.Marshal(PostHotMessage{PostID: postID, Delta: delta})
+	if err != nil {
+		return fmt.Errorf("failed to marshal post hot message: %w", err)
+	}
+
+	kafkaMsg := kafka.Message{
+		Key:   []byte(postID.String()), // 同帖子消息保序
+		Value: value,
+	}
+	if err := postHotWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+		return fmt.Errorf("failed to write post hot message: %w", err)
+	}
+
+	logger.Log.Debug(fmt.Sprintf("Published post hot: post_id=%s, delta=%d",
+		postID.String(), delta))
+	return nil
+}
+
+// ClosePostHotProducer 关闭帖子热度 Producer。
+func ClosePostHotProducer() error {
+	if postHotWriter != nil {
+		if err := postHotWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close post hot writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("Post hot producer closed")
+	}
+	return nil
+}
+
+// ==================== 帖子互动事件消息（CF 灌数） ====================
+
+// InitPostInteractionProducer 初始化帖子互动事件 Producer。
+func InitPostInteractionProducer() error {
+	postInteractionWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.PostInteractionTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("Post interaction producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.PostInteractionTopic))
+	return nil
+}
+
+// PublishPostInteraction 发布帖子互动事件（CF 灌数）。
+// weight 由调用方按动作类型映射传入（见 InteractionWeight* 常量）。
+func PublishPostInteraction(userID, postID uuid.UUID, action InteractionAction, weight int16) error {
+	if postInteractionWriter == nil {
+		return fmt.Errorf("post interaction writer is not initialized")
+	}
+
+	value, err := json.Marshal(PostInteractionMessage{
+		UserID: userID,
+		PostID: postID,
+		Action: action,
+		Weight: weight,
+		Ts:     time.Now().UnixMilli(),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal post interaction message: %w", err)
+	}
+
+	kafkaMsg := kafka.Message{
+		Key:   []byte(postID.String()), // key=postID 保序 + 热点分片
+		Value: value,
+	}
+	if err := postInteractionWriter.WriteMessages(context.Background(), kafkaMsg); err != nil {
+		return fmt.Errorf("failed to write post interaction message: %w", err)
+	}
+
+	logger.Log.Debug(fmt.Sprintf("Published post interaction: user=%s, post=%s, action=%s, weight=%d",
+		userID.String(), postID.String(), action, weight))
+	return nil
+}
+
+// ClosePostInteractionProducer 关闭帖子互动事件 Producer。
+func ClosePostInteractionProducer() error {
+	if postInteractionWriter != nil {
+		if err := postInteractionWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close post interaction writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("Post interaction producer closed")
 	}
 	return nil
 }

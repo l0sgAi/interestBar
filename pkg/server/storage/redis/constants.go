@@ -42,10 +42,12 @@ const (
 	// 包含字段：id, username, email, phone, google_id, github_id, avatar_url, gender, birthdate, status, role, deleted, create_time, update_time
 	UserInfoPrefix = "user:info:"
 
-	// UserJoinedCirclesPrefix 用户已加入圈子ID列表缓存key前缀
-	// 完整key格式: user_joined_circles:{user_id}
-	// 存储内容：[]uuid.UUID 圈子ID列表，按加入时间倒序排列
-	UserJoinedCirclesPrefix = "user_joined_circles:"
+	// UserJoinedCirclesPrefix 用户已加入圈子 ZSET 缓存key前缀
+	// 完整key格式: circle:joined:{user_id}
+	// ZSET: member=circle_id, score=加入时间 Unix 毫秒，倒序（最近加入在前）
+	// 注：前缀从 user_joined_circles: 改为 circle:joined:，避免旧 string 类型 key
+	// 残留导致 ZSET 操作 WRONGTYPE（旧 key 任其 24h TTL 过期）。
+	UserJoinedCirclesPrefix = "circle:joined:"
 )
 
 // CircleBaseInfo 圈子基础信息（不含统计信息）
@@ -112,6 +114,72 @@ func GetPostStatsKey(postID uuid.UUID) string {
 	return PostStatsPrefix + postID.String()
 }
 
+// PostHotCapPrefix 帖子热度上限计数器 Hash key 前缀
+// 完整key格式: post:hotcap:{post_id}
+// 包含字段: comment, comment_like（已累积的 hot 贡献值，用于 clamp per-post 上限）
+// 仅评论 / 评论点赞两个维度有上限；点赞 / 收藏 / 分享无上限不写此 Hash。
+const PostHotCapPrefix = "post:hotcap:"
+
+// CircleHotPrefix 圈子热度增量累加器 key 前缀
+// 完整key格式: circle:hot:{circle_id}
+// string(int)：累加帖子 hot 的 fan-out Δ；CircleHotSyncer 定时 GETDEL 读后清零并落库。TTL 50h。
+// 与 circle:stats:{circle_id} 的 hot 字段区别：本 key 是 Δ 累加器（待落库），stats hash 是读路径热值。
+const CircleHotPrefix = "circle:hot:"
+
+// GetPostHotCapKey 获取帖子热度上限计数器 Hash 的完整 key。
+func GetPostHotCapKey(postID uuid.UUID) string {
+	return PostHotCapPrefix + postID.String()
+}
+
+// GetCircleHotKey 获取圈子热度增量累加器的完整 key。
+func GetCircleHotKey(circleID uuid.UUID) string {
+	return CircleHotPrefix + circleID.String()
+}
+
+// CFItemPrefix item-based 协同过滤「相似帖」ZSET key 前缀。
+// 完整 key 格式: cf:item:{post_id}
+// ZSET: member=相似 post_id(uuid 字符串), score=相似度(0..1]
+// 由 ItemCFSyncer 夜级全量计算写入；TTL zset_ttl_hours(默认 48h)。
+// 召回时：用户 seed 帖(点赞/收藏) → ZREVRANGE cf:item:{seed} 取 top 相似帖。
+const CFItemPrefix = "cf:item:"
+
+// GetCFItemKey 获取帖子协同过滤相似帖 ZSET 的完整 key。
+func GetCFItemKey(postID uuid.UUID) string {
+	return CFItemPrefix + postID.String()
+}
+
+// RecommendFeedPrefix 推荐流候选池 LIST key 前缀。
+// 完整 key 格式: feed:recommend:{user_id}
+// LIST: 按推荐序 RPUSH 的 post_id(uuid 字符串)；LRANGE offset 分页；TTL ttl_minutes(默认 30)。
+// 池 miss/过期时由 RecommendService 触发重建（5 路召回 + 交错合并）。
+const RecommendFeedPrefix = "feed:recommend:"
+
+// RecommendFeedTokenPrefix 推荐流候选池版本 token key 前缀。
+// 完整 key: feed:recommend:token:{user_id}（string），与池同 TTL。
+// 客户端翻页回传 token，服务端比对：不一致 → 池已重建 → 回 offset=0（防翻页错位）。
+const RecommendFeedTokenPrefix = "feed:recommend:token:"
+
+// GetRecommendFeedKey 获取推荐流候选池 LIST 的完整 key。
+func GetRecommendFeedKey(userID uuid.UUID) string {
+	return RecommendFeedPrefix + userID.String()
+}
+
+// GetRecommendFeedTokenKey 获取推荐流候选池版本 token 的完整 key。
+func GetRecommendFeedTokenKey(userID uuid.UUID) string {
+	return RecommendFeedTokenPrefix + userID.String()
+}
+
+// UserInterestCirclesPrefix 用户「行为兴趣圈子」SET key 前缀。
+// 完整 key 格式: user:interest_circles:{user_id}
+// SET: 由用户点赞/收藏的 seed 帖子反查得到的 circle_id 集合（C3 行为圈子召回用）。
+// miss 时从 DB 反查并落缓存；TTL interest_circles_ttl_minutes(默认 120)。读路径减去 joined circles。
+const UserInterestCirclesPrefix = "user:interest_circles:"
+
+// GetUserInterestCirclesKey 获取用户行为兴趣圈子 SET 的完整 key。
+func GetUserInterestCirclesKey(userID uuid.UUID) string {
+	return UserInterestCirclesPrefix + userID.String()
+}
+
 // GetPostViewDedupeKey 获取帖子浏览去重 key
 func GetPostViewDedupeKey(postID, userID uuid.UUID) string {
 	return fmt.Sprintf("%s%s:%s", PostViewDedupePrefix, postID.String(), userID.String())
@@ -150,6 +218,27 @@ func GetUserCommentLikeListKey(userID uuid.UUID) string {
 // GetUserPostLikeListKey 获取用户帖子点赞列表ZSET的完整key
 func GetUserPostLikeListKey(userID uuid.UUID) string {
 	return UserPostLikeListPrefix + userID.String()
+}
+
+// UserPostCollectListPrefix 用户帖子收藏列表ZSET key前缀
+// 完整key格式: user:collect:posts:{user_id}
+// Score: 最后访问时间戳(Unix毫秒), Member: postId(UUID字符串)
+const UserPostCollectListPrefix = "user:collect:posts:"
+
+// GetUserPostCollectListKey 获取用户帖子收藏列表ZSET的完整key
+func GetUserPostCollectListKey(userID uuid.UUID) string {
+	return UserPostCollectListPrefix + userID.String()
+}
+
+// UserPostViewListPrefix 用户浏览历史列表ZSET key前缀
+// 完整key格式: user:view:posts:{user_id}
+// Score: 最后访问时间戳(Unix毫秒), Member: postId(UUID字符串)
+// score 倒序即「最近浏览」顺序;cap 500(超限按最低 score 淘汰);TTL 复用 postStatsTTL。
+const UserPostViewListPrefix = "user:view:posts:"
+
+// GetUserPostViewListKey 获取用户浏览历史列表ZSET的完整key
+func GetUserPostViewListKey(userID uuid.UUID) string {
+	return UserPostViewListPrefix + userID.String()
 }
 
 // GetRegisterCodeKey 获取注册验证码缓存的完整key

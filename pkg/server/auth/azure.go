@@ -41,9 +41,9 @@ func GetAzureOAuthConfig() *oauth2.Config {
 	}
 }
 
-// GetAzureUser fetches user info from Microsoft Graph API using the access token
-func GetAzureUser(token *oauth2.Token) (*AzureUser, error) {
-	client := GetAzureOAuthConfig().Client(context.Background(), token)
+// GetAzureUser fetches user info from Microsoft Graph API using the access token.
+// client 由调用方传入（携带 OAuth 代理与超时配置）。
+func GetAzureUser(client *http.Client) (*AzureUser, error) {
 	resp, err := client.Get("https://graph.microsoft.com/v1.0/me")
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user info: %v", err)
@@ -64,8 +64,7 @@ func GetAzureUser(token *oauth2.Token) (*AzureUser, error) {
 
 // GetAzureProfilePhoto fetches the user's profile photo binary data from Microsoft Graph API.
 // Returns (nil, "", nil) if the user has no photo set (404).
-func GetAzureProfilePhoto(token *oauth2.Token) ([]byte, string, error) {
-	client := GetAzureOAuthConfig().Client(context.Background(), token)
+func GetAzureProfilePhoto(client *http.Client) ([]byte, string, error) {
 	resp, err := client.Get("https://graph.microsoft.com/v1.0/me/photo/$value")
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to fetch profile photo: %v", err)
@@ -103,7 +102,9 @@ func (p *AzureProvider) OAuthConfig() *oauth2.Config {
 }
 
 func (p *AzureProvider) FetchUser(ctx context.Context, token *oauth2.Token) (*OAuthUserInfo, error) {
-	au, err := GetAzureUser(token)
+	// ctx 已携带代理感知 client（由适配器注入）与超时；用它构造带 token 的 client。
+	client := p.OAuthConfig().Client(ctx, token)
+	au, err := GetAzureUser(client)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +115,7 @@ func (p *AzureProvider) FetchUser(ctx context.Context, token *oauth2.Token) (*OA
 	}
 
 	var avatarURL string
-	data, contentType, err := GetAzureProfilePhoto(token)
+	data, contentType, err := GetAzureProfilePhoto(client)
 	if err != nil {
 		logger.Log.Warn("failed to fetch Azure profile photo: " + err.Error())
 	} else if data != nil {

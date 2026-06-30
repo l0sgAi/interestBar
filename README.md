@@ -1,105 +1,141 @@
-# InterestBar
+# Qubar
 
-一个基于 Go 语言、Gin框架与各大中间件的兴趣社区后端，类似百度贴吧/Reddit 社区。
+一个基于 Go 语言、采用 DDD 领域驱动设计的现代化兴趣社区后端，类似百度贴吧/Reddit 社区。
 
-## 功能特性
+## ✨ 功能特性
 
-一个典型的线上社区，图文帖子平台，支持外链视频，后续再考虑原生支持视频。
-基本的项目架构为：用户-兴趣圈-帖子-评论/回复，支持兴趣圈权限管理，使用权限表控制。
+Qubar 是一个完整的兴趣社区平台，提供：
 
-## 技术特性
+- **兴趣圈（圈子）** - 用户可创建、加入不同主题的兴趣社区
+- **内容发布** - 支持图文帖子、多媒体上传
+- **评论互动** - 二级扁平化评论结构，支持回复和点赞
+- **用户系统** - 邮箱密码注册 + 多平台 OAuth 登录
+- **权限管理** - 圈主/管理员/成员三级 RBAC 权限
+- **全文搜索** - 支持用户、圈子、帖子的搜索引擎
+- **异步统计** - 高并发场景下的 Write-Behind 缓存策略
 
-### 🔐 认证与授权
+## 🛠 技术栈
 
-- **Google OAuth 2.0 集成** - 支持第三方快速登录
-- **Sa-Token 框架** - 轻量级权限认证框架
-- **Token 会话管理** - 支持 3 天有效期，30 分钟活跃超时
-- **基于角色的访问控制 (RBAC)** - 灵活的权限管理
-- **CORS 支持** - 跨域请求安全控制
+### 核心框架
 
-### 👤 用户管理
+- **[CloudWeGo Hertz](https://github.com/cloudwego/hertz)** - 高性能 HTTP 框架（替代原 Gin）
+- **[GORM](https://gorm.io/)** - ORM 数据库操作
+- **[Sa-Token](https://github.com/dromara/sa-token)** - 轻量级权限认证框架
+- **[Viper](https://github.com/spf13/viper)** - 配置管理
+- **[Zap](https://github.com/uber-go/zap)** - 高性能日志库
 
-- 用户注册与登录（Google OAuth）
-- 用户资料管理（用户名、邮箱、手机、头像等）
-- 多第三方登录平台支持（Google 已实现，X/Twitter 和 GitHub 预留）
-- 软删除功能
-- Redis 缓存优化用户信息查询
+### 数据存储与中间件
 
-### 🚀 API 设计
+| 组件 | 版本 | 用途 |
+|------|------|------|
+| **PostgreSQL** | 18 | 主数据库，UUIDv7 主键，JSONB 支持 |
+| **Redis** | 7+ | 缓存与会话存储，Lua 脚本原子操作 |
+| **Elasticsearch** | 8.x | 全文检索与实时索引同步 |
+| **Redpanda** | latest | Kafka 兼容的消息队列，异步统计聚合 |
+| **AWS S3** | - | 对象存储（图片/视频），支持预签名 URL |
+| **Nacos** | 3.x | 配置中心，支持多环境管理 |
+| **Mailtrap** | - | 邮件发送服务（验证码/通知） |
 
-- RESTful API 风格
-- 统一的响应格式与自定义状态码
-- 分页支持
-- 完善的错误处理机制
-- 中间件支持（认证、CORS、CSRF 保护、日志记录）
+### 认证方式
 
-## 技术栈
+- Google OAuth 2.0
+- GitHub OAuth
+- Azure AD OAuth
+- 邮箱密码 + 验证码注册登录
 
-### 核心框架与库
+## 🏗 架构设计
 
-- **[Gin](https://github.com/gin-gonic/gin)** v1.11.0 - HTTP Web 框架
-- **[GORM](https://github.com/go-gorm/gorm)** v1.31.1 - ORM 数据库操作
-- **[Sa-Token-Go](https://github.com/izhangzhihao/sa-token-go)** v0.1.7 - 认证鉴权框架
-- **[PostgreSQL Driver](https://github.com/lib/pq)** v1.6.0 - PostgreSQL 数据库驱动
-- **[Viper](https://github.com/spf13/viper)** v1.21.0 - 配置管理
-- **[Zap](https://github.com/uber-go/zap)** v1.27.1 - 高性能日志库
-- **[OAuth2](https://github.com/golang/oauth2)** v0.34.0 - OAuth 2.0 客户端实现
-- [**sa-token-go**](https://github.com/click33/sa-token-go)v0.1.7- 鉴权框架
+### DDD 领域驱动设计
 
-### 数据存储
+项目采用**模块化单体**架构，按领域边界划分包，未来可平滑拆分为微服务：
 
-- **PostgreSQL** - 主数据库
-- **Redis** - 缓存与会话存储
-- **Elasticsearch** - 主页帖子推送与全文检索
-
-## 项目结构
-
-```bash
-interestBar/
-├── cmd/                    # 应用入口
-│   ├── main.go             # 主程序启动文件
-│   └── apps/
-│       └── server.go       # 服务初始化与配置
-├── pkg/                    # 内部包
-│   ├── conf/               # 配置管理 (Viper)
-│   ├── logger/             # 日志配置 (Zap)
-│   ├── server/             # 核心业务逻辑
-│   │   ├── auth/           # 认证模块
-│   │   │   ├── google.go   # Google OAuth 集成
-│   │   │   ├── sa_token_init.go
-│   │   │   └── acl/        # 访问控制列表
-│   │   ├── controller/     # API 控制器
-│   │   ├── model/          # 数据模型
-│   │   ├── response/       # HTTP 响应工具
-│   │   ├── router/         # 路由定义与中间件
-│   │   │   └── middleware/ # 中间件（认证、缓存、CORS、CSRF、日志）
-│   │   └── storage/        # 存储层
-│   │       ├── db/pgsql/   # PostgreSQL 连接
-│   │       └── redis/      # Redis 缓存
-│   └── util/               # 工具函数
-├── configs/                # 配置文件
-│   └── config.yaml         # 主配置文件
-├── docs/                   # 文档
-│   ├── db.md              # 数据库表结构
-│   ├── response_summary.md # HTTP 响应系统说明
-│   └── response_usage.md  # 响应使用指南
-├── go.mod                  # Go 模块依赖
-└── go.sum                  # 依赖校验和
+```
+pkg/
+├── composition/          # 编排层：装配依赖、注册路由、跨领域 Facade 桥接
+│   ├── hertzadapter/    # Hertz 框架适配 → 框架无关路由抽象
+│   └── middleware/      # 全局中间件（CORS、日志）
+│
+├── domains/             # 领域层（每个领域独立自治）
+│   ├── auth/            # 认证领域（登录、注册、OAuth）
+│   ├── user/            # 用户领域（资料、搜索）
+│   ├── category/        # 分类领域（圈子分类）
+│   ├── circle/          # 圈子领域（创建、成员、权限）
+│   ├── post/            # 帖子领域（发布、列表、详情）
+│   ├── comment/         # 评论领域（二级扁平化结构）
+│   ├── like/            # 点赞领域（原子操作 + 事件）
+│   └── storage/         # 存储领域（文件上传）
+│   └── [领域]/
+│       ├── application/ # 应用服务层：用例编排
+│       ├── domain/      # 领域层：模型、仓库接口、核心业务规则
+│       ├── infrastructure/ # 基础设施层：仓库实现、缓存、搜索、事件
+│       └── interfaces/http/ # 接口层：Handler、路由、DTO
+│
+├── shared/              # 共享内核（领域无关）
+│   ├── appctx/          # 上下文抽象
+│   ├── domain/          # 领域基类（BaseModel）
+│   ├── httputil/        # HTTP 响应工具
+│   └── routing/         # 框架无关路由抽象
+│
+├── conf/                # 配置加载（Nacos + 本地兜底）
+└── logger/              # 日志初始化
 ```
 
-## 快速开始
+### 关键设计决策
+
+1. **UUIDv7 主键** - 前 48 位为时间戳，字典序 = 时间序，天然支持 keyset 游标分页
+2. **框架无关路由** - 通过 `routing.RouterGroup` 抽象，领域代码不依赖 Hertz
+3. **跨领域 Facade** - 领域间通过接口调用，不直接耦合，拆分微服务时只需换实现
+4. **Write-Behind 缓存** - Redis 实时更新 + Redpanda 异步批量落库，应对高并发
+5. **二级扁平化评论** - `root_id` 标记层级，避免递归查询，支持高效分页
+
+## 📁 项目结构
+
+```
+qubar/
+├── cmd/
+│   ├── main.go           # 程序入口
+│   └── apps/
+│       └── server.go     # 服务初始化与资源编排
+│
+├── configs/
+│   ├── config.yaml       # 本地配置文件（Nacos 不可用时兜底）
+│   └── bootstrap.yaml    # Nacos 引导配置（地址、命名空间、分组）
+│
+├── docs/
+│   ├── db.md             # 数据库表结构（UUIDv7 主键版）
+│   ├── api-post-my.md    # API 文档
+│   └── email_verify_template.html
+│
+├── pkg/
+│   ├── composition/      # 编排层（见架构说明）
+│   ├── domains/          # 业务领域（见架构说明）
+│   ├── shared/           # 共享内核
+│   ├── conf/             # 配置管理
+│   ├── logger/           # 日志配置
+│   └── server/           # 遗留基础设施（逐步迁移中）
+│       ├── auth/         # OAuth Provider 实现
+│       ├── storage/      # DB/Redis/ES/Redpanda/S3 初始化
+│       └── utils/        # 工具函数
+│
+├── go.mod
+└── go.sum
+```
+
+## 🚀 快速开始
 
 ### 环境要求
 
 - Go 1.25.4+
-- PostgreSQL 18
-- Redis 8.2
+- PostgreSQL 18（需启用 `uuidv7()` 函数）
+- Redis 7+
+- Elasticsearch 8.x（可选，无则降级为 DB 搜索）
+- Redpanda（可选，无则统计仅走 Redis）
 
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/yourusername/interestBar.git
-cd interestBar
+git clone https://github.com/l0sgAi/qubar.git
+cd qubar
 ```
 
 ### 2. 安装依赖
@@ -110,184 +146,229 @@ go mod download
 
 ### 3. 配置数据库
 
-创建 PostgreSQL 数据库：
+创建数据库和 schema：
 
 ```sql
-CREATE DATABASE interestbar;
+CREATE DATABASE qubar;
+CREATE SCHEMA IF NOT EXISTS domains;
 ```
 
-数据库表结构请参考 [docs/db.md](docs/db.md)
+数据库表结构及种子数据请参考 [docs/db.md](docs/db.md)
 
-### 4. 配置 Redis
+### 4. 配置应用
 
-确保 Redis 服务已启动，并修改 `configs/config.yaml` 中的连接配置。
+#### 方式一：本地配置（快速开发）
 
-### 5. 配置应用
+编辑 `configs/config.yaml`，填入数据库、Redis 等连接信息：
 
-编辑 `configs/config.yaml` 文件，配置您的中间件配置信息，包括中间件地址、账号密码、oauth配置等。
+```yaml
+server:
+  port: 8888
+  mode: debug
 
-### 6. 运行应用
+pgsql:
+  path: 127.0.0.1
+  port: 5432
+  db_name: qubar
+  username: your_username
+  password: your_password
 
-应用配置默认从 **Nacos 配置中心**读取，通过环境变量 `APP_ENV` 区分开发/生产环境；Nacos 不可用时会自动回退到本地 `configs/config.yaml`。
-
-#### 前置准备
-
-1. 从模板创建本地引导配置并填入真实值（Nacos 地址、账号密码、命名空间 UUID）：
-
-   ```bash
-   cp configs/bootstrap.yaml.example configs/bootstrap.yaml
-   ```
-
-   > 注意：`namespace_id` 必须填 Nacos 控制台「命名空间」页的 **UUID**（而非名称 `qubar-dev`/`qubar-prod`）；`group` 需与 Nacos 中配置所属分组一致（模板默认 `QUBAR_GROUP`）。
-
-2. 确认 Nacos 中已在对应命名空间/分组下发布配置：Data ID `qubar-dev-conf` / `qubar-prod-conf`，类型选择 **YAML**。
-
-#### 运行（开发环境）
-
-```bash
-APP_ENV=dev go run cmd/main.go -c configs/config.yaml -b configs/bootstrap.yaml
+redis:
+  host: 127.0.0.1
+  port: 6379
+  db: 0
 ```
 
-#### 运行（生产环境）
+#### 方式二：Nacos 配置中心（生产推荐）
 
-```bash
-APP_ENV=prod go run cmd/main.go -c configs/config.yaml -b configs/bootstrap.yaml
+创建 `configs/bootstrap.yaml`：
+
+```yaml
+nacos:
+  endpoint: "your-nacos-address:8848"
+  namespace: "dev-namespace-uuid"
+  group: "QUBAR_GROUP"
+  data_id: "qubar-dev-conf"
+  username: "nacos"
+  password: "nacos"
 ```
 
-#### 编译后运行
+### 5. 运行应用
 
 ```bash
-go build -o interestBar cmd/main.go
-APP_ENV=dev ./interestBar -c configs/config.yaml -b configs/bootstrap.yaml
-```
-
-#### 离线 / 不使用 Nacos
-
-不创建 `configs/bootstrap.yaml`（或显式传 `-b ""`）时，应用自动回退到本地 `configs/config.yaml`：
-
-```bash
+# 本地配置启动
 go run cmd/main.go -c configs/config.yaml -b ""
+
+# Nacos 配置启动
+go run cmd/main.go -c configs/config.yaml -b configs/bootstrap.yaml
 ```
 
-服务将在 <http://localhost:8888> 启动
+服务将在 `http://localhost:8888` 启动
 
-## API 端点
+## 🌐 API 端点
 
-### 健康检查
+### 认证（无需登录）
 
-- `GET /health` - 服务健康检查
-- `GET /hello` - Hello World 测试端点
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/auth/google/login` | Google OAuth 登录跳转 |
+| `GET` | `/auth/google/callback` | Google OAuth 回调 |
+| `GET` | `/auth/github/login` | GitHub OAuth 登录 |
+| `GET` | `/auth/github/callback` | GitHub OAuth 回调 |
+| `GET` | `/auth/azure/login` | Azure AD OAuth 登录 |
+| `GET` | `/auth/azure/callback` | Azure AD OAuth 回调 |
+| `POST` | `/auth/register/send-code` | 发送注册验证码 |
+| `POST` | `/auth/register/verify` | 校验验证码 |
+| `POST` | `/auth/register/complete` | 完成注册 |
+| `POST` | `/auth/login` | 邮箱密码登录 |
 
-### 认证相关
+### 用户（需登录）
 
-- `GET /auth/google/login` - 跳转到 Google OAuth 登录
-- `GET /auth/google/callback` - Google OAuth 回调处理
-- `POST /auth/logout` - 用户登出
-- `GET /auth/me` - 获取当前登录用户信息
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/user/get` | 获取当前登录用户 |
+| `PUT` | `/user/update` | 修改用户资料 |
+| `GET` | `/user/search` | 搜索用户 |
+| `GET` | `/user/detail/:id` | 获取用户详情 |
+| `POST` | `/auth/logout` | 注销当前 Token |
 
-### 用户管理
+### 分类（需登录）
 
-- `GET /user/get` - 获取用户资料（需认证）
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/category/get` | 获取全部分类列表 |
 
-详细的 API 文档请参考代码中的 [pkg/server/controller/](pkg/server/controller/) 目录。
+### 圈子（需登录）
 
-## 认证流程
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/circle/create` | 创建新圈子 |
+| `GET` | `/circle/list` | 搜索/浏览圈子列表 |
+| `GET` | `/circle/detail/:id` | 获取圈子详情 |
+| `GET` | `/circle/my` | 我加入的圈子 |
+| `POST` | `/circle/join` | 申请加入圈子 |
+| `POST` | `/circle/leave` | 退出圈子 |
+| `GET` | `/circle/posts` | 圈内帖子列表 |
 
-1. 用户点击 Google 登录
-2. 重定向到 Google OAuth 授权页面
-3. 用户授权后，回调创建或更新用户信息
-4. Sa-Token 生成认证令牌
-5. 用户被重定向到前端并携带令牌
-6. 后续请求在请求头中携带令牌进行认证
+### 帖子（需登录）
 
-请求头格式：
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/post/create` | 发布新帖子 |
+| `GET` | `/post/list` | 搜索帖子列表 |
+| `GET` | `/post/my` | 我的帖子 |
+| `GET` | `/post/user/:user_id` | 指定用户的帖子 |
+| `GET` | `/post/detail/:id` | 帖子详情 |
+
+### 评论（需登录）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/comment/create` | 发布评论/回复 |
+| `GET` | `/comment/list` | 顶层评论列表 |
+| `GET` | `/comment/replies` | 楼层内回复列表 |
+| `GET` | `/comment/detail/:id` | 单条评论详情 |
+
+### 点赞（需登录）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/like/toggle` | 点赞/取消点赞（帖子/评论通用） |
+
+### 文件上传（需登录）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/upload/image` | 单张图片上传 |
+| `POST` | `/upload/post-images` | 帖子多图上传 |
+| `POST` | `/upload/video` | 视频上传 |
+| `DELETE` | `/upload/delete` | 删除文件 |
+| `GET` | `/upload/presign` | 获取预签名上传 URL |
+
+### 请求头
+
+所有需登录接口请在请求头中携带：
 
 ```bash
 satoken: your-token-here
 ```
 
-## 响应系统
+## 🔐 安全特性
 
-项目实现了统一的 HTTP 响应系统，包含：
+- ✅ CORS 跨域保护（可配置允许的源）
+- ✅ Sa-Token 会话管理（3 天有效期，30 分钟活跃超时）
+- ✅ RBAC 基于角色的访问控制
+- ✅ 邮箱验证码注册
+- ✅ 逻辑删除数据保护
+- ✅ S3 预签名 URL（无需暴露凭证）
 
-- 自定义状态码（200, 400-429, 500-503）
-- 预定义错误消息（40+ 条）
-- 一致的 JSON 响应格式
-- 分页支持
-- 类型安全的响应函数
+## ⚡ 性能优化
 
-响应格式示例：
+1. **Redis 多级缓存** - 用户资料、圈子信息、统计数据分层缓存
+2. **Lua 原子操作** - 点赞、浏览计数通过 Lua 脚本保证原子性
+3. **Write-Behind 策略** - 统计更新先写 Redis，Redpanda 异步批量落库
+4. **覆盖索引优化** - PostgreSQL 精心设计的索引避免回表
+5. **ES 全文检索** - 热门搜索走 Elasticsearch，冷数据走 DB
+6. **JSONB 字段** - 多媒体、扩展信息用 PostgreSQL JSONB 存储
 
-```json
-{
-  "code": 200,
-  "message": "success",
-  "data": {...}
-}
+## 📝 开发指南
+
+### 添加新领域
+
+1. 在 `pkg/domains/` 下创建领域目录，遵循 `application/domain/infrastructure/interfaces` 分层
+2. 在 `pkg/composition/` 中注册依赖装配和路由
+3. 如需跨领域调用，在 `composition/facade_bridges.go` 中添加桥接实现
+
+### 添加新 OAuth Provider
+
+1. 在 `pkg/server/auth/` 中添加 Provider 实现（参考 `google.go`）
+2. 在 `provider.go` 中注册
+3. 更新 `auth` 领域路由
+
+### 配置说明
+
+关键配置项说明：
+
+```yaml
+# CORS 允许的源
+cors:
+  allowed_origins:
+    - "https://qubar.site"
+    - "http://localhost:*"
+
+# Sa-Token 会话配置
+sa_token:
+  token_name: "satoken"
+  timeout: 259200        # 3 天（秒）
+  active_timeout: 1800   # 30 分钟活跃检测
+  is_concurrent: true    # 允许并发登录
+
+# 文件上传大小限制（代码中配置 50MB）
+# server.WithMaxRequestBodySize(50 << 20)
 ```
 
-详细说明请参考 [docs/response_summary.md](docs/response_summary.md) 和 [docs/response_usage.md](docs/response_usage.md)
+## 🧪 测试
 
-## 安全特性
+```bash
+# 运行单元测试
+go test ./pkg/...
 
-- ✅ CORS 跨域保护
-- ✅ CSRF 攻击防护
-- ✅ Token 认证机制
-- ✅ 基于角色的访问控制
-- ✅ 安全会话管理
-- ✅ 软删除数据保护
+# 运行特定包测试
+go test ./pkg/composition/middleware/...
+```
 
-## 开发
-
-### 代码规范
-
-项目遵循 Go 语言常规代码规范：
-
-- 使用 `gofmt` 格式化代码
-- 遵循 Go 官方注释规范
-- 使用有意义的变量和函数命名
-
-### 添加新的 OAuth 提供商
-
-1. 在 `pkg/server/auth/` 中创建新的 OAuth 文件（如 `github.go`）
-2. 参照 `google.go` 实现 OAuth 流程
-3. 在路由中添加相应的端点
-4. 更新数据库用户表的 OAuth ID 字段
-
-### 扩展用户模型
-
-编辑 `pkg/server/model/user.go` 和数据库表结构，添加新字段。
-
-## 配置说明
-
-### CORS 配置
-
-允许的前端源（在 `config.yaml` 中配置），如：
-
-- `https://l0sgai.github.io`
-- `https://l0sgai.github.io/interestBar-frontend/`
-- `http://localhost:*`
-- `http://127.0.0.1:*`
-
-### 缓存策略
-
-- 使用 Redis 缓存用户信息
-- 缓存过期时间：30 分钟
-- 采用 Cache-Aside 模式
-- 支持缓存失效
-
-## 许可证
+## 📄 许可证
 
 [MIT License](LICENSE)
 
-## 贡献
+## 🤝 贡献
 
 欢迎提交 Issue 和 Pull Request！
 
-## 联系方式
+## 📧 联系方式
 
 如有问题或建议，请提交 Issue 或联系维护者。
 
 ---
 
-**注意**: 首次运行前请确保正确配置 `config.yaml` 中的所有必要参数，特别是 OAuth 凭证和数据库连接信息。
+**注意**: 首次运行前请确保正确配置所有必要参数，特别是数据库连接和 OAuth 凭证。

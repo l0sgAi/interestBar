@@ -5,11 +5,16 @@ import (
 	"interestBar/pkg/conf"
 	"interestBar/pkg/logger"
 
-	sagin "github.com/click33/sa-token-go/integrations/gin"
-	"github.com/click33/sa-token-go/storage/redis"
+	sahertz "github.com/sa-tokens/sa-token-go/integrations/hertz"
+	"github.com/sa-tokens/sa-token-go/storage/redis"
 )
 
-// InitSaToken 初始化 Sa-Token-Go 框架
+// InitSaToken 初始化 Sa-Token-Go 框架。
+//
+// gin→hertz 迁移：从 integrations/gin（v0.1.7）切换到 integrations/hertz（v0.2.2）。
+// 顶层函数 DefaultConfig/NewManager/SetManager/GetManager 签名在 gin/hertz 集成包里一致。
+// stputil API（IsLogin/GetLoginID/Login/Logout/GetSession）在 v0.2.x 无 breaking change，
+// composition.RequireLogin 鉴权逻辑零改动。
 func InitSaToken() error {
 	// 创建 Redis 存储 (使用完整的 Redis URL)
 	var redisURL string
@@ -38,7 +43,7 @@ func InitSaToken() error {
 	}
 
 	// 使用配置文件中的 Sa-Token 配置
-	config := sagin.DefaultConfig()
+	config := sahertz.DefaultConfig()
 
 	// 如果配置文件中有 Sa-Token 配置,则使用配置文件的值
 	if conf.Config.SaToken.TokenName != "" {
@@ -59,10 +64,10 @@ func InitSaToken() error {
 	config.IsLog = true
 
 	// 创建 Sa-Token 管理器
-	manager := sagin.NewManager(storage, config)
+	manager := sahertz.NewManager(storage, config)
 
 	// 设置全局管理器
-	sagin.SetManager(manager)
+	sahertz.SetManager(manager)
 
 	logger.Log.Info("Sa-Token initialized successfully")
 	logger.Log.Info(fmt.Sprintf("Token timeout: %d seconds", config.Timeout))
@@ -73,8 +78,8 @@ func InitSaToken() error {
 
 // CloseSaToken 关闭 Sa-Token 连接
 func CloseSaToken() error {
-	if sagin.GetManager() != nil && sagin.GetManager().GetStorage() != nil {
-		return sagin.GetManager().GetStorage().(interface {
+	if sahertz.GetManager() != nil && sahertz.GetManager().GetStorage() != nil {
+		return sahertz.GetManager().GetStorage().(interface {
 			Close() error
 		}).Close()
 	}
