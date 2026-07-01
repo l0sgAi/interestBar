@@ -38,10 +38,10 @@ type TrendingAggResult struct {
 
 // AggregateTrending 热点榜聚合（3 维度 × 2 窗口统一入口）。
 //
-//	dimension = "post"   → hits 按 hot desc（窗口内最热帖）
-//	dimension = "circle" → terms on circle_id + 子聚合 sum(hot)（窗口内 Σhot 最高的圈子）
-//	dimension = "user"   → terms on user_id  + 子聚合 sum(hot)（窗口内 Σhot 最高的用户）
-//	window    = "24h" | "7d"
+//	dimension = "post"   → hits 按 hot desc（最热帖）
+//	dimension = "circle" → terms on circle_id + 子聚合 sum(hot)（Σhot 最高的圈子）
+//	dimension = "user"   → terms on user_id  + 子聚合 sum(hot)（Σhot 最高的用户）
+//	window    = "24h" | "7d" | ""（空串=无窗口，兜底用全局热门，见 docs/trending-fallback-design.md）
 //	size      = 入榜条数（job 传 top_n，如 100）
 //
 // 返回有序 TrendingScoredItem（score 降序）。
@@ -50,15 +50,19 @@ func AggregateTrending(dimension, window string, size int) (*TrendingAggResult, 
 		size = trendingTermsSize
 	}
 
-	windowGTE, ok := trendingWindowGTE(window)
-	if !ok {
-		return nil, fmt.Errorf("unsupported trending window: %q", window)
-	}
-
 	filter := []map[string]interface{}{
 		{"term": map[string]interface{}{"deleted": 0}},
 		{"term": map[string]interface{}{"status": 1}},
-		{"range": map[string]interface{}{"create_time": map[string]interface{}{"gte": windowGTE}}},
+	}
+	// 仅当指定窗口才附加 range create_time；window="" 表示无窗口（全局兜底）。
+	if window != "" {
+		windowGTE, ok := trendingWindowGTE(window)
+		if !ok {
+			return nil, fmt.Errorf("unsupported trending window: %q", window)
+		}
+		filter = append(filter, map[string]interface{}{
+			"range": map[string]interface{}{"create_time": map[string]interface{}{"gte": windowGTE}},
+		})
 	}
 
 	var searchQuery map[string]interface{}

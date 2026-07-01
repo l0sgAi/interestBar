@@ -92,6 +92,9 @@ func (s *TrendingRankSyncer) flush() {
 }
 
 // syncOne 跑一次聚合 + 覆盖写。ES 失败本轮跳过，保留上轮 ZSET（best-effort 降级）。
+//
+// 兜底（docs/trending-fallback-design.md §六）：窗口聚合为空时，追加一次无窗口聚合（全局热门），
+// 用其结果填充同一个 ZSET。仅空才兜底——窗口有数据时不受影响，ZSET 永远是「纯窗口」或「纯兜底」之一。
 func (s *TrendingRankSyncer) syncOne(dimension, window string) error {
 	ctx := context.Background()
 	topN := conf.Config.Trending.TopN
@@ -99,26 +102,41 @@ func (s *TrendingRankSyncer) syncOne(dimension, window string) error {
 		topN = 100
 	}
 
+	// ① 窗口聚合
 	agg, err := elasticsearch.AggregateTrending(dimension, window, topN)
 	if err != nil {
 		return err
 	}
-	if len(agg.Items) == 0 {
-		return nil // 本轮无数据，不覆盖（保留上轮榜单，避免空榜刷掉旧数据）
+	items := toScoredIDs(agg.Items)
+
+	// ② 窗口为空 → 兜底：无窗口聚合（全局热门）
+	if len(items) == 0 {
+		fbAgg, fbErr := elasticsearch.AggregateTrending(dimension, "", topN)
+		if fbErr != nil {
+			// 兜底聚合失败：跳过本轮（保留上轮榜单），与窗口聚合错误的降级一致。
+			return fmt.Errorf("trending fallback (%s/%s) failed: %w", dimension, window, fbErr)
+		}
+		items = toScoredIDs(fbAgg.Items)
+		logger.Log.Info(fmt.Sprintf("trending %s/%s empty, fallback to global hot (%d items)", dimension, window, len(items)))
 	}
 
-	items := make([]domain.ScoredID, 0, len(agg.Items))
-	for _, it := range agg.Items {
+	// ③ 即使最终仍为空也写榜单：清空 ZSET + 更新 refreshed_at。
+	// 前端据此区分「跑过但确实无数据」（refreshed_at 有值、数组空）
+	// 与「从未跑过 / ES 故障降级」（refreshed_at=0）。
+	return rewriteTrendingBoard(ctx, dimension, window, items)
+}
+
+// toScoredIDs 把 ES 聚合的 ScoredItem 列表转为 domain.ScoredID（解析 uuid，跳过非法）。
+func toScoredIDs(raw []elasticsearch.TrendingScoredItem) []domain.ScoredID {
+	out := make([]domain.ScoredID, 0, len(raw))
+	for _, it := range raw {
 		id, parseErr := uuid.Parse(it.ID)
 		if parseErr != nil {
 			continue
 		}
-		items = append(items, domain.ScoredID{ID: id, Score: it.Score})
+		out = append(out, domain.ScoredID{ID: id, Score: it.Score})
 	}
-	if len(items) == 0 {
-		return nil
-	}
-	return rewriteTrendingBoard(ctx, dimension, window, items)
+	return out
 }
 
 // rewriteTrendingBoard 覆盖式重写 ZSET（DEL + ZADD + Set meta 原子）。
