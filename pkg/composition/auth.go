@@ -61,3 +61,32 @@ func RequireLogin(c appctx.AppContext) {
 //
 //	cat := rg.Group("/category", RequireLogin)
 var RequireLoginFn = RequireLogin
+
+// OptionalLogin 是"可选登录"中间件：有 token 则解析并写入 loginID，无 token/坏 token 静默放行。
+//
+// 用于"登录态可选"的读接口（如发现页 GET /discover）：
+//   - 登录用户 → 反气泡个性化（推气泡外内容）
+//   - 匿名用户 → 纯随机退化（新用户落地页场景）
+//
+// 与 RequireLogin 的区别：不会因缺/坏 token 返回 401；handler 用 requireUserIDAllowAnon 取 userID。
+func OptionalLogin(c appctx.AppContext) {
+	tokenName := conf.Config.SaToken.TokenName
+	token := c.Header(tokenName)
+	if token == "" {
+		return // 匿名放行
+	}
+
+	// 有 token 但无效（过期/伪造）→ 也按匿名处理，不 401（发现页容忍匿名）。
+	if !stputil.IsLogin(token) {
+		return
+	}
+
+	loginID, err := stputil.GetLoginID(token)
+	if err != nil {
+		return
+	}
+	c.SetLoginID(loginID)
+}
+
+// OptionalLoginFn 别名，语义更清晰，便于在路由注册时直接传入。
+var OptionalLoginFn = OptionalLogin

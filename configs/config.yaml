@@ -162,6 +162,16 @@ trending:
   default_size: 20                 # 接口默认 size
   max_size: 50                     # 接口 size 上限
 
+# 发现页配置（discover 领域 + DiscoverPoolSyncer）。设计见 docs/discover-design.md §九
+discover:
+  refresh_interval_minutes: 10     # DiscoverPoolSyncer 周期(分钟)
+  pool_size: 200                   # 每分区候选池大小(采样数)
+  min_pool_posts: 50               # 反气泡剔除后帖子最少保留数(不足则不排除重采)
+  ttl_minutes: 30                  # 候选池 + token TTL(分钟)
+  default_size: 20                 # 接口默认 size
+  max_size: 50                     # 接口 size 上限
+  seed_limit: 500                  # 反气泡读取已交互帖上限(liked/collected/viewed 各)
+
 # 安全相关配置
 security:
   # 密码哈希参数 (Argon2id, OWASP 2024 推荐 RFC 9106)

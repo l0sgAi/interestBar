@@ -207,5 +207,6 @@ func Run(configPath, bootstrapPath string) {
 	redpanda.StopCircleHotSyncer()
 	redpanda.StopItemCFSyncer()
 	redpanda.StopTrendingSyncer()
+	redpanda.StopDiscoverSyncer()
 	logger.Log.Info("Server shutdown complete")
 }
