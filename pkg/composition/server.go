@@ -18,6 +18,9 @@ import (
 	commentapp "interestBar/pkg/domains/comment/application"
 	commentinfra "interestBar/pkg/domains/comment/infrastructure"
 	commenthttp "interestBar/pkg/domains/comment/interfaces/http"
+	discoverapp "interestBar/pkg/domains/discover/application"
+	discoverinfra "interestBar/pkg/domains/discover/infrastructure"
+	discoverhttp "interestBar/pkg/domains/discover/interfaces/http"
 	historyapp "interestBar/pkg/domains/history/application"
 	historyinfra "interestBar/pkg/domains/history/infrastructure"
 	historyhttp "interestBar/pkg/domains/history/interfaces/http"
@@ -31,12 +34,16 @@ import (
 	recommendinfra "interestBar/pkg/domains/recommend/infrastructure"
 	recommendhttp "interestBar/pkg/domains/recommend/interfaces/http"
 	storageapp "interestBar/pkg/domains/storage/application"
+	trendingapp "interestBar/pkg/domains/trending/application"
+	trendinginfra "interestBar/pkg/domains/trending/infrastructure"
+	trendinghttp "interestBar/pkg/domains/trending/interfaces/http"
 	storageinfra "interestBar/pkg/domains/storage/infrastructure"
 	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
 	userapp "interestBar/pkg/domains/user/application"
 	userinfra "interestBar/pkg/domains/user/infrastructure"
 	userhttp "interestBar/pkg/domains/user/interfaces/http"
 	"interestBar/pkg/logger"
+	"interestBar/pkg/server/storage/redpanda"
 	"interestBar/pkg/shared/routing"
 )
 
@@ -99,6 +106,13 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	// recommend 需要 post（hydrate + circle_id 反查）+ circle（joined IDs），均为只读消费者，无反向注入。
 	recommendSvc := newRecommendService(postSvc, circleSvc)
 
+	// trending 需要 post（hydrate + 交互态）+ circle（GetByIDs）+ user（GetBriefs），均为只读消费者。
+	trendingSvc := newTrendingService(postSvc, circleRepo, userFacade)
+
+	// discover 需要 post（hydrate + 交互态）+ circle（GetByIDs + joined IDs）+ seed（反气泡已交互帖），
+	// 均为只读消费者。syncer 复用其 RebuildPool（反气泡重建逻辑）。
+	discoverSvc := newDiscoverService(postSvc, circleRepo, circleSvc)
+
 	// 注册路由
 	registerCategory(root, deps, authCheck)
 	registerStorage(root, deps, authCheck)
@@ -111,6 +125,11 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerCollect(root, collectSvc, authCheck)
 	registerHistory(root, historySvc, authCheck)
 	registerRecommend(root, recommendSvc, authCheck)
+	registerTrending(root, trendingSvc, authCheck)
+	registerDiscover(root, discoverSvc, authCheck)
+
+	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
+	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
 }
 
 // registerCategory 装配 category 领域。
@@ -194,6 +213,48 @@ func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.Circle
 // registerRecommend 装配 recommend 领域。
 func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendService, authCheck routing.HandlerFunc) {
 	recommendhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// newTrendingService 构造 TrendingService。
+//
+// boardStore 为 trending 同域 infra（直构，走全局 Redis 客户端）；
+// hydrator/checker/circle/user 为跨域桥接器（包 post/circle/user service + redispkg）。
+func newTrendingService(postSvc postapp.PostService, circleRepo circledomain.CircleRepository, userFacade userapp.UserFacade) trendingapp.TrendingService {
+	return trendingapp.NewTrendingService(
+		trendinginfra.NewBoardStore(),              // BoardStore
+		&trendingPostHydrator{delegate: postSvc},   // PostHydrator
+		&trendingInteractionChecker{},              // InteractionChecker
+		&trendingCircleLookup{repo: circleRepo},    // CircleLookup
+		&trendingUserLookup{delegate: userFacade},  // UserLookup
+	)
+}
+
+// registerTrending 装配 trending 领域。
+func registerTrending(root routing.RouterGroup, svc trendingapp.TrendingService, authCheck routing.HandlerFunc) {
+	trendinghttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// newDiscoverService 构造 DiscoverService。
+//
+// pool 为 discover 同域 infra（直构，走全局 Redis 客户端）；
+// hydrator/checker/circle/seed/joinedCircles 为跨域桥接器（包 post/circle service + redispkg）。
+func newDiscoverService(postSvc postapp.PostService, circleRepo circledomain.CircleRepository, circleSvc circleapp.CircleService) discoverapp.DiscoverService {
+	return discoverapp.NewDiscoverService(
+		discoverinfra.NewDiscoverPoolStore(),        // DiscoverPoolStore
+		&discoverPostHydrator{delegate: postSvc},    // PostHydrator（复用 trending/recommend 同款桥接）
+		&discoverInteractionChecker{},              // InteractionChecker（stateless，直接调 redispkg）
+		&discoverCircleLookup{repo: circleRepo},    // CircleLookup（复用 trending 同款桥接）
+		&discoverSeedReader{},                      // SeedReader（直接调 redispkg，同 recommend infra）
+		&discoverJoinedCircleLookup{delegate: circleSvc}, // JoinedCircleLookup（复用 recommend 同款桥接）
+	)
+}
+
+// registerDiscover 装配 discover 领域。
+//
+// discover 允许匿名访问（新用户落地页场景）：登录→反气泡个性化，匿名→纯随机退化。
+// 故 authCheck 用 OptionalLogin（有 token 解析、无/坏 token 放行），而非全局 RequireLogin。
+func registerDiscover(root routing.RouterGroup, svc discoverapp.DiscoverService, _ /*authCheck*/ routing.HandlerFunc) {
+	discoverhttp.RegisterRoutes(root, svc, OptionalLoginFn)
 }
 
 // ===== Service 构造函数 =====
