@@ -6,6 +6,7 @@ import "errors"
 var (
 	errInvalidCredentials            = errors.New("invalid credentials")
 	errAccountDisabled               = errors.New("account has been disabled")
+	errAccountNotFound               = errors.New("account not found")
 	errInvalidEmail                  = errors.New("invalid email format")
 	errEmailAlreadyExists            = errors.New("email already registered")
 	errRateLimitExceeded             = errors.New("rate limit exceeded")
@@ -21,6 +22,7 @@ var (
 // 错误判断函数（供 handler 层使用）。
 func IsInvalidCredentialsErr(err error) bool   { return errors.Is(err, errInvalidCredentials) }
 func IsAccountDisabledErr(err error) bool      { return errors.Is(err, errAccountDisabled) }
+func IsAccountNotFoundErr(err error) bool      { return errors.Is(err, errAccountNotFound) }
 func IsInvalidEmailErr(err error) bool         { return errors.Is(err, errInvalidEmail) }
 func IsEmailAlreadyExistsErr(err error) bool   { return errors.Is(err, errEmailAlreadyExists) }
 func IsRateLimitExceededErr(err error) bool    { return errors.Is(err, errRateLimitExceeded) }

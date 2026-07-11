@@ -131,6 +131,72 @@ func (h *Handler) CompleteRegistration(c appctx.AppContext) {
 	})
 }
 
+// sendPwdCodeReq 发送找回密码验证码请求。
+type sendPwdCodeReq struct {
+	Email string `json:"email" binding:"required"`
+	Lang  string `json:"lang"`
+}
+
+// SendPasswordResetCode POST /auth/password/send-code
+func (h *Handler) SendPasswordResetCode(c appctx.AppContext) {
+	var req sendPwdCodeReq
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, httputil.MsgMissingParameter)
+		return
+	}
+
+	if err := h.svc.SendPasswordResetCode(c, application.SendCodeInput{Email: req.Email, Lang: req.Lang}); err != nil {
+		writeAuthError(c, err)
+		return
+	}
+	httputil.Success(c, nil)
+}
+
+// verifyPwdCodeReq 校验找回密码验证码请求。
+type verifyPwdCodeReq struct {
+	Email string `json:"email" binding:"required"`
+	Code  string `json:"code" binding:"required"`
+}
+
+// VerifyPasswordResetCode POST /auth/password/verify
+func (h *Handler) VerifyPasswordResetCode(c appctx.AppContext) {
+	var req verifyPwdCodeReq
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, httputil.MsgMissingParameter)
+		return
+	}
+
+	if err := h.svc.VerifyPasswordResetCode(c, application.VerifyCodeInput{Email: req.Email, Code: req.Code}); err != nil {
+		writeAuthError(c, err)
+		return
+	}
+	httputil.Success(c, nil)
+}
+
+// resetPasswordReq 重置密码请求。
+type resetPasswordReq struct {
+	Email       string `json:"email" binding:"required"`
+	NewPassword string `json:"new_password" binding:"required"`
+}
+
+// ResetPassword POST /auth/password/reset
+func (h *Handler) ResetPassword(c appctx.AppContext) {
+	var req resetPasswordReq
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, httputil.MsgMissingParameter)
+		return
+	}
+
+	if err := h.svc.ResetPassword(c, application.ResetPasswordInput{
+		Email:       req.Email,
+		NewPassword: req.NewPassword,
+	}); err != nil {
+		writeAuthError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Password reset successful", nil)
+}
+
 // OAuthLogin GET /auth/<provider>/login
 //
 // 生成跳转到 OAuth provider 的 URL 并 307 重定向。
@@ -194,6 +260,8 @@ func writeAuthError(c appctx.AppContext, err error) {
 		httputil.Unauthorized(c, httputil.MsgInvalidCredentials)
 	case application.IsAccountDisabledErr(err):
 		httputil.Forbidden(c, httputil.MsgAccountDisabled)
+	case application.IsAccountNotFoundErr(err):
+		httputil.NotFound(c, "Account not found")
 	case application.IsInvalidEmailErr(err):
 		httputil.BadRequest(c, httputil.MsgInvalidEmail)
 	case application.IsEmailAlreadyExistsErr(err):
