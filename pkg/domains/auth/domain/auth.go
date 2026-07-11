@@ -56,6 +56,9 @@ type SaTokenSession interface {
 	LogoutByToken(token string) error
 	// Logout 注销 loginID 在指定设备上的登录。
 	Logout(loginID, device string) error
+	// Kickout 踢下线 loginID 的所有会话（所有设备）。
+	// 用于找回密码成功后强制吊销旧 token，防止旧会话残留。
+	Kickout(loginID string) error
 	// SetSessionUser 把用户信息写入 loginID 的会话。
 	SetSessionUser(loginID string, user SessionUser) error
 }
@@ -182,6 +185,29 @@ type VerificationStore interface {
 	CheckSendRateLimit(email string) (bool, error)
 }
 
+// PasswordResetStore 找回密码验证码存储抽象（由 infrastructure 提供）。
+//
+// 与 VerificationStore 同构，但使用独立的 Redis key 前缀（pwd_reset:*），
+// 避免同邮箱同时进行注册和找回密码时两套验证流程互相覆盖。
+type PasswordResetStore interface {
+	// SetCode 存储找回密码验证码（5 分钟过期）。
+	SetCode(email, code string) error
+	// GetCode 读取找回密码验证码。
+	GetCode(email string) (string, error)
+	// DeleteCode 删除找回密码验证码。
+	DeleteCode(email string) error
+	// MarkVerified 标记邮箱已通过找回密码验证码校验（10 分钟过期）。
+	MarkVerified(email string) error
+	// IsVerified 检查邮箱是否已通过找回密码验证。
+	IsVerified(email string) (bool, error)
+	// DeleteVerified 删除找回密码已校验标记。
+	DeleteVerified(email string) error
+	// SetSendRateLimit 设置找回密码验证码发送频率限制。
+	SetSendRateLimit(email string) error
+	// CheckSendRateLimit 检查是否处于找回密码发送频率限制中（true=受限）。
+	CheckSendRateLimit(email string) (bool, error)
+}
+
 // EmailSender 邮件发送抽象（由 infrastructure 提供）。
 type EmailSender interface {
 	// SendVerificationCode 发送验证码邮件。
@@ -189,6 +215,8 @@ type EmailSender interface {
 	// ctx 用于传递请求上下文（取消信号、deadline、trace），实现层应
 	// 直接透传给底层 email client，避免使用 context.Background() 断开链路。
 	SendVerificationCode(ctx context.Context, email, code, lang string) error
+	// SendPasswordResetCode 发送找回密码验证码邮件。
+	SendPasswordResetCode(ctx context.Context, email, code, lang string) error
 }
 
 // OAuthProvider 是 OAuth 提供方的抽象（由 infrastructure 提供具体实现）。

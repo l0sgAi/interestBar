@@ -39,6 +39,12 @@ func (s *saTokenSessionImpl) Logout(loginID, device string) error {
 	return stputil.Logout(loginID, device)
 }
 
+// Kickout 踢下线 loginID 的所有会话（所有设备）。
+// 用于找回密码成功后强制吊销旧 token。
+func (s *saTokenSessionImpl) Kickout(loginID string) error {
+	return stputil.Kickout(loginID)
+}
+
 // SetSessionUser 把用户信息写入 loginID 的 sa-token 会话。
 //
 // 与旧 utils.SetUserToSession 行为一致：session.Set(SessionKeyForUser, user)。

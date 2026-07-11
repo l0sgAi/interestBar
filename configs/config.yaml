@@ -78,6 +78,9 @@ mailtrap:
     verification_code:
       zh: "0949ad10-fcef-47b9-bb44-562697a7748e" # 中文验证码模板
       en: "b3a087bd-b578-4345-bd9b-daf11e6a8bfe" # 英文验证码模板
+    password_reset:
+      zh: "b5e1132d-4401-41a4-b562-8b0a6d8fb792" # 中文找回密码模板 UUID（需在 Mailtrap 平台创建后填入）
+      en: "a757cb90-a638-486e-92e7-0bce2b8839b4" # 英文找回密码模板 UUID（create on Mailtrap first）
 
 # Elasticsearch 配置
 elasticsearch:

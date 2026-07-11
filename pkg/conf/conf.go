@@ -254,6 +254,7 @@ type Mailtrap struct {
 // MailtrapTemplates Mailtrap 邮件模板配置
 type MailtrapTemplates struct {
 	VerificationCode MailtrapTemplate `mapstructure:"verification_code" json:"verification_code" yaml:"verification_code"`
+	PasswordReset    MailtrapTemplate `mapstructure:"password_reset" json:"password_reset" yaml:"password_reset"`
 }
 
 // MailtrapTemplate 支持多语言的模板 UUID 映射

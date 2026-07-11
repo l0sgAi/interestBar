@@ -20,6 +20,9 @@ import (
 //	  POST /auth/register/verify    校验验证码
 //	  POST /auth/register/complete  完成注册
 //	  POST /auth/login              邮箱密码登录
+//	  POST /auth/password/send-code 发送找回密码验证码
+//	  POST /auth/password/verify    校验找回密码验证码
+//	  POST /auth/password/reset     重置密码
 //
 //	需要登录：
 //	  POST /auth/logout             注销当前 token
@@ -46,6 +49,9 @@ func RegisterRoutes(
 		auth.POST("/register/verify", h.VerifyCode)
 		auth.POST("/register/complete", h.CompleteRegistration)
 		auth.POST("/login", h.Login)
+		auth.POST("/password/send-code", h.SendPasswordResetCode)
+		auth.POST("/password/verify", h.VerifyPasswordResetCode)
+		auth.POST("/password/reset", h.ResetPassword)
 
 		// 需要登录：注销。用子组挂中间件。
 		logoutGrp := auth.Group("/", authCheck)

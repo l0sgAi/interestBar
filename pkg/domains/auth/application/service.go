@@ -57,6 +57,12 @@ type RegisterInput struct {
 	Device   string
 }
 
+// ResetPasswordInput 找回密码（重置）入参。
+type ResetPasswordInput struct {
+	Email       string
+	NewPassword string
+}
+
 // OAuthLoginURLOutput OAuth 登录跳转 URL。
 type OAuthLoginURLOutput struct {
 	RedirectURL string
@@ -79,12 +85,19 @@ type AuthService interface {
 	OAuthCallback(ctx context.Context, provider, code, device string) (string, error)
 	// LogoutByToken 按 token 注销登录。
 	LogoutByToken(ctx context.Context, token string) error
+	// SendPasswordResetCode 发送找回密码验证码（邮箱必须已注册）。
+	SendPasswordResetCode(ctx context.Context, input SendCodeInput) error
+	// VerifyPasswordResetCode 校验找回密码验证码。
+	VerifyPasswordResetCode(ctx context.Context, input VerifyCodeInput) error
+	// ResetPassword 重置密码（校验已验证 → 改密码 → 踢下线所有会话）。
+	ResetPassword(ctx context.Context, input ResetPasswordInput) error
 }
 
 type authServiceImpl struct {
 	session   domain.SaTokenSession
 	userStore domain.UserSessionStore
 	verify    domain.VerificationStore
+	pwdReset  domain.PasswordResetStore
 	email     domain.EmailSender
 	oauthReg  domain.OAuthProviderRegistry
 }
@@ -96,6 +109,7 @@ func NewAuthService(
 	verify domain.VerificationStore,
 	email domain.EmailSender,
 	oauthReg domain.OAuthProviderRegistry,
+	pwdReset domain.PasswordResetStore,
 ) AuthService {
 	return &authServiceImpl{
 		session:   session,
@@ -103,6 +117,7 @@ func NewAuthService(
 		verify:    verify,
 		email:     email,
 		oauthReg:  oauthReg,
+		pwdReset:  pwdReset,
 	}
 }
 
@@ -406,6 +421,126 @@ func (s *authServiceImpl) findOrCreateOAuthUser(p domain.OAuthProvider, info *do
 // LogoutByToken 按 token 注销。
 func (s *authServiceImpl) LogoutByToken(ctx context.Context, token string) error {
 	return s.session.LogoutByToken(token)
+}
+
+// SendPasswordResetCode 发送找回密码验证码。
+//
+// 与注册 SendCode 流程一致，唯一区别：邮箱必须已注册（不存在 → errAccountNotFound）。
+//  1. 校验邮箱格式；
+//  2. 检查邮箱是否已注册（不存在 → 404）；
+//  3. 检查发送频率限制（60s）；
+//  4. 生成 6 位验证码 + 写 Redis（pwd_reset:* 前缀）+ 发邮件。
+func (s *authServiceImpl) SendPasswordResetCode(ctx context.Context, input SendCodeInput) error {
+	if _, err := mail.ParseAddress(input.Email); err != nil {
+		return errInvalidEmail
+	}
+
+	existing, err := s.userStore.GetByEmail(input.Email)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return errAccountNotFound
+	}
+
+	limited, err := s.pwdReset.CheckSendRateLimit(input.Email)
+	if err != nil {
+		return err
+	}
+	if limited {
+		return errRateLimitExceeded
+	}
+
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return err
+	}
+	code := fmt.Sprintf("%06d", n.Int64())
+
+	if err := s.pwdReset.SetCode(input.Email, code); err != nil {
+		return err
+	}
+	_ = s.pwdReset.SetSendRateLimit(input.Email)
+
+	if err := s.email.SendPasswordResetCode(ctx, input.Email, code, input.Lang); err != nil {
+		return err
+	}
+	return nil
+}
+
+// VerifyPasswordResetCode 校验找回密码验证码。
+//
+// 与注册 VerifyCode 流程一致，但使用独立的 pwd_reset:* Redis key。
+//  1. 从 Redis 读验证码（不存在 → OTPExpired）；
+//  2. 比对（不等 → InvalidOTP）；
+//  3. 删除验证码 + 标记邮箱已校验（10 分钟有效）。
+func (s *authServiceImpl) VerifyPasswordResetCode(ctx context.Context, input VerifyCodeInput) error {
+	storedCode, err := s.pwdReset.GetCode(input.Email)
+	if err != nil {
+		return errOTPExpired
+	}
+	if storedCode != input.Code {
+		return errInvalidOTP
+	}
+
+	_ = s.pwdReset.DeleteCode(input.Email)
+
+	if err := s.pwdReset.MarkVerified(input.Email); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ResetPassword 重置密码。
+//
+//  1. 校验新密码长度；
+//  2. 校验邮箱是否已通过找回密码验证码校验；
+//  3. 查邮箱（不存在 → 404；被禁 → 403）；
+//  4. 更新密码哈希；
+//  5. 踢下线该用户所有会话（best-effort，失败仅记日志）；
+//  6. 清理已校验标记。
+//
+// 不自动登录：用户用新密码走 /auth/login。
+func (s *authServiceImpl) ResetPassword(ctx context.Context, input ResetPasswordInput) error {
+	if len(input.NewPassword) < password.MinLength {
+		return errPasswordTooShort
+	}
+
+	verified, err := s.pwdReset.IsVerified(input.Email)
+	if err != nil {
+		return err
+	}
+	if !verified {
+		return errOTPExpired
+	}
+
+	user, err := s.userStore.GetByEmail(input.Email)
+	if err != nil {
+		return err
+	}
+	if user == nil {
+		return errAccountNotFound
+	}
+	if user.Status != domain.UserStatusActive {
+		return errAccountDisabled
+	}
+
+	pwdHash, err := password.Hash(input.NewPassword)
+	if err != nil {
+		return err
+	}
+	if err := s.userStore.UpdatePassword(user.ID, pwdHash); err != nil {
+		return err
+	}
+
+	// 踢下线所有设备会话。密码已更新成功，kickout 失败仅记日志不阻断
+	// （与 Login 的 hash upgrade 失败处理一致）。
+	if kerr := s.session.Kickout(user.ID); kerr != nil {
+		logger.Log.Warn("failed to kickout sessions for user "+user.ID+" after password reset: "+kerr.Error())
+	}
+
+	_ = s.pwdReset.DeleteVerified(input.Email)
+	return nil
 }
 
 // oauthCallTimeout 限制单次 OAuth 回调中出站调用（换 token + 拉用户信息）的总耗时。

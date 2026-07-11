@@ -60,7 +60,8 @@ type Client struct {
 	senderEmail           string
 	senderName            string
 	httpClient            *http.Client
-	verificationTemplates map[string]string // lang -> template_uuid
+	verificationTemplates map[string]string // lang -> template_uuid（注册验证码）
+	passwordResetTemplates map[string]string // lang -> template_uuid（找回密码验证码）
 }
 
 // InitEmail 初始化全局 Mailtrap 邮件客户端
@@ -90,6 +91,10 @@ func InitEmail() error {
 			verificationTemplates: map[string]string{
 				"zh": cfg.Templates.VerificationCode.Zh,
 				"en": cfg.Templates.VerificationCode.En,
+			},
+			passwordResetTemplates: map[string]string{
+				"zh": cfg.Templates.PasswordReset.Zh,
+				"en": cfg.Templates.PasswordReset.En,
 			},
 		}
 
@@ -171,16 +176,25 @@ func (c *Client) Send(ctx context.Context, toEmail, toName, subject string, opts
 	return nil
 }
 
-// SendVerificationCode 通过模板发送验证码邮件，lang 为 "zh" 或 "en"，无效值 fallback 到 "en"
+// SendVerificationCode 通过模板发送注册验证码邮件，lang 为 "zh" 或 "en"，无效值 fallback 到 "en"
 func (c *Client) SendVerificationCode(ctx context.Context, toEmail, code, lang string) error {
-	return c.SendWithTemplate(ctx, toEmail, lang, map[string]interface{}{
+	return c.SendWithTemplate(ctx, toEmail, lang, c.verificationTemplates, map[string]interface{}{
 		"Email": toEmail,
 		"Code":  code,
 	})
 }
 
-// SendWithTemplate 通过 Mailtrap 模板发送邮件
-func (c *Client) SendWithTemplate(ctx context.Context, toEmail, lang string, variables map[string]interface{}) error {
+// SendPasswordResetCode 通过模板发送找回密码验证码邮件，lang 为 "zh" 或 "en"，无效值 fallback 到 "en"
+func (c *Client) SendPasswordResetCode(ctx context.Context, toEmail, code, lang string) error {
+	return c.SendWithTemplate(ctx, toEmail, lang, c.passwordResetTemplates, map[string]interface{}{
+		"Email": toEmail,
+		"Code":  code,
+	})
+}
+
+// SendWithTemplate 通过 Mailtrap 模板发送邮件。
+// templates 参数按 lang 索引到 template_uuid，由调用方按场景传入对应的模板 map。
+func (c *Client) SendWithTemplate(ctx context.Context, toEmail, lang string, templates map[string]string, variables map[string]interface{}) error {
 	if toEmail == "" {
 		return fmt.Errorf("recipient email is required")
 	}
@@ -189,7 +203,7 @@ func (c *Client) SendWithTemplate(ctx context.Context, toEmail, lang string, var
 	if lang != "zh" && lang != "en" {
 		lang = "en"
 	}
-	templateUUID := c.verificationTemplates[lang]
+	templateUUID := templates[lang]
 	if templateUUID == "" {
 		return fmt.Errorf("no template configured for lang: %s", lang)
 	}

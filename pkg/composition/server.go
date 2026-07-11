@@ -159,7 +159,8 @@ func registerAuth(root routing.RouterGroup, deps *Deps, authCheck routing.Handle
 	verify := authinfra.NewVerificationStore()
 	email := authinfra.NewEmailSender()
 	oauthReg := authinfra.NewOAuthProviderRegistry()
-	svc := authapp.NewAuthService(session, userStore, verify, email, oauthReg)
+	pwdReset := authinfra.NewPasswordResetStore()
+	svc := authapp.NewAuthService(session, userStore, verify, email, oauthReg, pwdReset)
 	authhttp.RegisterRoutes(root, svc, authCheck)
 }
 
