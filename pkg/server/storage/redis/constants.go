@@ -27,6 +27,24 @@ const (
 )
 
 const (
+	// PwdResetCodePrefix 找回密码验证码缓存key前缀
+	// 完整key格式: pwd_reset:code:{email}
+	// 存储内容：6位数字验证码，TTL 5分钟
+	// 与 register:code: 隔离，避免同邮箱同时进行注册和找回密码时互相覆盖
+	PwdResetCodePrefix = "pwd_reset:code:"
+
+	// PwdResetVerifiedPrefix 找回密码邮箱已验证标记key前缀
+	// 完整key格式: pwd_reset:verified:{email}
+	// 存储内容：标记邮箱已通过验证码校验，TTL 10分钟
+	PwdResetVerifiedPrefix = "pwd_reset:verified:"
+
+	// PwdResetRatePrefix 找回密码验证码发送频率限制key前缀
+	// 完整key格式: pwd_reset:rate:{email}
+	// 存储内容：频率限制标记，TTL 60秒
+	PwdResetRatePrefix = "pwd_reset:rate:"
+)
+
+const (
 	// CircleInfoPrefix 圈子基础信息缓存key前缀
 	// 完整key格式: circle:info:{circle_id}
 	// 包含字段：id, name, slug, avatar_url, cover_url, description, rule, creator_id, category_id, join_type, status, deleted, create_time, update_time
@@ -254,4 +272,75 @@ func GetRegisterVerifiedKey(email string) string {
 // GetRegisterRateKey 获取注册验证码发送频率限制的完整key
 func GetRegisterRateKey(email string) string {
 	return RegisterRatePrefix + email
+}
+
+// GetPwdResetCodeKey 获取找回密码验证码缓存的完整key
+func GetPwdResetCodeKey(email string) string {
+	return PwdResetCodePrefix + email
+}
+
+// GetPwdResetVerifiedKey 获取找回密码邮箱已验证标记的完整key
+func GetPwdResetVerifiedKey(email string) string {
+	return PwdResetVerifiedPrefix + email
+}
+
+// GetPwdResetRateKey 获取找回密码验证码发送频率限制的完整key
+func GetPwdResetRateKey(email string) string {
+	return PwdResetRatePrefix + email
+}
+
+// TrendingPrefix 热点榜单 ZSET key 前缀。
+// 完整 key 格式: trending:{dimension}:{window}
+//   dimension = post | circle | user
+//   window    = 24h | 7d
+// ZSET: member=实体 ID(uuid 字符串), score=热度（post 自身 hot / 圈子&用户为窗口内 Σhot）。
+// 由 TrendingRankSyncer 周期性 ZADD 覆盖重写；不设 TTL（job 覆盖刷新），
+// 不走 GETDEL（与 circle:hot Δ 累加器语义不同——那是增量累加待落库，本榜是全量重算快照）。
+const TrendingPrefix = "trending:"
+
+// TrendingMetaPrefix 热点榜单刷新时间戳 key 前缀。
+// 完整 key: trending:meta:{dimension}:{window}（string, Unix 秒）。
+// 读路径返回 refreshed_at，供前端显示「X 分钟前更新」与降级时标注时效。
+const TrendingMetaPrefix = "trending:meta:"
+
+// GetTrendingKey 获取热点榜单 ZSET 的完整 key。
+func GetTrendingKey(dimension, window string) string {
+	return TrendingPrefix + dimension + ":" + window
+}
+
+// GetTrendingMetaKey 获取热点榜单刷新时间戳的完整 key。
+func GetTrendingMetaKey(dimension, window string) string {
+	return TrendingMetaPrefix + dimension + ":" + window
+}
+
+// DiscoverPoolPrefix 发现页候选池 LIST key 前缀（登录用户独立池）。
+// 完整 key 格式: discover:{posts|circles}:{user_id}
+// LIST: 由 DiscoverPoolSyncer / 读路径 miss 随机采样后 RPUSH 写入的实体 ID(uuid 字符串)；
+// LRANGE offset 翻页；TTL ttl_minutes(默认 30)。登录态为反气泡排除后的随机集。
+const DiscoverPoolPrefix = "discover:"
+
+// DiscoverAnonPrefix 发现页匿名共享池前缀。
+// 完整 key: discover:anon:{posts|circles}
+// 纯随机无排除，所有匿名用户共享；TTL 同登录池。匿名用户无排除集，全局随机采样。
+const DiscoverAnonPrefix = "discover:anon:"
+
+// DiscoverTokenPrefix 发现页候选池版本 token key 前缀。
+// 完整 key: discover:token:{user_id|anon}（string），与池同 TTL。
+// 客户端翻页回传 pool_token，服务端比对：不一致 → 池已重建 → 回 offset=0（防翻页错位）。
+const DiscoverTokenPrefix = "discover:token:"
+
+// GetDiscoverPoolKey 获取登录用户发现页候选池 LIST 的完整 key。
+// section = "posts" | "circles"；userKey = user_id 字符串。
+func GetDiscoverPoolKey(section, userKey string) string {
+	return DiscoverPoolPrefix + section + ":" + userKey
+}
+
+// GetDiscoverAnonKey 获取匿名共享发现页候选池 LIST 的完整 key。section = "posts" | "circles"。
+func GetDiscoverAnonKey(section string) string {
+	return DiscoverAnonPrefix + section
+}
+
+// GetDiscoverTokenKey 获取发现页候选池版本 token 的完整 key。userKey = user_id 字符串或 "anon"。
+func GetDiscoverTokenKey(userKey string) string {
+	return DiscoverTokenPrefix + userKey
 }

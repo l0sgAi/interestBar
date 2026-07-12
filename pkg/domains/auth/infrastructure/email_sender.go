@@ -28,3 +28,12 @@ func (e *emailSenderImpl) SendVerificationCode(ctx context.Context, email, code,
 	}
 	return client.SendVerificationCode(ctx, email, code, lang)
 }
+
+// SendPasswordResetCode 调用全局 email client 发送找回密码验证码。
+func (e *emailSenderImpl) SendPasswordResetCode(ctx context.Context, email, code, lang string) error {
+	client := emailutil.GetClient()
+	if client == nil {
+		return errEmailServiceUnavailable
+	}
+	return client.SendPasswordResetCode(ctx, email, code, lang)
+}
