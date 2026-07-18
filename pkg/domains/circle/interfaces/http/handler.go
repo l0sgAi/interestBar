@@ -93,11 +93,11 @@ func (h *Handler) GetCircles(c appctx.AppContext) {
 }
 
 // GetCircleDetail GET /circle/detail/:id
+//
+// 访客可读：登录时回填 is_joined/member 字段；匿名（userID==uuid.Nil）时 service 的
+// memberRepo.GetMember 找不到记录，IsJoined 自然降级为 false（service.go:459-470）。
 func (h *Handler) GetCircleDetail(c appctx.AppContext) {
-	userID, ok := requireUserID(c)
-	if !ok {
-		return
-	}
+	userID, _ := requireUserIDAllowAnon(c)
 
 	circleID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -319,6 +319,22 @@ func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
 	if err != nil {
 		httputil.BadRequest(c, "Invalid user ID")
 		return uuid.Nil, false
+	}
+	return userID, true
+}
+
+// requireUserIDAllowAnon 尝试返回 userID，但允许匿名（未登录返回 uuid.Nil, true）。
+//
+// 用于"圈子详情"这类访客可读接口：登录时回填 is_joined/member 字段；匿名时降级为 false。
+// 不写 401——访客访问是合法路径。
+func requireUserIDAllowAnon(c appctx.AppContext) (uuid.UUID, bool) {
+	loginID, ok := c.LoginID()
+	if !ok || loginID == "" {
+		return uuid.Nil, true
+	}
+	userID, err := uuid.Parse(loginID)
+	if err != nil {
+		return uuid.Nil, true
 	}
 	return userID, true
 }

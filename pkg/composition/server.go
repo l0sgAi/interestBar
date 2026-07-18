@@ -114,18 +114,18 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	discoverSvc := newDiscoverService(postSvc, circleRepo, circleSvc)
 
 	// 注册路由
-	registerCategory(root, deps, authCheck)
+	registerCategory(root, deps, authCheck, OptionalLoginFn)
 	registerStorage(root, deps, authCheck)
-	registerUser(root, userSvc, authCheck)
+	registerUser(root, userSvc, authCheck, OptionalLoginFn)
 	registerAuth(root, deps, authCheck)
-	registerCircle(root, circleSvc, authCheck)
-	registerPost(root, postSvc, authCheck)
-	registerComment(root, commentSvc, authCheck)
+	registerCircle(root, circleSvc, authCheck, OptionalLoginFn)
+	registerPost(root, postSvc, authCheck, OptionalLoginFn)
+	registerComment(root, commentSvc, authCheck, OptionalLoginFn)
 	registerLike(root, likeSvc, authCheck)
 	registerCollect(root, collectSvc, authCheck)
 	registerHistory(root, historySvc, authCheck)
-	registerRecommend(root, recommendSvc, authCheck)
-	registerTrending(root, trendingSvc, authCheck)
+	registerRecommend(root, recommendSvc, authCheck, OptionalLoginFn)
+	registerTrending(root, trendingSvc, authCheck, OptionalLoginFn)
 	registerDiscover(root, discoverSvc, authCheck)
 
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
@@ -133,11 +133,11 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 }
 
 // registerCategory 装配 category 领域。
-func registerCategory(root routing.RouterGroup, deps *Deps, authCheck routing.HandlerFunc) {
+func registerCategory(root routing.RouterGroup, deps *Deps, authCheck, optionalCheck routing.HandlerFunc) {
 	repo := categoryinfra.NewCategoryRepository(deps.DB.Get())
 	cache := categoryinfra.NewCategoryCache()
 	svc := categoryapp.NewCategoryService(repo, cache)
-	categoryhttp.RegisterRoutes(root, svc, authCheck)
+	categoryhttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerStorage 装配 storage 领域。
@@ -148,8 +148,8 @@ func registerStorage(root routing.RouterGroup, deps *Deps, authCheck routing.Han
 }
 
 // registerUser 装配 user 领域。
-func registerUser(root routing.RouterGroup, svc userapp.UserService, authCheck routing.HandlerFunc) {
-	userhttp.RegisterRoutes(root, svc, authCheck)
+func registerUser(root routing.RouterGroup, svc userapp.UserService, authCheck, optionalCheck routing.HandlerFunc) {
+	userhttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerAuth 装配 auth 领域。
@@ -165,18 +165,18 @@ func registerAuth(root routing.RouterGroup, deps *Deps, authCheck routing.Handle
 }
 
 // registerCircle 装配 circle 领域。
-func registerCircle(root routing.RouterGroup, svc circleapp.CircleService, authCheck routing.HandlerFunc) {
-	circlehttp.RegisterRoutes(root, svc, authCheck)
+func registerCircle(root routing.RouterGroup, svc circleapp.CircleService, authCheck, optionalCheck routing.HandlerFunc) {
+	circlehttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerPost 装配 post 领域。
-func registerPost(root routing.RouterGroup, svc postapp.PostService, authCheck routing.HandlerFunc) {
-	posthttp.RegisterRoutes(root, svc, authCheck)
+func registerPost(root routing.RouterGroup, svc postapp.PostService, authCheck, optionalCheck routing.HandlerFunc) {
+	posthttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerComment 装配 comment 领域。
-func registerComment(root routing.RouterGroup, svc commentapp.CommentService, authCheck routing.HandlerFunc) {
-	commenthttp.RegisterRoutes(root, svc, authCheck)
+func registerComment(root routing.RouterGroup, svc commentapp.CommentService, authCheck, optionalCheck routing.HandlerFunc) {
+	commenthttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerLike 装配 like 领域。
@@ -212,8 +212,8 @@ func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.Circle
 }
 
 // registerRecommend 装配 recommend 领域。
-func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendService, authCheck routing.HandlerFunc) {
-	recommendhttp.RegisterRoutes(root, svc, authCheck)
+func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendService, authCheck, optionalCheck routing.HandlerFunc) {
+	recommendhttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // newTrendingService 构造 TrendingService。
@@ -231,8 +231,8 @@ func newTrendingService(postSvc postapp.PostService, circleRepo circledomain.Cir
 }
 
 // registerTrending 装配 trending 领域。
-func registerTrending(root routing.RouterGroup, svc trendingapp.TrendingService, authCheck routing.HandlerFunc) {
-	trendinghttp.RegisterRoutes(root, svc, authCheck)
+func registerTrending(root routing.RouterGroup, svc trendingapp.TrendingService, authCheck, optionalCheck routing.HandlerFunc) {
+	trendinghttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // newDiscoverService 构造 DiscoverService。

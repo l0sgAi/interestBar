@@ -183,9 +183,8 @@ func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
 
 // requireUserIDAllowAnon 尝试返回 userID，但允许匿名（未登录返回 uuid.Nil, true）。
 //
-// 用于"评论列表/详情"这类登录态可选的读接口：登录时显示点赞状态，未登录时 liked=false。
-// 注意：路由层仍挂 RequireLogin 中间件（保持与 composition.RequireLogin 一致的访问控制），
-// 这里只是容忍鉴权失败写入的空 loginID（兼容 token 异常等极端情况）。
+// 用于"评论列表/详情/回复"这类访客可读接口：登录时回填 is_liked 标记；匿名时 liked=false。
+// 路由组挂 OptionalLogin（见 routes.go），故此处匿名是合法路径，不写 401。
 func requireUserIDAllowAnon(c appctx.AppContext) (uuid.UUID, bool) {
 	loginID, ok := c.LoginID()
 	if !ok || loginID == "" {
