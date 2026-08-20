@@ -33,11 +33,12 @@ type GetHomeFeedRequest struct {
 }
 
 // GetHomeFeed GET /post/home?tab=recommend
+//
+// 组级可选登录：hot/latest tab 访客可读（全局 ES 流，service BatchCheck 对 uuid.Nil 是
+// best-effort，IsLiked/IsCollected 自然 false）；recommend/following tab 硬依赖 userID
+// （用户行为池 / 已加圈子列表），匿名访问由 service 返回 ErrLoginRequired → handler 映射 401。
 func (h *Handler) GetHomeFeed(c appctx.AppContext) {
-	userID, ok := requireUserID(c)
-	if !ok {
-		return
-	}
+	userID, _ := requireUserIDAllowAnon(c)
 
 	var req GetHomeFeedRequest
 	if err := c.BindQuery(&req); err != nil {
@@ -56,6 +57,10 @@ func (h *Handler) GetHomeFeed(c appctx.AppContext) {
 			httputil.BadRequest(c, "Unsupported home feed tab")
 			return
 		}
+		if errors.Is(err, application.ErrLoginRequired) {
+			httputil.Unauthorized(c, "This feed tab requires login")
+			return
+		}
 		logger.Log.Error("home feed error: " + err.Error())
 		httputil.InternalError(c, "Failed to get home feed")
 		return
@@ -63,17 +68,18 @@ func (h *Handler) GetHomeFeed(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
-// requireUserID 解析当前登录用户（匿名 → 401）。推荐流强制登录。
-func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
+// requireUserIDAllowAnon 尝试返回 userID，但允许匿名（未登录返回 uuid.Nil, true）。
+//
+// 用于首页信息流这类访客可读接口：hot/latest tab 匿名可读；recommend/following tab
+// 匿名时由 service 返回 ErrLoginRequired，handler 映射 401。不在此处提前拦截。
+func requireUserIDAllowAnon(c appctx.AppContext) (uuid.UUID, bool) {
 	loginID, ok := c.LoginID()
 	if !ok || loginID == "" {
-		httputil.Unauthorized(c, "Token not found")
-		return uuid.Nil, false
+		return uuid.Nil, true
 	}
 	userID, err := uuid.Parse(loginID)
 	if err != nil {
-		httputil.BadRequest(c, "Invalid user ID")
-		return uuid.Nil, false
+		return uuid.Nil, true
 	}
 	return userID, true
 }

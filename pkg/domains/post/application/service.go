@@ -433,25 +433,34 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	}
 
 	// 权限：作者可看所有状态；其他人只能看已发布
+	// 匿名（userID==uuid.Nil）天然走"非作者"分支，只能看已发布帖——符合预期。
 	if userID != post.UserID && post.Status != domain.PostStatusPublished {
 		return nil, domain.ErrPostNotFound
 	}
 
-	// 点赞状态（缓存优先，miss 回源 DB）
-	isLiked := s.checkLiked(ctx, userID, postID)
+	// 访客降级：匿名（userID==uuid.Nil）跳过交互态查询与浏览计数，避免：
+	//   1. checkLiked/checkCollected 对 uuid.Nil 做无意义 DB/Redis 查询；
+	//   2. asyncIncrementView 把 uuid.Nil 写入 user:view:posts:{00000000-...} 污染历史池
+	//      + 以 uuid.Nil 作为 IncrViewCount 的去重 key。
+	// 登录用户走完整路径。
+	var isLiked, isCollected bool
+	if userID != uuid.Nil {
+		// 点赞状态（缓存优先，miss 回源 DB）
+		isLiked = s.checkLiked(ctx, userID, postID)
 
-	// 收藏状态（缓存优先，miss 回源 DB）
-	isCollected := s.checkCollected(ctx, userID, postID)
+		// 收藏状态（缓存优先，miss 回源 DB）
+		isCollected = s.checkCollected(ctx, userID, postID)
 
-	// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Log.Error(fmt.Sprintf("Panic in asyncIncrementView: %v", r))
-			}
+		// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Log.Error(fmt.Sprintf("Panic in asyncIncrementView: %v", r))
+				}
+			}()
+			s.asyncIncrementView(postID, userID)
 		}()
-		s.asyncIncrementView(postID, userID)
-	}()
+	}
 
 	// 查发帖人信息
 	var authorName, authorAvatar string

@@ -17,6 +17,10 @@ import (
 // ErrTabNotSupported 请求的 tab 暂未实现（仅 recommend）。
 var ErrTabNotSupported = errors.New("home feed tab not supported")
 
+// ErrLoginRequired 当前 tab 硬依赖登录用户（recommend/following 需用户行为池/已加圈子列表），
+// 匿名访问（userID==uuid.Nil）返回此错误，handler 映射 401。
+var ErrLoginRequired = errors.New("this home feed tab requires login")
+
 // RecommendService 推荐流应用服务。
 type RecommendService interface {
 	// GetHomeFeed 首页信息流分页（按 tab 分发）。
@@ -64,15 +68,25 @@ func NewRecommendService(
 }
 
 // GetHomeFeed 按 tab 分发：recommend 走候选池 offset；hot/latest/following 走 ES search_after。
+//
+// 访客策略：hot/latest 是全局 ES 流，访客（userID==uuid.Nil）可读（BatchCheck best-effort，
+// IsLiked/IsCollected 自然 false）；recommend/following 硬依赖 userID（用户行为池 / 已加圈子列表），
+// 匿名访问返回 ErrLoginRequired。
 func (s *recommendServiceImpl) GetHomeFeed(ctx context.Context, userID uuid.UUID, tab string, size, offset int, poolToken string, searchAfter []interface{}) (*domain.FeedPage, error) {
 	switch tab {
 	case "recommend":
+		if userID == uuid.Nil {
+			return nil, ErrLoginRequired
+		}
 		return s.getRecommend(ctx, userID, size, offset, poolToken)
 	case "hot":
 		return s.getSimpleFeed(ctx, userID, "hot", nil, size, searchAfter)
 	case "latest":
 		return s.getSimpleFeed(ctx, userID, "latest", nil, size, searchAfter)
 	case "following":
+		if userID == uuid.Nil {
+			return nil, ErrLoginRequired
+		}
 		return s.getFollowing(ctx, userID, size, searchAfter)
 	default:
 		return nil, ErrTabNotSupported

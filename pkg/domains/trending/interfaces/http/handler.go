@@ -29,11 +29,11 @@ type GetTrendingRequest struct {
 }
 
 // GetTrending GET /trending?window=24h&section=all&size=20
+//
+// 访客可读：登录时 service 回填帖子的 is_liked/is_collected；匿名（uuid.Nil）时
+// fillPosts 的 BatchCheck 是 best-effort，IsLiked/IsCollected 自然 false。
 func (h *Handler) GetTrending(c appctx.AppContext) {
-	userID, ok := requireUserID(c)
-	if !ok {
-		return
-	}
+	userID, _ := requireUserIDAllowAnon(c)
 
 	var req GetTrendingRequest
 	if err := c.BindQuery(&req); err != nil {
@@ -50,17 +50,18 @@ func (h *Handler) GetTrending(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
-// requireUserID 解析当前登录用户（匿名 → 401）。热点页强制登录。
-func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
+// requireUserIDAllowAnon 尝试返回 userID，但允许匿名（未登录返回 uuid.Nil, true）。
+//
+// 用于热点看板这类访客可读接口：登录时回填交互态；匿名时降级为 false。
+// 不写 401——访客访问是合法路径。
+func requireUserIDAllowAnon(c appctx.AppContext) (uuid.UUID, bool) {
 	loginID, ok := c.LoginID()
 	if !ok || loginID == "" {
-		httputil.Unauthorized(c, "Token not found")
-		return uuid.Nil, false
+		return uuid.Nil, true
 	}
 	userID, err := uuid.Parse(loginID)
 	if err != nil {
-		httputil.BadRequest(c, "Invalid user ID")
-		return uuid.Nil, false
+		return uuid.Nil, true
 	}
 	return userID, true
 }

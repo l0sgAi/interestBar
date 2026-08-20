@@ -59,11 +59,11 @@ func (h *Handler) CreatePost(c appctx.AppContext) {
 }
 
 // GetPostDetail GET /post/detail/:id
+//
+// 访客可读：登录时回填 is_liked/is_collected + 记录浏览历史；匿名（userID==uuid.Nil）时
+// service 跳过交互态查询与浏览计数（service.go GetPostDetail 的 nil 守卫），is_liked/is_collected=false。
 func (h *Handler) GetPostDetail(c appctx.AppContext) {
-	userID, ok := requireUserID(c)
-	if !ok {
-		return
-	}
+	userID, _ := requireUserIDAllowAnon(c)
 
 	postID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -216,6 +216,23 @@ func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
 	if err != nil {
 		httputil.BadRequest(c, "Invalid user ID")
 		return uuid.Nil, false
+	}
+	return userID, true
+}
+
+// requireUserIDAllowAnon 尝试返回 userID，但允许匿名（未登录返回 uuid.Nil, true）。
+//
+// 用于"帖子详情"这类访客可读接口：登录时回填 is_liked/is_collected + 记录浏览历史；
+// 匿名时 service 跳过这些副作用（service.go GetPostDetail 的 nil 守卫）。
+// 不写 401——访客访问是合法路径。
+func requireUserIDAllowAnon(c appctx.AppContext) (uuid.UUID, bool) {
+	loginID, ok := c.LoginID()
+	if !ok || loginID == "" {
+		return uuid.Nil, true
+	}
+	userID, err := uuid.Parse(loginID)
+	if err != nil {
+		return uuid.Nil, true
 	}
 	return userID, true
 }
