@@ -267,6 +267,10 @@ type MailtrapTemplate struct {
 type Security struct {
 	// PasswordHash 密码哈希配置。
 	PasswordHash PasswordHash `mapstructure:"password_hash" json:"password_hash" yaml:"password_hash"`
+
+	// DataKey 敏感字段应用层加密密钥（AES-256-GCM，SHA-256 派生）。
+	// 用于 ai_agent.api_key 等入库前加密。为空时相关加密接口返回 ErrEmptyKey。
+	DataKey string `mapstructure:"data_key" json:"data_key" yaml:"data_key"`
 }
 
 // PasswordHash 密码哈希算法参数（Argon2id）。

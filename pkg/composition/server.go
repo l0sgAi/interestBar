@@ -5,6 +5,9 @@ import (
 	authapp "interestBar/pkg/domains/auth/application"
 	authinfra "interestBar/pkg/domains/auth/infrastructure"
 	authhttp "interestBar/pkg/domains/auth/interfaces/http"
+	agentapp "interestBar/pkg/domains/aiagent/application"
+	agentinfra "interestBar/pkg/domains/aiagent/infrastructure"
+	agenthttp "interestBar/pkg/domains/aiagent/interfaces/http"
 	categoryapp "interestBar/pkg/domains/category/application"
 	categoryinfra "interestBar/pkg/domains/category/infrastructure"
 	categoryhttp "interestBar/pkg/domains/category/interfaces/http"
@@ -113,6 +116,11 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	// 均为只读消费者。syncer 复用其 RebuildPool（反气泡重建逻辑）。
 	discoverSvc := newDiscoverService(postSvc, circleRepo, circleSvc)
 
+	// aiagent 跨域依赖：role 读取（user 缓存）+ 机器人账号创建（role=2）。
+	agentSvc := newAgentService(deps)
+	agentSvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
+	agentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
+
 	// 注册路由
 	registerCategory(root, deps, authCheck, OptionalLoginFn)
 	registerStorage(root, deps, authCheck)
@@ -127,6 +135,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerRecommend(root, recommendSvc, authCheck, OptionalLoginFn)
 	registerTrending(root, trendingSvc, authCheck, OptionalLoginFn)
 	registerDiscover(root, discoverSvc, authCheck)
+	registerAgent(root, agentSvc, authCheck)
 
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
@@ -258,6 +267,11 @@ func registerDiscover(root routing.RouterGroup, svc discoverapp.DiscoverService,
 	discoverhttp.RegisterRoutes(root, svc, OptionalLoginFn)
 }
 
+// registerAgent 装配 aiagent 领域（管理端机器人 CRUD，role 校验在 service 层）。
+func registerAgent(root routing.RouterGroup, svc agentapp.AgentService, authCheck routing.HandlerFunc) {
+	agenthttp.RegisterRoutes(root, svc, authCheck)
+}
+
 // ===== Service 构造函数 =====
 
 func newUserService(deps *Deps) userapp.UserService {
@@ -281,6 +295,14 @@ func newCircleService(deps *Deps) (circleapp.CircleService, circledomain.CircleR
 		circleRepo, memberRepo, baseCache, statsCache, joinedCache, searcher, publisher,
 	)
 	return svc, circleRepo, memberRepo
+}
+
+// newAgentService 构造 AgentService。
+//
+// user 跨领域依赖（role 读取 + 机器人账号创建）通过 setter 注入（见 RegisterDomainRoutes）。
+func newAgentService(deps *Deps) agentapp.AgentService {
+	repo := agentinfra.NewAgentRepository(deps.DB.Get())
+	return agentapp.NewAgentService(repo)
 }
 
 func newPostService(deps *Deps) postapp.PostService {

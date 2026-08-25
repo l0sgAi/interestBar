@@ -187,3 +187,7 @@ security:
     key_len: 32        # 输出哈希长度（字节），默认 32
     salt_len: 16       # 随机 salt 长度（字节），默认 16
 
+  # 敏感字段应用层加密密钥（AES-256-GCM，任意长度字符串经 SHA-256 派生）
+  # 用于 ai_agent.api_key 入库前加密。生产环境必须配置且妥善保管。
+  data_key: ""
+
