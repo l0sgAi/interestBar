@@ -153,10 +153,12 @@ Content-Type: application/json   （POST/PUT）
 
 ### 3.2 列表
 
-`GET /agent/list?page=1&size=20`
+`GET /agent/list?page=1&size=20&keyword=小吧`
 
 - `page` 默认 1；`size` 默认 20，上限 100（越界回落 20）。
-- 排序固定 `create_time` 倒序，不支持筛选参数。
+- `keyword` 可选，按机器人 `name` 模糊匹配（ILIKE，大小写不敏感，两端空格忽略）；不传或为空 = 全量。
+- 排序固定 `create_time` 倒序。
+- `total` 为**过滤后**的总数，直接用于分页组件。
 
 **响应**（分页信封）：
 
@@ -233,7 +235,7 @@ Content-Type: application/json   （POST/PUT）
 
 1. **key 安全**：明文 key 只在 POST/PUT 请求体出现一次；编辑页回显用 `api_key_masked` + `has_api_key`，「换 key」用独立输入框，不回填旧值。
 2. **掩码含义**：`sk-****z789` = 前 3 + `****` + 后 4；key 长度 ≤8 时显示 `****`。掩码只用于人工辨认，不可用于任何提交。
-3. **列表无搜索/筛选**：本期列表只有分页；前端搜索在本地过滤即可（数据量小）。
+3. **列表搜索**：`GET /agent/list` 支持 `keyword` 按 `name` 模糊过滤（服务端 ILIKE，`total` 为过滤后总数）；也可继续本地过滤。
 4. **`linked_user_id` 只读**：机器人账号由后端生成（role=2，username/email 由 uuidv7+时间戳生成，明显非真人），前端仅展示。
 5. **status 语义**：停用（0）后机器人不再参与回复触发（执行链路上线后生效）；CRUD 层面停用仅是标记。
 6. **触发/限频字段本期为「配置存储」**：`trigger_mode`/`trigger_keywords`/限频字段已可配置并校验，但实际回复执行链路未上线，配置暂不产生效果。

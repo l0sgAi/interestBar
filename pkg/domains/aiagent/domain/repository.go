@@ -23,8 +23,8 @@ type AgentRepository interface {
 	// ExistsByName 检查名称是否已被占用（未删除）。excludeID 用于更新时排除自身（创建时传 uuid.Nil）。
 	ExistsByName(ctx context.Context, name string, excludeID uuid.UUID) (bool, error)
 	// ListByOffset offset 分页获取机器人列表（未删除，按创建时间倒序）。
-	// 返回列表与总数（总数供分页响应）。
-	ListByOffset(ctx context.Context, offset, limit int) ([]AiAgent, int64, error)
+	// keyword 非空时按 name 模糊过滤（ILIKE %kw%）。返回列表与总数（总数供分页响应）。
+	ListByOffset(ctx context.Context, keyword string, offset, limit int) ([]AiAgent, int64, error)
 	// UpdateFields 按 map 更新指定字段（部分更新）。
 	UpdateFields(ctx context.Context, agentID uuid.UUID, fields map[string]interface{}) error
 	// SoftDelete 软删（deleted=1 且 status=0，一并停用）。

@@ -61,8 +61,9 @@ type updateAgentReq struct {
 
 // listAgentsReq 列表查询参数（hertz BindQuery 只认 query tag）。
 type listAgentsReq struct {
-	Page int `query:"page"`
-	Size int `query:"size"`
+	Page    int    `query:"page"`
+	Size    int    `query:"size"`
+	Keyword string `query:"keyword"`
 }
 
 // CreateAgent POST /agent 创建机器人。
@@ -116,7 +117,7 @@ func (h *Handler) GetAgent(c appctx.AppContext) {
 	httputil.Success(c, vo)
 }
 
-// ListAgents GET /agent/list 机器人列表（offset 分页）。
+// ListAgents GET /agent/list 机器人列表（offset 分页，keyword 按 name 模糊过滤）。
 func (h *Handler) ListAgents(c appctx.AppContext) {
 	userID, ok := requireUserID(c)
 	if !ok {
@@ -127,7 +128,7 @@ func (h *Handler) ListAgents(c appctx.AppContext) {
 		httputil.BadRequest(c, "Invalid query parameters")
 		return
 	}
-	result, err := h.svc.ListAgents(c, userID, req.Page, req.Size)
+	result, err := h.svc.ListAgents(c, userID, req.Keyword, req.Page, req.Size)
 	if err != nil {
 		writeAgentError(c, err)
 		return

@@ -53,17 +53,21 @@ func (r *agentRepoPG) ExistsByName(ctx context.Context, name string, excludeID u
 	return true, nil
 }
 
-func (r *agentRepoPG) ListByOffset(ctx context.Context, offset, limit int) ([]domain.AiAgent, int64, error) {
+// ListByOffset keyword 非空时按 name 模糊过滤（ILIKE %kw%，大小写不敏感）。
+func (r *agentRepoPG) ListByOffset(ctx context.Context, keyword string, offset, limit int) ([]domain.AiAgent, int64, error) {
 	var (
 		agents []domain.AiAgent
 		total  int64
 	)
-	if err := r.db.WithContext(ctx).Model(&domain.AiAgent{}).
-		Where("deleted = ?", 0).Count(&total).Error; err != nil {
+	query := r.db.WithContext(ctx).Model(&domain.AiAgent{}).
+		Where("deleted = ?", 0)
+	if keyword != "" {
+		query = query.Where("name ILIKE ?", "%"+keyword+"%")
+	}
+	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	err := r.db.WithContext(ctx).
-		Where("deleted = ?", 0).
+	err := query.
 		Order("create_time DESC").
 		Offset(offset).Limit(limit).
 		Find(&agents).Error

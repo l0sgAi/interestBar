@@ -120,8 +120,8 @@ type AgentService interface {
 	CreateAgent(ctx context.Context, adminID uuid.UUID, input CreateAgentInput) (*AgentVO, error)
 	// GetAgent 获取机器人详情。
 	GetAgent(ctx context.Context, adminID, agentID uuid.UUID) (*AgentVO, error)
-	// ListAgents offset 分页列表。
-	ListAgents(ctx context.Context, adminID uuid.UUID, page, size int) (*AgentListResult, error)
+	// ListAgents offset 分页列表。keyword 非空时按 name 模糊过滤。
+	ListAgents(ctx context.Context, adminID uuid.UUID, keyword string, page, size int) (*AgentListResult, error)
 	// UpdateAgent 部分字段更新（api_key 传非空指针即换 key）。
 	UpdateAgent(ctx context.Context, adminID, agentID uuid.UUID, input UpdateAgentInput) (*AgentVO, error)
 	// DeleteAgent 软删（deleted=1 且停用）。
@@ -273,8 +273,8 @@ func (s *agentServiceImpl) GetAgent(ctx context.Context, adminID, agentID uuid.U
 	return &vo, nil
 }
 
-// ListAgents offset 分页列表。
-func (s *agentServiceImpl) ListAgents(ctx context.Context, adminID uuid.UUID, page, size int) (*AgentListResult, error) {
+// ListAgents offset 分页列表，keyword 非空时按 name 模糊过滤。
+func (s *agentServiceImpl) ListAgents(ctx context.Context, adminID uuid.UUID, keyword string, page, size int) (*AgentListResult, error) {
 	if err := s.ensureAdmin(ctx, adminID); err != nil {
 		return nil, err
 	}
@@ -284,7 +284,7 @@ func (s *agentServiceImpl) ListAgents(ctx context.Context, adminID uuid.UUID, pa
 	if size <= 0 || size > 100 {
 		size = 20
 	}
-	agents, total, err := s.repo.ListByOffset(ctx, (page-1)*size, size)
+	agents, total, err := s.repo.ListByOffset(ctx, strings.TrimSpace(keyword), (page-1)*size, size)
 	if err != nil {
 		return nil, err
 	}
