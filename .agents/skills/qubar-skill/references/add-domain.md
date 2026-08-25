@@ -65,7 +65,7 @@ var ErrFooNotFound = errors.New("foo not found")   // 哨兵
 只有端口接口 + DTO（`FeedPostItem`/`FeedPage` 风格），无实体。
 
 ### 2.4 schema 改动
-**改表先改 `docs/db.md`**（DDL 权威来源，DB-owner 执行）。运行时角色无 ALTER 权限，**禁止 AutoMigrate**。
+**改表先改 `docs/pgsql-ddl/` 对应领域文档**（DDL 权威来源，DB-owner 执行）。运行时角色无 ALTER 权限，**禁止 AutoMigrate**。
 
 ## 3. application 层
 
@@ -256,7 +256,7 @@ func (f *fooPostFetcher) GetMediaByPostIDs(ctx context.Context, ids []uuid.UUID)
 - [ ] 软删除 `deleted = 0` 手动过滤（无 gorm.DeletedAt）
 - [ ] 用户文本过 `utils.SanitizeForPg`
 - [ ] Redis key 加到 `constants.go`（前缀 const + helper + 注释）
-- [ ] 改表先改 `docs/db.md`（无 AutoMigrate）
+- [ ] 改表先改 `docs/pgsql-ddl/` 对应领域文档（无 AutoMigrate）
 - [ ] 新配置项三处同步 + 兜底默认值
 - [ ] `go build ./...` + `go vet ./...` 通过
 - [ ] 纯函数补单测（游标/解析/规整）
