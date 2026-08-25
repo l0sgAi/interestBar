@@ -61,7 +61,7 @@ type CreateAgentInput struct {
 	TriggerKeywords   []string               `json:"trigger_keywords"`
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
 	MinIntervalSec    int                    `json:"min_interval_sec"`
-	Status            int                    `json:"status"`
+	Status            *int                   `json:"status"` // nil=默认启用；显式 0=停用
 }
 
 // UpdateAgentInput 更新机器人入参（指针字段，部分更新语义，同 user.UpdateProfileInput）。
@@ -185,11 +185,13 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 	if err := validateRateLimit(input.MaxRepliesPerHour, input.MinIntervalSec); err != nil {
 		return nil, err
 	}
-	if err := validateStatus(input.Status); err != nil {
-		return nil, err
+	if input.Status != nil {
+		if err := validateStatus(*input.Status); err != nil {
+			return nil, err
+		}
 	}
 
-	// api_key 加密（ollama 等本地协议可免 key）
+	// api_key 加密（自部署免鉴权网关可免 key）
 	apiKeyEnc := ""
 	if input.APIKey != "" {
 		enc, err := crypto.Encrypt(conf.Config.Security.DataKey, input.APIKey)
@@ -240,14 +242,15 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		TriggerKeywords:   toKeywords(input.TriggerKeywords),
 		MaxRepliesPerHour: input.MaxRepliesPerHour,
 		MinIntervalSec:    input.MinIntervalSec,
-		Status:            int16(input.Status),
 	}
 	// 触发模式关键词默认值补齐
 	if input.TriggerKeywords == nil {
 		agent.TriggerKeywords = domain.KeywordsJSON{}
 	}
-	if input.Status == 0 {
-		agent.Status = domain.AgentStatusEnabled // 未显式传 status 时默认启用（DDL 默认 1）
+	if input.Status != nil {
+		agent.Status = int16(*input.Status) // 显式传 0 即停用
+	} else {
+		agent.Status = domain.AgentStatusEnabled // 未传 status 时默认启用（DDL 默认 1）
 	}
 	if input.TriggerMode == 0 {
 		agent.TriggerMode = domain.TriggerModeAllPost // DDL 默认 1
@@ -486,9 +489,11 @@ func validateName(name string) error {
 	return nil
 }
 
+// validateProtocol 本期只放行 infra 已实现的协议（gemini/ollama 为 P2 决策待办，
+// 见 docs/agent-reply-design.md；实现前不允许入库，避免运行时必失败）。
 func validateProtocol(p string) error {
 	switch p {
-	case domain.ProtocolOpenAI, domain.ProtocolAnthropic, domain.ProtocolGemini, domain.ProtocolOllama:
+	case domain.ProtocolOpenAI, domain.ProtocolAnthropic:
 		return nil
 	}
 	return errInvalidProtocol

@@ -77,7 +77,8 @@ func (m TriggerMode) Valid() bool {
 	return m >= TriggerModeAllPost && m <= TriggerModeManual
 }
 
-// API 协议白名单常量。
+// API 协议常量。当前仅 openai/anthropic 开放入库（application.validateProtocol 白名单）；
+// gemini/ollama 为 P2 预留，实现前仅作常量保留。
 const (
 	ProtocolOpenAI    = "openai"
 	ProtocolAnthropic = "anthropic"

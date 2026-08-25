@@ -202,13 +202,17 @@ func (s *replyServiceImpl) OnCommentCreated(evt CommentEvent) {
 				logger.Log.Warn("agent reply: concurrency limit reached, skip: " + agent.Name)
 				continue
 			}
-			_, err := s.executeReply(ctx, agent, evt.PostID, &evt)
-			<-s.sem
-			if err != nil {
-				// 调用链路失败已写日志行；前置跳过（限频/防重/帖子不可回）不写。
-				logger.Log.Error(fmt.Sprintf("agent reply: agent=%s post=%s: %s",
-					agent.ID, evt.PostID, err.Error()))
-			}
+			// 独立作用域 + defer 释放信号量：executeReply panic（外层 recover 兜底）
+			// 也必须归还槽位，否则并发上限被永久占用。
+			func() {
+				defer func() { <-s.sem }()
+				_, err := s.executeReply(ctx, agent, evt.PostID, &evt)
+				if err != nil {
+					// 调用链路失败已写日志行；前置跳过（限频/防重/帖子不可回）不写。
+					logger.Log.Error(fmt.Sprintf("agent reply: agent=%s post=%s: %s",
+						agent.ID, evt.PostID, err.Error()))
+				}
+			}()
 		}
 	}()
 }

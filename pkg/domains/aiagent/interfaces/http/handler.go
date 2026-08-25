@@ -40,7 +40,7 @@ type createAgentReq struct {
 	TriggerKeywords   []string               `json:"trigger_keywords"`
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
 	MinIntervalSec    int                    `json:"min_interval_sec"`
-	Status            int                    `json:"status"`
+	Status            *int                   `json:"status"` // nil=默认启用；显式 0=停用
 }
 
 // updateAgentReq 更新机器人请求（指针字段，部分更新）。

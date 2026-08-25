@@ -10,7 +10,7 @@ var (
 	errAgentNotFound    = errors.New("agent not found")
 	errAgentNameExists  = errors.New("agent name already exists")
 	errInvalidName      = errors.New("agent name must be 1-50 chars")
-	errInvalidProtocol  = errors.New("api_protocol must be openai/anthropic/gemini/ollama")
+	errInvalidProtocol  = errors.New("api_protocol must be openai/anthropic")
 	errInvalidModel     = errors.New("model must be 1-100 chars")
 	errInvalidTrigger   = errors.New("trigger_mode must be 1/2/3; mode 2 requires keywords")
 	errInvalidLLMParams = errors.New("llm_params has invalid key/value")

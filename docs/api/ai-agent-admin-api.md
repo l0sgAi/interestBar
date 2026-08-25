@@ -53,7 +53,7 @@ Content-Type: application/json   （POST/PUT）
 | `name` | string | 展示名，全局唯一，1-50 字符 |
 | `avatar_url` | string | 头像，可空 |
 | `linked_user_id` | string(UUID) | 关联系统用户 ID（机器人以该身份发评论；**只读**，创建时后端自动生成 role=2 机器人账号） |
-| `api_protocol` | string | 协议：`openai` / `anthropic` / `gemini` / `ollama` |
+| `api_protocol` | string | 协议：`openai` / `anthropic`（gemini/ollama 规划中，暂未开放） |
 | `base_url` | string | 自定义 API 地址，可空（用官方默认端点时留空） |
 | `has_api_key` | bool | 是否配置了 key |
 | `api_key_masked` | string | key 掩码（如 `sk-****z789`），未配置时无此字段 |
@@ -131,7 +131,7 @@ Content-Type: application/json   （POST/PUT）
   "avatar_url": "https://cdn.qubar.site/avatar/bot.png",
   "api_protocol": "openai",
   "base_url": "",
-  "api_key": "sk-xxxxx（ollama 本地协议可省略）",
+  "api_key": "sk-xxxxx（可省略）",
   "model": "gpt-4o-mini",
   "llm_params": { "temperature": 0.7, "max_tokens": 1024 },
   "system_prompt": "你是兴趣社区的吧务助手，回复要简短友好。",
@@ -148,8 +148,8 @@ Content-Type: application/json   （POST/PUT）
 
 **注意**：
 - `trigger_mode=2` 时 `trigger_keywords` 必填非空，否则 400。
-- `api_key` 允许为空串（ollama 免 key）。
-- **创建即停用做不到**：int 字段无法区分「未传」与「0」，不传 `status` 一律默认启用；要先停用，创建后立刻 `PUT` 改 `status=0`。
+- `api_key` 允许为空串（如自部署免鉴权网关）。
+- `status` 不传默认启用；显式传 `0` 即创建即停用。
 - 创建成功即自动创建 role=2 机器人系统用户（`linked_user_id`），前端无需也不应传该字段。
 
 ### 3.2 列表
@@ -235,7 +235,7 @@ Content-Type: application/json   （POST/PUT）
 | HTTP | message | 场景 | 前端处理建议 |
 |---|---|---|---|
 | 400 | `agent name must be 1-50 chars` | 名称为空/超长 | 表单校验 |
-| 400 | `api_protocol must be openai/anthropic/gemini/ollama` | 协议不在白名单 | 用下拉框 |
+| 400 | `api_protocol must be openai/anthropic` | 协议不在白名单 | 用下拉框 |
 | 400 | `model must be 1-100 chars` | 模型名为空/超长 | 表单校验 |
 | 400 | `trigger_mode must be 1/2/3; mode 2 requires keywords` | 模式非法 / mode=2 无关键词 | 联动显隐关键词输入 |
 | 400 | `llm_params has invalid key/value` | 参数键不在白名单 / 值非数字 | 固定表单字段 |
