@@ -10,6 +10,8 @@ import (
 	"context"
 
 	agentapp "interestBar/pkg/domains/aiagent/application"
+	commentapp "interestBar/pkg/domains/comment/application"
+	postapp "interestBar/pkg/domains/post/application"
 	userapp "interestBar/pkg/domains/user/application"
 	userdomain "interestBar/pkg/domains/user/domain"
 	sharedomain "interestBar/pkg/shared/domain"
@@ -69,4 +71,68 @@ func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email
 var (
 	_ agentapp.RoleReader     = (*agentRoleReader)(nil)
 	_ agentapp.BotUserCreator = (*agentBotUserCreator)(nil)
+	_ agentapp.PostReader     = (*agentPostReader)(nil)
+	_ agentapp.CommentCreator = (*agentCommentCreator)(nil)
 )
+
+// agentPostReader 桥接 aiagent.PostReader -> post.PostService.GetPostBrief。
+type agentPostReader struct {
+	delegate postapp.PostService
+}
+
+// GetPostBrief 返回帖子摘要。未找到返回 nil, nil。
+func (b *agentPostReader) GetPostBrief(ctx context.Context, postID uuid.UUID) (*agentapp.PostBrief, error) {
+	brief, err := b.delegate.GetPostBrief(ctx, postID)
+	if err != nil || brief == nil {
+		return nil, err
+	}
+	return &agentapp.PostBrief{
+		ID:       brief.ID,
+		Title:    brief.Title,
+		Summary:  brief.Summary,
+		Status:   brief.Status,
+		IsLock:   brief.IsLock,
+		AuthorID: brief.AuthorID,
+	}, nil
+}
+
+// agentCommentCreator 桥接 aiagent.CommentCreator -> comment.CommentService.CreateComment。
+//
+// 机器人以 linked_user_id 身份发评论；帖子校验/清洗/计数/热度事件全部复用
+// comment 域现有链路。机器人评论同样会回调 AgentReplyTrigger，由 aiagent 侧
+// ExistsByLinkedUserID 防回环。
+type agentCommentCreator struct {
+	delegate commentapp.CommentService
+}
+
+// CreateComment 以指定用户身份创建评论，返回评论 ID。
+func (b *agentCommentCreator) CreateComment(ctx context.Context, userID uuid.UUID, input agentapp.CommentCreateInput) (uuid.UUID, error) {
+	return b.delegate.CreateComment(ctx, userID, commentapp.CreateCommentInput{
+		PostID:    input.PostID,
+		Content:   input.Content,
+		RootID:    input.RootID,
+		ReplyToID: input.ReplyToID,
+	})
+}
+
+// commentAgentTrigger 桥接 comment.AgentReplyTrigger -> aiagent.ReplyService.OnCommentCreated。
+//
+// 同步回调、立即返回（ReplyService 内部 goroutine 异步执行 + recover），
+// 不向评论创建链路传播任何错误。
+type commentAgentTrigger struct {
+	delegate agentapp.ReplyService
+}
+
+// OnCommentCreated 评论创建完成后的机器人触发入口。
+func (b *commentAgentTrigger) OnCommentCreated(postID, commentID, userID uuid.UUID, rootID *uuid.UUID, content string) {
+	b.delegate.OnCommentCreated(agentapp.CommentEvent{
+		CommentID: commentID,
+		PostID:    postID,
+		UserID:    userID,
+		RootID:    rootID,
+		Content:   content,
+	})
+}
+
+// 编译期保证：触发桥接器满足 comment 领域端口。
+var _ commentapp.AgentReplyTrigger = (*commentAgentTrigger)(nil)

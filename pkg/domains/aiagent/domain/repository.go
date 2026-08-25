@@ -11,6 +11,8 @@ import (
 var (
 	// ErrAgentNotFound 机器人不存在（含已软删）。
 	ErrAgentNotFound = errors.New("agent not found")
+	// ErrReplyAlreadyExists 机器人对该帖已有回复日志（唯一索引兜底，含失败行）。
+	ErrReplyAlreadyExists = errors.New("reply log already exists for agent and post")
 )
 
 // AgentRepository 是 aiagent 领域的持久化接口（由 infrastructure 实现）。
@@ -29,4 +31,10 @@ type AgentRepository interface {
 	UpdateFields(ctx context.Context, agentID uuid.UUID, fields map[string]interface{}) error
 	// SoftDelete 软删（deleted=1 且 status=0，一并停用）。
 	SoftDelete(ctx context.Context, agentID uuid.UUID) error
+	// ListEnabled 获取全部启用中的机器人（未删除且 status=1）。
+	// 供回复执行链路加载触发候选（表小，走 idx_ai_agent_active 部分索引）。
+	ListEnabled(ctx context.Context) ([]AiAgent, error)
+	// ExistsByLinkedUserID 检查某系统用户是否为机器人的关联账号（未删除）。
+	// 供评论触发钩子反查，机器人自己的评论不再触发关键词回复（防回环）。
+	ExistsByLinkedUserID(ctx context.Context, userID uuid.UUID) (bool, error)
 }

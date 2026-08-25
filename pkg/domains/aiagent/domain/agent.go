@@ -26,7 +26,7 @@ type AiAgent struct {
 	Model             string        `json:"model" gorm:"column:model;type:varchar(100);not null"`
 	LLMParams         LLMParamsJSON `json:"llm_params" gorm:"column:llm_params;type:jsonb;not null;default:'{}'::jsonb"`
 	SystemPrompt      string        `json:"system_prompt,omitempty" gorm:"column:system_prompt;type:text;not null;default:''"`
-	TriggerMode       int16         `json:"trigger_mode" gorm:"column:trigger_mode;type:smallint;not null;default:1"`
+	TriggerMode       TriggerMode   `json:"trigger_mode" gorm:"column:trigger_mode;type:smallint;not null;default:1"`
 	TriggerKeywords   KeywordsJSON  `json:"trigger_keywords" gorm:"column:trigger_keywords;type:jsonb;not null;default:'[]'::jsonb"`
 	MaxRepliesPerHour int           `json:"max_replies_per_hour" gorm:"column:max_replies_per_hour;not null;default:30"` // 0=不限
 	MinIntervalSec    int           `json:"min_interval_sec" gorm:"column:min_interval_sec;not null;default:60"`         // 0=不限
@@ -45,12 +45,37 @@ const (
 	AgentStatusEnabled  = 1 // 启用
 )
 
-// 触发模式常量。
+// TriggerMode 触发模式枚举（trigger_mode 列，smallint）。
+//
+// 定义为类型化枚举而非裸 int 常量，编码与语义的映射集中在 String/Valid；
+// 与 int16 字段比较/赋值因底层类型相同可直接进行（Go 可赋值性规则）。
+type TriggerMode int16
+
+// 触发模式枚举值。
 const (
-	TriggerModeAllPost = 1 // 全部新帖
-	TriggerModeKeyword = 2 // 关键词触发
-	TriggerModeManual  = 3 // 手动
+	TriggerModeAllPost TriggerMode = 1 // 全部新帖（agent-reply 链路 P2 待实现，本期不生效）
+	TriggerModeKeyword TriggerMode = 2 // 评论关键词触发
+	TriggerModeManual  TriggerMode = 3 // 管理员手动触发
 )
+
+// String 返回触发模式的语义名（未知编码返回 "unknown"）。
+func (m TriggerMode) String() string {
+	switch m {
+	case TriggerModeAllPost:
+		return "all_post"
+	case TriggerModeKeyword:
+		return "keyword"
+	case TriggerModeManual:
+		return "manual"
+	default:
+		return "unknown"
+	}
+}
+
+// Valid 报告触发模式编码是否合法（1-3）。
+func (m TriggerMode) Valid() bool {
+	return m >= TriggerModeAllPost && m <= TriggerModeManual
+}
 
 // API 协议白名单常量。
 const (

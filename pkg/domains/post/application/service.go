@@ -219,6 +219,9 @@ type PostService interface {
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
 	GetPostMeta(ctx context.Context, postID uuid.UUID) (*PostMeta, error)
+	// GetPostBrief 获取帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
+	// 未找到返回 nil, nil。
+	GetPostBrief(ctx context.Context, postID uuid.UUID) (*PostBrief, error)
 	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
 	// 然后递增帖子评论计数（Redis Hash + Redpanda 异步持久化）。
 	// 供 comment 领域发评论后调用。
@@ -250,6 +253,16 @@ type PostMeta struct {
 	ID     uuid.UUID
 	Status int16 // 帖子状态
 	IsLock int16 // 是否锁定
+}
+
+// PostBrief 帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
+type PostBrief struct {
+	ID       uuid.UUID
+	Title    string
+	Summary  string
+	Status   int16 // 帖子状态
+	IsLock   int16 // 是否锁定
+	AuthorID uuid.UUID
 }
 
 type postServiceImpl struct {
@@ -964,6 +977,25 @@ func (s *postServiceImpl) GetPostMeta(ctx context.Context, postID uuid.UUID) (*P
 		ID:     post.ID,
 		Status: post.Status,
 		IsLock: post.IsLock,
+	}, nil
+}
+
+// GetPostBrief 获取帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
+func (s *postServiceImpl) GetPostBrief(ctx context.Context, postID uuid.UUID) (*PostBrief, error) {
+	post, err := s.repo.GetByID(ctx, postID)
+	if err != nil {
+		if err == domain.ErrPostNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &PostBrief{
+		ID:       post.ID,
+		Title:    post.Title,
+		Summary:  post.Summary,
+		Status:   post.Status,
+		IsLock:   post.IsLock,
+		AuthorID: post.UserID,
 	}, nil
 }
 

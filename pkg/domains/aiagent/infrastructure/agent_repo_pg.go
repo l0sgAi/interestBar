@@ -91,3 +91,20 @@ func (r *agentRepoPG) SoftDelete(ctx context.Context, agentID uuid.UUID) error {
 			"status":  domain.AgentStatusDisabled,
 		}).Error
 }
+
+func (r *agentRepoPG) ListEnabled(ctx context.Context) ([]domain.AiAgent, error) {
+	var agents []domain.AiAgent
+	err := r.db.WithContext(ctx).
+		Where("deleted = ? AND status = ?", 0, domain.AgentStatusEnabled).
+		Order("create_time ASC").
+		Find(&agents).Error
+	return agents, err
+}
+
+func (r *agentRepoPG) ExistsByLinkedUserID(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&domain.AiAgent{}).
+		Where("linked_user_id = ? AND deleted = ?", userID, 0).
+		Count(&count).Error
+	return count > 0, err
+}

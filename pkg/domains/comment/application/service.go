@@ -56,6 +56,16 @@ type PostLookup interface {
 	RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error
 }
 
+// AgentReplyTrigger AI 机器人回复触发端口（composition 桥接 aiagent.ReplyService）。
+//
+// 评论创建成功后同步回调；实现方必须立即返回（内部异步执行），
+// 不向评论创建链路传播任何错误。
+type AgentReplyTrigger interface {
+	// OnCommentCreated 评论创建完成后的触发入口。
+	// rootID 为 nil 表示顶层评论。
+	OnCommentCreated(postID, commentID, userID uuid.UUID, rootID *uuid.UUID, content string)
+}
+
 // ===== DTO =====
 
 // CommentVO 评论 VO（包含评论信息 + 评论者信息 + 被回复人信息 + 当前用户点赞状态）。
@@ -130,15 +140,18 @@ type CommentService interface {
 	SetUserFacade(f UserFacade)
 	// SetPostLookup 注入帖子查询端口（发评论校验 + 帖子评论计数用）。
 	SetPostLookup(p PostLookup)
+	// SetAgentTrigger 注入 AI 机器人回复触发端口（评论创建后回调）。
+	SetAgentTrigger(t AgentReplyTrigger)
 }
 
 type commentServiceImpl struct {
-	repo       domain.CommentRepository
-	statsCache domain.CommentStatsCache
-	likeCache  domain.CommentLikeCache
-	publisher  domain.CommentEventPublisher
-	userFacade UserFacade
-	postLookup PostLookup
+	repo         domain.CommentRepository
+	statsCache   domain.CommentStatsCache
+	likeCache    domain.CommentLikeCache
+	publisher    domain.CommentEventPublisher
+	userFacade   UserFacade
+	postLookup   PostLookup
+	agentTrigger AgentReplyTrigger
 }
 
 // NewCommentService 构造 CommentService。
@@ -162,6 +175,9 @@ func NewCommentService(
 // Setter 方法供 composition 注入跨领域依赖。
 func (s *commentServiceImpl) SetUserFacade(f UserFacade) { s.userFacade = f }
 func (s *commentServiceImpl) SetPostLookup(p PostLookup) { s.postLookup = p }
+
+// SetAgentTrigger 注入 AI 机器人回复触发端口（未注入则评论创建不触发机器人）。
+func (s *commentServiceImpl) SetAgentTrigger(t AgentReplyTrigger) { s.agentTrigger = t }
 
 // CreateComment 发评论（支持顶层评论和回复）。
 //
@@ -266,6 +282,11 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 		if err := s.publisher.PublishCommentInteraction(ctx, userID, input.PostID); err != nil {
 			logger.Log.Error("Failed to publish comment interaction: " + err.Error())
 		}
+	}
+
+	// 7. AI 机器人回复触发（同步回调、实现方立即返回；机器人自身评论由实现方防回环）。
+	if s.agentTrigger != nil {
+		s.agentTrigger.OnCommentCreated(input.PostID, comment.ID, userID, comment.RootID, content)
 	}
 
 	return comment.ID, nil

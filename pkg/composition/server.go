@@ -2,12 +2,12 @@
 package composition
 
 import (
-	authapp "interestBar/pkg/domains/auth/application"
-	authinfra "interestBar/pkg/domains/auth/infrastructure"
-	authhttp "interestBar/pkg/domains/auth/interfaces/http"
 	agentapp "interestBar/pkg/domains/aiagent/application"
 	agentinfra "interestBar/pkg/domains/aiagent/infrastructure"
 	agenthttp "interestBar/pkg/domains/aiagent/interfaces/http"
+	authapp "interestBar/pkg/domains/auth/application"
+	authinfra "interestBar/pkg/domains/auth/infrastructure"
+	authhttp "interestBar/pkg/domains/auth/interfaces/http"
 	categoryapp "interestBar/pkg/domains/category/application"
 	categoryinfra "interestBar/pkg/domains/category/infrastructure"
 	categoryhttp "interestBar/pkg/domains/category/interfaces/http"
@@ -37,11 +37,11 @@ import (
 	recommendinfra "interestBar/pkg/domains/recommend/infrastructure"
 	recommendhttp "interestBar/pkg/domains/recommend/interfaces/http"
 	storageapp "interestBar/pkg/domains/storage/application"
+	storageinfra "interestBar/pkg/domains/storage/infrastructure"
+	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
 	trendingapp "interestBar/pkg/domains/trending/application"
 	trendinginfra "interestBar/pkg/domains/trending/infrastructure"
 	trendinghttp "interestBar/pkg/domains/trending/interfaces/http"
-	storageinfra "interestBar/pkg/domains/storage/infrastructure"
-	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
 	userapp "interestBar/pkg/domains/user/application"
 	userinfra "interestBar/pkg/domains/user/infrastructure"
 	userhttp "interestBar/pkg/domains/user/interfaces/http"
@@ -121,6 +121,12 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	agentSvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
 	agentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
 
+	// aiagent 回复执行链路：LLM(eino) + 帖子摘要(post) + 评论创建(comment)。
+	replySvc := newAgentReplyService(deps, postSvc, commentSvc)
+	replySvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
+	// comment -> aiagent：评论创建后触发关键词机器人（同步回调、内部异步执行）。
+	commentSvc.SetAgentTrigger(&commentAgentTrigger{delegate: replySvc})
+
 	// 注册路由
 	registerCategory(root, deps, authCheck, OptionalLoginFn)
 	registerStorage(root, deps, authCheck)
@@ -135,7 +141,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerRecommend(root, recommendSvc, authCheck, OptionalLoginFn)
 	registerTrending(root, trendingSvc, authCheck, OptionalLoginFn)
 	registerDiscover(root, discoverSvc, authCheck)
-	registerAgent(root, agentSvc, authCheck)
+	registerAgent(root, agentSvc, replySvc, authCheck)
 
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
@@ -231,11 +237,11 @@ func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendServi
 // hydrator/checker/circle/user 为跨域桥接器（包 post/circle/user service + redispkg）。
 func newTrendingService(postSvc postapp.PostService, circleRepo circledomain.CircleRepository, userFacade userapp.UserFacade) trendingapp.TrendingService {
 	return trendingapp.NewTrendingService(
-		trendinginfra.NewBoardStore(),              // BoardStore
-		&trendingPostHydrator{delegate: postSvc},   // PostHydrator
-		&trendingInteractionChecker{},              // InteractionChecker
-		&trendingCircleLookup{repo: circleRepo},    // CircleLookup
-		&trendingUserLookup{delegate: userFacade},  // UserLookup
+		trendinginfra.NewBoardStore(),             // BoardStore
+		&trendingPostHydrator{delegate: postSvc},  // PostHydrator
+		&trendingInteractionChecker{},             // InteractionChecker
+		&trendingCircleLookup{repo: circleRepo},   // CircleLookup
+		&trendingUserLookup{delegate: userFacade}, // UserLookup
 	)
 }
 
@@ -250,11 +256,11 @@ func registerTrending(root routing.RouterGroup, svc trendingapp.TrendingService,
 // hydrator/checker/circle/seed/joinedCircles 为跨域桥接器（包 post/circle service + redispkg）。
 func newDiscoverService(postSvc postapp.PostService, circleRepo circledomain.CircleRepository, circleSvc circleapp.CircleService) discoverapp.DiscoverService {
 	return discoverapp.NewDiscoverService(
-		discoverinfra.NewDiscoverPoolStore(),        // DiscoverPoolStore
-		&discoverPostHydrator{delegate: postSvc},    // PostHydrator（复用 trending/recommend 同款桥接）
-		&discoverInteractionChecker{},              // InteractionChecker（stateless，直接调 redispkg）
-		&discoverCircleLookup{repo: circleRepo},    // CircleLookup（复用 trending 同款桥接）
-		&discoverSeedReader{},                      // SeedReader（直接调 redispkg，同 recommend infra）
+		discoverinfra.NewDiscoverPoolStore(),             // DiscoverPoolStore
+		&discoverPostHydrator{delegate: postSvc},         // PostHydrator（复用 trending/recommend 同款桥接）
+		&discoverInteractionChecker{},                    // InteractionChecker（stateless，直接调 redispkg）
+		&discoverCircleLookup{repo: circleRepo},          // CircleLookup（复用 trending 同款桥接）
+		&discoverSeedReader{},                            // SeedReader（直接调 redispkg，同 recommend infra）
 		&discoverJoinedCircleLookup{delegate: circleSvc}, // JoinedCircleLookup（复用 recommend 同款桥接）
 	)
 }
@@ -267,9 +273,10 @@ func registerDiscover(root routing.RouterGroup, svc discoverapp.DiscoverService,
 	discoverhttp.RegisterRoutes(root, svc, OptionalLoginFn)
 }
 
-// registerAgent 装配 aiagent 领域（管理端机器人 CRUD，role 校验在 service 层）。
-func registerAgent(root routing.RouterGroup, svc agentapp.AgentService, authCheck routing.HandlerFunc) {
-	agenthttp.RegisterRoutes(root, svc, authCheck)
+// registerAgent 装配 aiagent 领域（管理端机器人 CRUD + 手动触发回复，
+// role 校验在 service 层）。
+func registerAgent(root routing.RouterGroup, svc agentapp.AgentService, replySvc agentapp.ReplyService, authCheck routing.HandlerFunc) {
+	agenthttp.RegisterRoutes(root, svc, replySvc, authCheck)
 }
 
 // ===== Service 构造函数 =====
@@ -303,6 +310,18 @@ func newCircleService(deps *Deps) (circleapp.CircleService, circledomain.CircleR
 func newAgentService(deps *Deps) agentapp.AgentService {
 	repo := agentinfra.NewAgentRepository(deps.DB.Get())
 	return agentapp.NewAgentService(repo)
+}
+
+// newAgentReplyService 构造机器人回复执行服务（eino LLM + post/comment 跨域桥接，
+// 桥接器见 facade_bridges.go；role 读取 setter 注入见 RegisterDomainRoutes）。
+func newAgentReplyService(deps *Deps, postSvc postapp.PostService, commentSvc commentapp.CommentService) agentapp.ReplyService {
+	agentRepo := agentinfra.NewAgentRepository(deps.DB.Get())
+	replyLogRepo := agentinfra.NewReplyLogRepository(deps.DB.Get())
+	llm := agentinfra.NewLLMCaller()
+	svc := agentapp.NewReplyService(agentRepo, replyLogRepo, llm)
+	svc.SetPostReader(&agentPostReader{delegate: postSvc})
+	svc.SetCommentCreator(&agentCommentCreator{delegate: commentSvc})
+	return svc
 }
 
 func newPostService(deps *Deps) postapp.PostService {

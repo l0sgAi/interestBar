@@ -175,6 +175,12 @@ discover:
   max_size: 50                     # 接口 size 上限
   seed_limit: 500                  # 反气泡读取已交互帖上限(liked/collected/viewed 各)
 
+# AI 机器人回复执行链路（<=0 时用代码内默认值）
+aiagent:
+  timeout_sec: 30          # LLM 单次调用超时(秒)，默认 30
+  max_content_chars: 4000  # Prompt 各段(title/summary/评论)截断长度，默认 4000
+  reply_concurrency: 3     # 关键词触发异步执行并发上限，默认 3
+
 # 安全相关配置
 security:
   # 密码哈希参数 (Argon2id, OWASP 2024 推荐 RFC 9106)

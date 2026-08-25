@@ -236,7 +236,7 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		Model:             model,
 		LLMParams:         toLLMParams(input.LLMParams),
 		SystemPrompt:      utils.SanitizeForPg(input.SystemPrompt),
-		TriggerMode:       int16(input.TriggerMode),
+		TriggerMode:       domain.TriggerMode(input.TriggerMode),
 		TriggerKeywords:   toKeywords(input.TriggerKeywords),
 		MaxRepliesPerHour: input.MaxRepliesPerHour,
 		MinIntervalSec:    input.MinIntervalSec,
@@ -496,13 +496,14 @@ func validateProtocol(p string) error {
 
 // validateTrigger 校验触发模式；mode=2 时 keywords 必须非空。
 func validateTrigger(mode int, keywords []string) error {
-	if mode == 0 {
-		mode = domain.TriggerModeAllPost // 未传时取默认
+	m := domain.TriggerMode(mode)
+	if m == 0 {
+		m = domain.TriggerModeAllPost // 未传时取默认
 	}
-	if mode < domain.TriggerModeAllPost || mode > domain.TriggerModeManual {
+	if !m.Valid() {
 		return errInvalidTrigger
 	}
-	if mode == domain.TriggerModeKeyword && len(keywords) == 0 {
+	if m == domain.TriggerModeKeyword && len(keywords) == 0 {
 		return errInvalidTrigger
 	}
 	if keywords != nil {

@@ -20,6 +20,16 @@ var (
 	errNoFieldsToUpdate = errors.New("at least one field to update")
 )
 
+// 回复执行链路错误（reply_service）。
+var (
+	errAgentDisabled    = errors.New("agent is disabled")
+	errNotManualMode    = errors.New("agent is not in manual trigger mode")
+	errPostNotReplyable = errors.New("post not replyable (not published or locked)")
+	errAlreadyReplied   = errors.New("agent already replied to this post")
+	errRateLimited      = errors.New("agent reply rate limited")
+	errLLMCall          = errors.New("llm call failed")
+)
+
 // 错误判断谓词（供 handler 层使用）。
 func IsNotAdminErr(err error) bool         { return errors.Is(err, errNotAdmin) }
 func IsAgentNotFoundErr(err error) bool    { return errors.Is(err, errAgentNotFound) }
@@ -33,3 +43,11 @@ func IsInvalidRateLimitErr(err error) bool { return errors.Is(err, errInvalidRat
 func IsInvalidStatusErr(err error) bool    { return errors.Is(err, errInvalidStatus) }
 func IsAPIKeyNotSetErr(err error) bool     { return errors.Is(err, errAPIKeyNotSet) }
 func IsNoFieldsToUpdateErr(err error) bool { return errors.Is(err, errNoFieldsToUpdate) }
+
+// 回复执行链路错误谓词（供 handler 映射手动触发接口的响应）。
+func IsAgentDisabledErr(err error) bool    { return errors.Is(err, errAgentDisabled) }
+func IsNotManualModeErr(err error) bool    { return errors.Is(err, errNotManualMode) }
+func IsPostNotReplyableErr(err error) bool { return errors.Is(err, errPostNotReplyable) }
+func IsAlreadyRepliedErr(err error) bool   { return errors.Is(err, errAlreadyReplied) }
+func IsRateLimitedErr(err error) bool      { return errors.Is(err, errRateLimited) }
+func IsLLMCallErr(err error) bool          { return errors.Is(err, errLLMCall) }

@@ -1,8 +1,8 @@
 # AI 回复机器人管理端 API 对接文档（前端）
 
-> **功能**：管理员（`users.role=1`）对 AI 回复机器人（agent）的增删改查。
-> **对应实现**：`pkg/domains/aiagent/`，DDL 见 [../pgsql-ddl/ai-agent.md](../pgsql-ddl/ai-agent.md)。
-> **状态**：CRUD 已交付。机器人的实际回复执行链路（消费新帖 → 调 LLM → 发评论）后续单独交付，本期无相关接口。
+> **功能**：管理员（`users.role=1`）对 AI 回复机器人（agent）的增删改查 + 手动触发回复。
+> **对应实现**：`pkg/domains/aiagent/`，DDL 见 [../pgsql-ddl/ai-agent.md](../pgsql-ddl/ai-agent.md)，回复链路设计见 [../agent-reply-design.md](../agent-reply-design.md)。
+> **状态**：CRUD 已交付；回复执行链路已交付（评论关键词触发 mode=2 + 手动触发 mode=3；「全部新帖」mode=1 暂不生效，P2 待实现）。
 
 ---
 
@@ -60,8 +60,8 @@ Content-Type: application/json   （POST/PUT）
 | `model` | string | 模型名，1-100 字符（如 `gpt-4o-mini` / `claude-sonnet-5`） |
 | `llm_params` | object | 通用 LLM 参数，见 §2.1 |
 | `system_prompt` | string | 系统提示词，可空 |
-| `trigger_mode` | int | 触发模式：1=全部新帖，2=关键词触发，3=手动 |
-| `trigger_keywords` | string[] | 触发关键词；仅 mode=2 时有意义 |
+| `trigger_mode` | int | 触发模式：1=全部新帖（**暂不生效**），2=评论关键词触发，3=手动 |
+| `trigger_keywords` | string[] | 触发关键词；仅 mode=2 时有意义（匹配**评论内容**，不区分大小写子串） |
 | `max_replies_per_hour` | int | 每小时回复上限，0=不限，默认 30 |
 | `min_interval_sec` | int | 两次回复最小间隔秒，0=不限，默认 60 |
 | `status` | int | 1=启用，0=停用 |
@@ -117,6 +117,7 @@ Content-Type: application/json   （POST/PUT）
 | GET | `/agent/:id` | 详情 |
 | PUT | `/agent/:id` | 部分更新 |
 | DELETE | `/agent/:id` | 软删（停用） |
+| POST | `/agent/:id/reply/:postId` | 手动触发回复（mode=3） |
 
 ### 3.1 创建机器人
 
@@ -206,6 +207,27 @@ Content-Type: application/json   （POST/PUT）
 
 **不可恢复**（无恢复接口）；其关联机器人账号与历史回复保留。
 
+### 3.6 手动触发回复
+
+`POST /agent/:id/reply/:postId`
+
+管理员手动触发机器人在指定帖子下发表一条 AI 回复（顶层评论）。**同步执行**（含 LLM 调用，耗时可达数十秒），成功返回生成的评论 ID：
+
+```json
+{ "code": 200, "message": "回复成功", "data": "<comment-uuid>" }
+```
+
+**前置条件**（不满足返回对应错误，且**不产生回复日志**）：
+- 机器人存在且启用（`status=1`），否则 400/404；
+- 机器人 `trigger_mode=3`（手动模式），否则 400 `agent is not in manual trigger mode`；
+- 帖子已发布且未锁定，否则 400 `post not replyable (not published or locked)`；
+- 该机器人未对该帖回复过（含失败，`ai_agent_reply_log` 唯一约束），否则 409；
+- 限频未超（最近 1h 日志行数 / 最小间隔，**失败也算额度**），否则 429。
+
+**调用失败**（LLM 报错/空回复/评论落库失败）：返回 503，`message` 含失败原因摘要；失败日志行已照常落库（`status=0`），**同帖不再重试**（终态）。
+
+**关键词触发说明**（mode=2，无管理端接口）：用户在任意帖子下发评论，评论内容命中任一 `trigger_keywords`（不区分大小写子串）即触发启用的机器人异步回复（回复挂在触发评论楼层内）。触发失败静默，仅日志表可查。机器人自己的评论不会触发（防回环）。
+
 ---
 
 ## 4. 错误码速查
@@ -237,7 +259,7 @@ Content-Type: application/json   （POST/PUT）
 2. **掩码含义**：`sk-****z789` = 前 3 + `****` + 后 4；key 长度 ≤8 时显示 `****`。掩码只用于人工辨认，不可用于任何提交。
 3. **列表搜索**：`GET /agent/list` 支持 `keyword` 按 `name` 模糊过滤（服务端 ILIKE，`total` 为过滤后总数）；也可继续本地过滤。
 4. **`linked_user_id` 只读**：机器人账号由后端生成（role=2，username/email 由 uuidv7+时间戳生成，明显非真人），前端仅展示。
-5. **status 语义**：停用（0）后机器人不再参与回复触发（执行链路上线后生效）；CRUD 层面停用仅是标记。
-6. **触发/限频字段本期为「配置存储」**：`trigger_mode`/`trigger_keywords`/限频字段已可配置并校验，但实际回复执行链路未上线，配置暂不产生效果。
+5. **status 语义**：停用（0）后机器人不再参与任何回复触发（关键词/手动均拒绝）。
+6. **触发/限频字段已生效**：mode=2 匹配**评论内容**（不是帖子）；mode=3 走 `POST /agent/:id/reply/:postId`；mode=1（全部新帖）暂不生效。限频按回复日志全部行（含失败）统计，防重为「一机器人一帖至多一次」（含失败，终态不重试）。
 7. **时间字段**：RFC3339 带时区（+08:00），直接 `new Date()` 解析即可。
 8. **并发编辑**：无版本控制，后写覆盖；管理后台单人使用场景可接受。

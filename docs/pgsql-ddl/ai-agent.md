@@ -100,7 +100,7 @@ CREATE TABLE domains.ai_agent_reply_log (
     -- 1. 关联关系
     agent_id UUID NOT NULL,                  -- 机器人ID(ai_agent.id)
     post_id UUID NOT NULL,                   -- 被回复帖子ID(post.id)
-    comment_id UUID NOT NULL,                -- 生成的评论ID(comment.id,失败时为NULL)
+    comment_id UUID,                       -- 生成的评论ID(comment.id,调用失败时为NULL)
     user_id UUID NOT NULL,                   -- 帖子作者ID(冗余,便于风控分析)
 
     -- 2. 调用结果
@@ -132,4 +132,13 @@ CREATE UNIQUE INDEX idx_ai_reply_unique ON domains.ai_agent_reply_log(agent_id, 
 
 -- 2. 频率限制统计: 最近1小时计数 + 最新回复时间
 CREATE INDEX idx_ai_reply_agent_time ON domains.ai_agent_reply_log(agent_id, create_time DESC);
+```
+
+## 存量表迁移（comment_id 可空）
+
+> 2026-08-25 修正：`comment_id` 原误标 `NOT NULL`，与「调用失败时为 NULL」语义矛盾（agent-reply 链路需要写失败行）。
+> 已建表的存量库由 DB-owner 执行：
+
+```sql
+ALTER TABLE domains.ai_agent_reply_log ALTER COLUMN comment_id DROP NOT NULL;
 ```

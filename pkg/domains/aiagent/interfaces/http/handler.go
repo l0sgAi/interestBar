@@ -17,12 +17,13 @@ import (
 
 // Handler aiagent 领域 HTTP 处理器。
 type Handler struct {
-	svc application.AgentService
+	svc      application.AgentService
+	replySvc application.ReplyService
 }
 
 // NewHandler 构造 Handler。
-func NewHandler(svc application.AgentService) *Handler {
-	return &Handler{svc: svc}
+func NewHandler(svc application.AgentService, replySvc application.ReplyService) *Handler {
+	return &Handler{svc: svc, replySvc: replySvc}
 }
 
 // createAgentReq 创建机器人请求。
@@ -190,6 +191,32 @@ func (h *Handler) DeleteAgent(c appctx.AppContext) {
 	httputil.SuccessWithMessage(c, httputil.MsgDeleted, nil)
 }
 
+// ManualReply POST /agent/:id/reply/:postId 管理员手动触发机器人回复。
+//
+// 仅 trigger_mode=3（手动）且启用中的机器人可触发；同步执行 LLM 调用，
+// 成功返回生成的评论 ID，失败返回错误（失败日志行已照常落库）。
+func (h *Handler) ManualReply(c appctx.AppContext) {
+	adminID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	agentID, ok := requireAgentID(c)
+	if !ok {
+		return
+	}
+	postID, err := uuid.Parse(c.Param("postId"))
+	if err != nil {
+		httputil.BadRequest(c, "Invalid post id")
+		return
+	}
+	commentID, err := h.replySvc.ManualReply(c, adminID, agentID, postID)
+	if err != nil {
+		writeReplyError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "回复成功", commentID)
+}
+
 // ---- 本地助手 ----
 
 // requireUserID 读取当前登录用户 ID（已过 authCheck，理论上必成功）。
@@ -215,6 +242,29 @@ func requireAgentID(c appctx.AppContext) (uuid.UUID, bool) {
 		return uuid.Nil, false
 	}
 	return id, true
+}
+
+// writeReplyError 把手动触发回复的错误映射为 HTTP 响应。
+func writeReplyError(c appctx.AppContext, err error) {
+	switch {
+	case application.IsNotAdminErr(err):
+		httputil.Forbidden(c, "Admin role required")
+	case application.IsAgentNotFoundErr(err), errors.Is(err, domain.ErrAgentNotFound):
+		httputil.NotFound(c, "Agent not found")
+	case application.IsAgentDisabledErr(err),
+		application.IsNotManualModeErr(err),
+		application.IsPostNotReplyableErr(err):
+		httputil.BadRequest(c, err.Error())
+	case application.IsAlreadyRepliedErr(err):
+		httputil.Conflict(c, "Agent already replied to this post")
+	case application.IsRateLimitedErr(err):
+		httputil.TooManyRequests(c, "Agent reply rate limited")
+	case application.IsLLMCallErr(err):
+		// 手动触发同步反馈失败原因（含供应商错误摘要），日志行已落库。
+		httputil.ServiceUnavailable(c, err.Error())
+	default:
+		httputil.InternalError(c)
+	}
 }
 
 // writeAgentError 把 application/domain 错误映射为 HTTP 响应。
