@@ -189,5 +189,5 @@ security:
 
   # 敏感字段应用层加密密钥（AES-256-GCM，任意长度字符串经 SHA-256 派生）
   # 用于 ai_agent.api_key 入库前加密。生产环境必须配置且妥善保管。
-  data_key: ""
+  data_key: "TEST_DATA_KEY_1234567890" # 生产环境请替换为随机安全密钥，并妥善保管
 

@@ -27,6 +27,31 @@
 
 ---
 
+## 附录:应用角色权限(DB-owner 建表后必做)
+
+运行时应用角色(`qubar_web_app`,见 `configs/config.yaml` 的 `pgsql.username`)对 `domains` schema 下的表**只有被显式 GRANT 的权限**。DB-owner 角色新建表后不授权,应用即报 `permission denied for table xxx (SQLSTATE 42501)`。
+
+**建表后标准步骤**(以 DB-owner 身份执行):
+
+```sql
+-- 1. 新表现表授权(立即生效;一次授予 schema 下所有表现表)
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA domains TO qubar_web_app;
+
+-- 2. 默认权限:以后本角色新建的表自动授权(新表免再手工 GRANT)
+ALTER DEFAULT PRIVILEGES IN SCHEMA domains
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO qubar_web_app;
+```
+
+**约定**:
+
+- 应用角色只给行级 DML(`SELECT/INSERT/UPDATE/DELETE`),**不给** `TRUNCATE/ALTER`——schema 变更一律走 DB-owner(与"运行时角色无 ALTER 权限、禁止 AutoMigrate"一致);
+- UUID 主键无 sequence,无需 `GRANT USAGE ON SEQUENCE`;
+- append-only 表(如 `ai_agent_reply_log`)可只授 `SELECT, INSERT`,不给 `UPDATE/DELETE`;
+- `ALTER DEFAULT PRIVILEGES` 只对**执行该语句的角色**之后新建的表生效;若 DDL 由多个 owner 角色执行,需各自执行一次;
+- 验证:`\dp domains.<table>` 或应用重试对应接口。
+
+---
+
 ## 附录:批量更新统计的 jsonb 类型对照
 
 异步消费者(MQ 聚合后批量写库)使用 `jsonb_to_recordset`,ID 列的类型必须从 `BIGINT` 改为 `uuid`:
