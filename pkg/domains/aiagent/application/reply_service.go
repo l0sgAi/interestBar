@@ -360,40 +360,9 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 	// 3.2 分类器判定（阶段1）：仅关键词触发（trigger!=nil）且配置了判定条件时执行。
 	// 手动触发是管理员显式操作，天然绕过；filter_prompt 为空时跳过，行为与旧版一致。
 	if trigger != nil && agent.FilterPrompt != "" {
-		judgeParams := copyLLMParams(agent.LLMParams)
-		judgeParams["temperature"] = float64(0)
-		judgeParams["max_tokens"] = float64(judgeMaxTokens)
-		jres, err := s.llm.Generate(ctx, LLMRequest{
-			Protocol:     agent.APIProtocol,
-			BaseURL:      agent.BaseURL,
-			APIKey:       apiKey,
-			Model:        agent.Model,
-			Params:       judgeParams,
-			SystemPrompt: judgeSystemPrompt,
-			UserPrompt:   buildJudgeUserPrompt(agent, post, trigger),
-		})
-		if err != nil {
-			return fail("classifier generate failed: " + err.Error())
-		}
-		promptTokens += jres.PromptTokens
-		completionTokens += jres.CompletionTokens
-		judge, err := parseJudgeResult(jres.Content)
-		if err != nil {
-			// fail-closed：解析失败宁可漏回，不可放进未判定内容。error_msg 带原始输出现场便于诊断。
-			return fail("classifier parse failed: " + err.Error() + " raw=" + truncateRunes(jres.Content, 100))
-		}
-		if !judge.Reply {
-			logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=classifier_rejected detail=%s",
-				agent.ID, postID, judge.Reason))
-			s.writeReplyLog(&domain.ReplyLog{
-				AgentID: agent.ID, PostID: postID, UserID: post.AuthorID,
-				Status:           domain.ReplyStatusSkipped,
-				ErrorMsg:         truncateErr(judge.Reason),
-				LatencyMs:        int(time.Since(start).Milliseconds()),
-				PromptTokens:     promptTokens,
-				CompletionTokens: completionTokens,
-			})
-			return nil, errSkippedByFilter
+		failErr := func(msg string) error { _, e := fail(msg); return e }
+		if err := s.runClassifier(ctx, agent, post, trigger, apiKey, start, failErr, &promptTokens, &completionTokens); err != nil {
+			return nil, err
 		}
 	}
 
@@ -451,6 +420,75 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		CompletionTokens: completionTokens,
 	})
 	return &commentID, nil
+}
+
+// runClassifier 执行分类器判定（阶段1）。返回 nil = 继续生成阶段；
+// 返回 errSkippedByFilter = 判定不回复（status=2 日志已写）；
+// 返回其他错误 = 调用/解析失败（fail-closed，失败日志行已经 failErr 写好）。
+//
+// 超时（context.DeadlineExceeded）是唯一 fail-open 路径：判定是省 token/提质的
+// 优化而非门槛，慢端点（如方舟 coding 推理模型，TTFT 数十秒）超时降级直回，
+// 记 status=2 日志（error_msg 前缀 classifier_timeout_fallback）便于观察频率。
+// 分类器用独立子 ctx：额度与整链相同但互不挤占，分类器耗时不吃掉生成预算。
+func (s *replyServiceImpl) runClassifier(
+	ctx context.Context,
+	agent *domain.AiAgent,
+	post *PostBrief,
+	trigger *CommentEvent,
+	apiKey string,
+	start time.Time,
+	failErr func(string) error,
+	promptTokens, completionTokens *int,
+) error {
+	judgeParams := copyLLMParams(agent.LLMParams)
+	judgeParams["temperature"] = float64(0)
+	judgeParams["max_tokens"] = float64(judgeMaxTokens)
+	judgeCtx, judgeCancel := context.WithTimeout(ctx, replyTimeout())
+	jres, err := s.llm.Generate(judgeCtx, LLMRequest{
+		Protocol:     agent.APIProtocol,
+		BaseURL:      agent.BaseURL,
+		APIKey:       apiKey,
+		Model:        agent.Model,
+		Params:       judgeParams,
+		SystemPrompt: judgeSystemPrompt,
+		UserPrompt:   buildJudgeUserPrompt(agent, post, trigger),
+	})
+	judgeCancel()
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			// token 未知，不计入。
+			logger.Log.Info(fmt.Sprintf("agent reply: classifier timeout, fallback to direct reply: agent=%s post=%s", agent.ID, post.ID))
+			s.writeReplyLog(&domain.ReplyLog{
+				AgentID: agent.ID, PostID: post.ID, UserID: post.AuthorID,
+				Status:    domain.ReplyStatusSkipped,
+				ErrorMsg:  truncateErr("classifier_timeout_fallback: " + err.Error()),
+				LatencyMs: int(time.Since(start).Milliseconds()),
+			})
+			return nil
+		}
+		return failErr("classifier generate failed: " + err.Error())
+	}
+	*promptTokens += jres.PromptTokens
+	*completionTokens += jres.CompletionTokens
+	judge, err := parseJudgeResult(jres.Content)
+	if err != nil {
+		// fail-closed：解析失败宁可漏回，不可放进未判定内容。error_msg 带原始输出现场便于诊断。
+		return failErr("classifier parse failed: " + err.Error() + " raw=" + truncateRunes(jres.Content, 100))
+	}
+	if !judge.Reply {
+		logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=classifier_rejected detail=%s",
+			agent.ID, post.ID, judge.Reason))
+		s.writeReplyLog(&domain.ReplyLog{
+			AgentID: agent.ID, PostID: post.ID, UserID: post.AuthorID,
+			Status:           domain.ReplyStatusSkipped,
+			ErrorMsg:         truncateErr(judge.Reason),
+			LatencyMs:        int(time.Since(start).Milliseconds()),
+			PromptTokens:     *promptTokens,
+			CompletionTokens: *completionTokens,
+		})
+		return errSkippedByFilter
+	}
+	return nil
 }
 
 // writeReplyLog 落终态日志行（append-only）。写库失败仅告警（调用链路已尽力）。

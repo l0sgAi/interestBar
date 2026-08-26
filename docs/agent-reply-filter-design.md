@@ -96,7 +96,7 @@ user   = "帖子标题：{title}\n帖子摘要：{summary}\n用户评论：{comm
 | 分类器幻觉/误判 | fail-open 方向不存在：判定通过才回复，误判只会「多回」不会「乱回内容」；解析失败 fail-closed |
 | 判定成本 | max_tokens=512 + temperature=0，单次判定 completion ≈ 几十个 token；解析失败兜底正则取 reply 字段 |
 | 限频绕过 | skipped 不计配额；但分类器本身消耗 token，靠 reply_concurrency 信号量与关键词前置匹配兜底 |
-| 超时 | 两阶段共享 executeReply ctx；分类器过慢会挤占生成时间片，超时即失败行（可接受，判定理应秒回） |
+| 超时 | 分类器独立子 ctx（同额度互不挤占）；**超时 fail-open**：降级直回 + status=2 日志（error_msg 前缀 `classifier_timeout_fallback`）。判定是省 token 的优化而非门槛，慢端点（方舟 coding 推理模型 TTFT 数十秒，2026-08-26 实测撞 30s 超时）不该拖死回复；调用/解析失败仍 fail-closed |
 | mode=1（全帖触发） | P2 实现时同样过分类器（trigger!=nil 即可，天然兼容） |
 
 ## 七、分阶段交付
