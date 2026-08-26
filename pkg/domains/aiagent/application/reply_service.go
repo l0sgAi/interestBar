@@ -190,29 +190,44 @@ func (s *replyServiceImpl) OnCommentCreated(evt CommentEvent) {
 		for i := range agents {
 			agent := &agents[i]
 			if domain.TriggerMode(agent.TriggerMode) != domain.TriggerModeKeyword {
+				logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=mode_not_keyword", agent.ID, evt.PostID))
 				continue
 			}
 			if !matchKeyword(evt.Content, agent.TriggerKeywords) {
+				logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=keyword_miss", agent.ID, evt.PostID))
 				continue
 			}
-			// 并发上限满则跳过本轮（尽力而为，静默丢弃）。
+			// 并发上限满则跳过本轮（尽力而为，不阻塞评论链路）。
 			select {
 			case s.sem <- struct{}{}:
 			default:
-				logger.Log.Warn("agent reply: concurrency limit reached, skip: " + agent.Name)
+				logger.Log.Warn(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=concurrency_full", agent.ID, evt.PostID))
 				continue
 			}
-			// 独立作用域 + defer 释放信号量：executeReply panic（外层 recover 兜底）
+			// 每个命中 agent 独立 goroutine + 独立超时：sem 真正限制并发，
+			// 单个慢 LLM 调用不再挤占其它机器人的时间片。
+			// defer 释放信号量：executeReply panic（本 goroutine recover 兜底）
 			// 也必须归还槽位，否则并发上限被永久占用。
-			func() {
+			go func(agent *domain.AiAgent) {
 				defer func() { <-s.sem }()
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Log.Error(fmt.Sprintf("agent reply panic: agent=%s post=%s: %v", agent.ID, evt.PostID, r))
+					}
+				}()
+				ctx, cancel := context.WithTimeout(context.Background(), replyTimeout())
+				defer cancel()
 				_, err := s.executeReply(ctx, agent, evt.PostID, &evt)
 				if err != nil {
-					// 调用链路失败已写日志行；前置跳过（限频/防重/帖子不可回）不写。
+					// 前置跳过（帖子不可回/防重/限频）已在 executeReply 内打 Info，不重复；
+					// 调用链路失败已写日志行，这里补一条 Error 便于告警。
+					if errors.Is(err, errPostNotReplyable) || errors.Is(err, errAlreadyReplied) || errors.Is(err, errRateLimited) {
+						return
+					}
 					logger.Log.Error(fmt.Sprintf("agent reply: agent=%s post=%s: %s",
 						agent.ID, evt.PostID, err.Error()))
 				}
-			}()
+			}(agent)
 		}
 	}()
 }
@@ -267,6 +282,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		return nil, err
 	}
 	if post == nil || post.Status != 1 || post.IsLock == 1 {
+		logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=post_not_replyable", agent.ID, postID))
 		return nil, errPostNotReplyable
 	}
 
@@ -276,6 +292,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		return nil, err
 	}
 	if exists {
+		logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=already_replied", agent.ID, postID))
 		return nil, errAlreadyReplied
 	}
 
@@ -287,6 +304,8 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 			return nil, err
 		}
 		if count >= int64(agent.MaxRepliesPerHour) {
+			logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=rate_limited_hourly count=%d limit=%d",
+				agent.ID, postID, count, agent.MaxRepliesPerHour))
 			return nil, errRateLimited
 		}
 	}
@@ -296,6 +315,8 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 			return nil, err
 		}
 		if last != nil && last.CreateTime.Add(time.Duration(agent.MinIntervalSec)*time.Second).After(now) {
+			logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=rate_limited_min_interval min_interval_sec=%d",
+				agent.ID, postID, agent.MinIntervalSec))
 			return nil, errRateLimited
 		}
 	}
