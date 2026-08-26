@@ -26,6 +26,7 @@ type AiAgent struct {
 	Model             string        `json:"model" gorm:"column:model;type:varchar(100);not null"`
 	LLMParams         LLMParamsJSON `json:"llm_params" gorm:"column:llm_params;type:jsonb;not null;default:'{}'::jsonb"`
 	SystemPrompt      string        `json:"system_prompt,omitempty" gorm:"column:system_prompt;type:text;not null;default:''"`
+	FilterPrompt      string        `json:"filter_prompt,omitempty" gorm:"column:filter_prompt;type:text;not null;default:''"` // 回复判定条件（空=不判定直接回复，仅关键词触发生效）
 	TriggerMode       TriggerMode   `json:"trigger_mode" gorm:"column:trigger_mode;type:smallint;not null;default:1"`
 	TriggerKeywords   KeywordsJSON  `json:"trigger_keywords" gorm:"column:trigger_keywords;type:jsonb;not null;default:'[]'::jsonb"`
 	MaxRepliesPerHour int           `json:"max_replies_per_hour" gorm:"column:max_replies_per_hour;not null;default:30"` // 0=不限

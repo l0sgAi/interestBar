@@ -36,6 +36,7 @@ type createAgentReq struct {
 	Model             string                 `json:"model"`
 	LLMParams         map[string]interface{} `json:"llm_params"`
 	SystemPrompt      string                 `json:"system_prompt"`
+	FilterPrompt      string                 `json:"filter_prompt"`
 	TriggerMode       int                    `json:"trigger_mode"`
 	TriggerKeywords   []string               `json:"trigger_keywords"`
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
@@ -53,6 +54,7 @@ type updateAgentReq struct {
 	Model             *string                `json:"model"`
 	LLMParams         map[string]interface{} `json:"llm_params"`
 	SystemPrompt      *string                `json:"system_prompt"`
+	FilterPrompt      *string                `json:"filter_prompt"`
 	TriggerMode       *int                   `json:"trigger_mode"`
 	TriggerKeywords   []string               `json:"trigger_keywords"`
 	MaxRepliesPerHour *int                   `json:"max_replies_per_hour"`
@@ -87,6 +89,7 @@ func (h *Handler) CreateAgent(c appctx.AppContext) {
 		Model:             req.Model,
 		LLMParams:         req.LLMParams,
 		SystemPrompt:      req.SystemPrompt,
+		FilterPrompt:      req.FilterPrompt,
 		TriggerMode:       req.TriggerMode,
 		TriggerKeywords:   req.TriggerKeywords,
 		MaxRepliesPerHour: req.MaxRepliesPerHour,
@@ -161,6 +164,7 @@ func (h *Handler) UpdateAgent(c appctx.AppContext) {
 		Model:             req.Model,
 		LLMParams:         req.LLMParams,
 		SystemPrompt:      req.SystemPrompt,
+		FilterPrompt:      req.FilterPrompt,
 		TriggerMode:       req.TriggerMode,
 		TriggerKeywords:   req.TriggerKeywords,
 		MaxRepliesPerHour: req.MaxRepliesPerHour,
@@ -281,6 +285,7 @@ func writeAgentError(c appctx.AppContext, err error) {
 		application.IsInvalidLLMParamsErr(err),
 		application.IsInvalidRateLimitErr(err),
 		application.IsInvalidStatusErr(err),
+		application.IsInvalidFilterErr(err),
 		application.IsNoFieldsToUpdateErr(err):
 		httputil.BadRequest(c, err.Error())
 	case application.IsAPIKeyNotSetErr(err):

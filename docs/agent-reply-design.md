@@ -135,3 +135,11 @@ aiagent:
 | P0（本期） | TriggerMode 枚举、ReplyLog 实体/仓库、ReplyService（关键词+手动）、eino LLM 适配（openai/claude）、comment 触发钩子、手动触发接口、装配与配置、DDL 修正、API 文档更新 | ✅ |
 | P1 | 回复日志管理端查询接口、日志清理 job | 待办 |
 | P2 | mode=1 全帖触发（post_created 事件）、gemini/ollama 协议实现、一帖多机器人上限 `max_agents_per_post` | 待办（决策 B/D/A） |
+
+---
+
+## 八、后续演进：两阶段回复（分类器 + 生成器）
+
+> 2026-08-26 起「特定条件才回复」不再依赖 system prompt 输出空值，改为两阶段硬流程：
+> 关键词触发且 `filter_prompt` 非空时，先由分类器 LLM 判定（JSON 输出），通过才生成回复；
+> 判定不通过写 `status=2` 日志行，限频口径排除 skipped。详见 [agent-reply-filter-design.md](agent-reply-filter-design.md)。

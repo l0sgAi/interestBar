@@ -48,6 +48,9 @@ type BotUserProfileUpdater interface {
 // 管理员 role 常量（users.role，权威定义在 user 领域/DDL）。
 const roleAdmin = 1
 
+// filterPromptMaxLen 判定条件长度上限（字符，防 prompt 膨胀）。
+const filterPromptMaxLen = 2000
+
 // llmParamsKeyWhitelist 允许写入 llm_params 的通用参数键。
 var llmParamsKeyWhitelist = map[string]bool{
 	"temperature":       true,
@@ -67,6 +70,7 @@ type CreateAgentInput struct {
 	Model             string                 `json:"model"`
 	LLMParams         map[string]interface{} `json:"llm_params"`
 	SystemPrompt      string                 `json:"system_prompt"`
+	FilterPrompt      string                 `json:"filter_prompt"`
 	TriggerMode       int                    `json:"trigger_mode"`
 	TriggerKeywords   []string               `json:"trigger_keywords"`
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
@@ -84,6 +88,7 @@ type UpdateAgentInput struct {
 	Model             *string                `json:"model"`
 	LLMParams         map[string]interface{} `json:"llm_params"`
 	SystemPrompt      *string                `json:"system_prompt"`
+	FilterPrompt      *string                `json:"filter_prompt"`
 	TriggerMode       *int                   `json:"trigger_mode"`
 	TriggerKeywords   []string               `json:"trigger_keywords"`
 	MaxRepliesPerHour *int                   `json:"max_replies_per_hour"`
@@ -104,6 +109,7 @@ type AgentVO struct {
 	Model             string                 `json:"model"`
 	LLMParams         map[string]interface{} `json:"llm_params"`
 	SystemPrompt      string                 `json:"system_prompt,omitempty"`
+	FilterPrompt      string                 `json:"filter_prompt,omitempty"`
 	TriggerMode       int                    `json:"trigger_mode"`
 	TriggerKeywords   []string               `json:"trigger_keywords"`
 	MaxRepliesPerHour int                    `json:"max_replies_per_hour"`
@@ -157,8 +163,8 @@ func NewAgentService(repo domain.AgentRepository) AgentService {
 	return &agentServiceImpl{repo: repo}
 }
 
-func (s *agentServiceImpl) SetRoleReader(r RoleReader)                { s.roleReader = r }
-func (s *agentServiceImpl) SetBotUserCreator(c BotUserCreator)        { s.botUserCreator = c }
+func (s *agentServiceImpl) SetRoleReader(r RoleReader)         { s.roleReader = r }
+func (s *agentServiceImpl) SetBotUserCreator(c BotUserCreator) { s.botUserCreator = c }
 func (s *agentServiceImpl) SetBotUserProfileUpdater(u BotUserProfileUpdater) {
 	s.botUserUpdater = u
 }
@@ -199,6 +205,10 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		return nil, err
 	}
 	if err := validateRateLimit(input.MaxRepliesPerHour, input.MinIntervalSec); err != nil {
+		return nil, err
+	}
+	filterPrompt := utils.SanitizeForPg(strings.TrimSpace(input.FilterPrompt))
+	if err := validateFilterPrompt(filterPrompt); err != nil {
 		return nil, err
 	}
 	if input.Status != nil {
@@ -255,6 +265,7 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		Model:             model,
 		LLMParams:         toLLMParams(input.LLMParams),
 		SystemPrompt:      utils.SanitizeForPg(input.SystemPrompt),
+		FilterPrompt:      filterPrompt,
 		TriggerMode:       domain.TriggerMode(input.TriggerMode),
 		TriggerKeywords:   toKeywords(input.TriggerKeywords),
 		MaxRepliesPerHour: input.MaxRepliesPerHour,
@@ -390,6 +401,13 @@ func (s *agentServiceImpl) UpdateAgent(ctx context.Context, adminID, agentID uui
 	if input.SystemPrompt != nil {
 		fields["system_prompt"] = utils.SanitizeForPg(*input.SystemPrompt)
 	}
+	if input.FilterPrompt != nil {
+		filterPrompt := utils.SanitizeForPg(strings.TrimSpace(*input.FilterPrompt))
+		if err := validateFilterPrompt(filterPrompt); err != nil {
+			return nil, err
+		}
+		fields["filter_prompt"] = filterPrompt
+	}
 	if input.TriggerMode != nil {
 		if err := validateTrigger(*input.TriggerMode, input.TriggerKeywords); err != nil {
 			return nil, err
@@ -479,6 +497,7 @@ func (s *agentServiceImpl) toVO(a *domain.AiAgent) AgentVO {
 		Model:             a.Model,
 		LLMParams:         map[string]interface{}(a.LLMParams),
 		SystemPrompt:      a.SystemPrompt,
+		FilterPrompt:      a.FilterPrompt,
 		TriggerMode:       int(a.TriggerMode),
 		TriggerKeywords:   []string(a.TriggerKeywords),
 		MaxRepliesPerHour: a.MaxRepliesPerHour,
@@ -579,6 +598,14 @@ func validateLLMParams(params map[string]interface{}) error {
 func validateRateLimit(perHour, minInterval int) error {
 	if perHour < 0 || minInterval < 0 {
 		return errInvalidRateLimit
+	}
+	return nil
+}
+
+// validateFilterPrompt 判定条件长度上限（字符数）。
+func validateFilterPrompt(s string) error {
+	if len([]rune(s)) > filterPromptMaxLen {
+		return errInvalidFilter
 	}
 	return nil
 }

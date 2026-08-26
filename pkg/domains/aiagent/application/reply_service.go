@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -107,6 +108,20 @@ const (
 	defaultSystemPrompt     = "你是兴趣社区的智能助手，回复需友好、简洁、有帮助。"
 	errMsgMaxLen            = 2048
 )
+
+// 分类器（阶段1）常量：judgeSystemPrompt 强约束 JSON 输出；
+// judgeMaxTokens 压低判定成本（判定输出只需几十个 token）。
+const (
+	judgeSystemPrompt = "你是内容分类器。根据用户给出的判定条件，判断机器人是否应回复该帖子。" +
+		"只输出 JSON：{\"reply\":true|false,\"reason\":\"一句话原因\"}，禁止输出任何其他内容。"
+	judgeMaxTokens = 64
+)
+
+// judgeResult 分类器判定结果（阶段1 JSON 输出）。
+type judgeResult struct {
+	Reply  bool   `json:"reply"`
+	Reason string `json:"reason"`
+}
 
 type replyServiceImpl struct {
 	agentRepo      domain.AgentRepository
@@ -221,7 +236,7 @@ func (s *replyServiceImpl) OnCommentCreated(evt CommentEvent) {
 				if err != nil {
 					// 前置跳过（帖子不可回/限频）已在 executeReply 内打 Info，不重复；
 					// 调用链路失败已写日志行，这里补一条 Error 便于告警。
-					if errors.Is(err, errPostNotReplyable) || errors.Is(err, errRateLimited) {
+					if errors.Is(err, errPostNotReplyable) || errors.Is(err, errRateLimited) || errors.Is(err, errSkippedByFilter) {
 						return
 					}
 					logger.Log.Error(fmt.Sprintf("agent reply: agent=%s post=%s: %s",
@@ -336,7 +351,47 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		}
 	}
 
-	// 3.2 LLM 生成（system_prompt 空时用默认人设兜底）。
+	// 3.2 分类器判定（阶段1）：仅关键词触发（trigger!=nil）且配置了判定条件时执行。
+	// 手动触发是管理员显式操作，天然绕过；filter_prompt 为空时跳过，行为与旧版一致。
+	if trigger != nil && agent.FilterPrompt != "" {
+		judgeParams := copyLLMParams(agent.LLMParams)
+		judgeParams["temperature"] = float64(0)
+		judgeParams["max_tokens"] = float64(judgeMaxTokens)
+		jres, err := s.llm.Generate(ctx, LLMRequest{
+			Protocol:     agent.APIProtocol,
+			BaseURL:      agent.BaseURL,
+			APIKey:       apiKey,
+			Model:        agent.Model,
+			Params:       judgeParams,
+			SystemPrompt: judgeSystemPrompt,
+			UserPrompt:   buildJudgeUserPrompt(agent, post, trigger),
+		})
+		if err != nil {
+			return fail("classifier generate failed: " + err.Error())
+		}
+		promptTokens += jres.PromptTokens
+		completionTokens += jres.CompletionTokens
+		judge, err := parseJudgeResult(jres.Content)
+		if err != nil {
+			// fail-closed：解析失败宁可漏回，不可放进未判定内容。
+			return fail("classifier parse failed: " + err.Error())
+		}
+		if !judge.Reply {
+			logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=classifier_rejected detail=%s",
+				agent.ID, postID, judge.Reason))
+			s.writeReplyLog(&domain.ReplyLog{
+				AgentID: agent.ID, PostID: postID, UserID: post.AuthorID,
+				Status:           domain.ReplyStatusSkipped,
+				ErrorMsg:         truncateErr(judge.Reason),
+				LatencyMs:        int(time.Since(start).Milliseconds()),
+				PromptTokens:     promptTokens,
+				CompletionTokens: completionTokens,
+			})
+			return nil, errSkippedByFilter
+		}
+	}
+
+	// 3.3 LLM 生成（阶段2，system_prompt 空时用默认人设兜底）。
 	systemPrompt := agent.SystemPrompt
 	if systemPrompt == "" {
 		systemPrompt = defaultSystemPrompt
@@ -353,15 +408,16 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 	if err != nil {
 		return fail("llm generate failed: " + err.Error())
 	}
-	promptTokens, completionTokens = res.PromptTokens, res.CompletionTokens
+	promptTokens += res.PromptTokens
+	completionTokens += res.CompletionTokens
 
-	// 3.3 清洗输出（用户文本入库前必须过 SanitizeForPg）。
+	// 3.4 清洗输出（用户文本入库前必须过 SanitizeForPg）。
 	content := utils.SanitizeForPg(strings.TrimSpace(res.Content))
 	if content == "" {
 		return fail("llm returned empty content")
 	}
 
-	// 3.4 评论落库：关键词触发挂进触发评论楼层，手动触发为顶层评论。
+	// 3.5 评论落库：关键词触发挂进触发评论楼层，手动触发为顶层评论。
 	var rootID, replyToID *uuid.UUID
 	if trigger != nil {
 		replyToID = &trigger.CommentID
@@ -379,7 +435,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		return fail("create comment failed: " + err.Error())
 	}
 
-	// 3.5 成功日志行。
+	// 3.6 成功日志行。
 	s.writeReplyLog(&domain.ReplyLog{
 		AgentID: agent.ID, PostID: postID, UserID: post.AuthorID,
 		CommentID:        &commentID,
@@ -414,6 +470,46 @@ func matchKeyword(content string, keywords domain.KeywordsJSON) bool {
 		}
 	}
 	return false
+}
+
+// copyLLMParams 复制 LLM 参数表（分类器覆盖 temperature/max_tokens 不污染原 map）。
+func copyLLMParams(src domain.LLMParamsJSON) map[string]interface{} {
+	dst := make(map[string]interface{}, len(src)+2)
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// buildJudgeUserPrompt 组装分类器用户提示词：帖子 + 触发评论 + 判定条件，各段截断。
+func buildJudgeUserPrompt(agent *domain.AiAgent, post *PostBrief, trigger *CommentEvent) string {
+	limit := maxContentChars()
+	var b strings.Builder
+	b.WriteString(truncateRunes("帖子标题："+post.Title, limit))
+	b.WriteString("\n")
+	b.WriteString(truncateRunes("帖子摘要："+post.Summary, limit))
+	b.WriteString("\n")
+	b.WriteString(truncateRunes("用户评论："+trigger.Content, limit))
+	b.WriteString("\n")
+	b.WriteString(truncateRunes("判定条件："+agent.FilterPrompt, limit))
+	return b.String()
+}
+
+// parseJudgeResult 解析分类器 JSON 输出（容错剥 markdown code fence）。
+// 解析失败返回错误，调用方 fail-closed（不回复）。
+func parseJudgeResult(content string) (*judgeResult, error) {
+	s := strings.TrimSpace(content)
+	if strings.HasPrefix(s, "```") {
+		s = strings.TrimPrefix(s, "```json")
+		s = strings.TrimPrefix(s, "```")
+		s = strings.TrimSuffix(strings.TrimSpace(s), "```")
+		s = strings.TrimSpace(s)
+	}
+	var r judgeResult
+	if err := json.Unmarshal([]byte(s), &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
 // buildUserPrompt 组装用户提示词：title + summary（+ 评论触发的评论原文），各段截断。

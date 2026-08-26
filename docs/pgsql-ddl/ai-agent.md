@@ -35,6 +35,7 @@ CREATE TABLE domains.ai_agent (
     -- 结构示例: {"temperature":0.7,"top_p":1,"max_tokens":1024,"presence_penalty":0,"frequency_penalty":0}
     llm_params JSONB NOT NULL DEFAULT '{}'::JSONB,
     system_prompt TEXT NOT NULL DEFAULT '',  -- 系统提示词(机器人人设/回复风格)
+    filter_prompt TEXT NOT NULL DEFAULT '',  -- 回复判定条件(自然语言,空=不判定直接回复,仅关键词触发生效)
 
     -- 4. 触发方式
     trigger_mode SMALLINT NOT NULL DEFAULT 1, -- 触发模式: 1=全部新帖, 2=关键词触发, 3=手动
@@ -64,6 +65,7 @@ COMMENT ON COLUMN domains.ai_agent.api_key IS 'API密钥(应用层加密存密�
 COMMENT ON COLUMN domains.ai_agent.model IS '模型名';
 COMMENT ON COLUMN domains.ai_agent.llm_params IS 'LLM通用参数(temperature/top_p/max_tokens/presence_penalty/frequency_penalty,未配置走应用层默认)';
 COMMENT ON COLUMN domains.ai_agent.system_prompt IS '系统提示词(机器人人设/回复风格)';
+COMMENT ON COLUMN domains.ai_agent.filter_prompt IS '回复判定条件(自然语言,如"只回复编程相关问题";空=不判定直接回复;仅trigger_mode=2关键词触发生效,见docs/agent-reply-filter-design.md)';
 COMMENT ON COLUMN domains.ai_agent.trigger_mode IS '触发模式: 1=全部新帖, 2=关键词触发, 3=手动';
 COMMENT ON COLUMN domains.ai_agent.trigger_keywords IS 'trigger_mode=2时的关键词列表(JSON数组,应用层匹配)';
 COMMENT ON COLUMN domains.ai_agent.max_replies_per_hour IS '每小时最大回复数(0=不限,按ai_agent_reply_log统计)';
@@ -87,7 +89,8 @@ CREATE INDEX idx_ai_agent_linked_user ON domains.ai_agent(linked_user_id) WHERE 
 > agent 每次回复的审计与频率限制统计事实表。**append-only**：无 `deleted`/`update_time`
 > （失败/成功终态写入后不变，纠错靠新行）。
 >
-> - 频率限制执行：按 `(agent_id, create_time)` 统计最近 1 小时行数 + 取最新一行 `create_time` 算间隔。
+> - 频率限制执行：按 `(agent_id, create_time)` 统计最近 1 小时行数 + 取最新一行 `create_time` 算间隔；
+>   统计口径**排除 status=2（分类器跳过）**——skipped 未产出回复，不占配额（应用层查询条件保证）。
 > - 同一帖子可被同一机器人多次回复（关键词触发不设防重），用量仅靠频率限制约束。
 
 ```sql
@@ -104,11 +107,11 @@ CREATE TABLE domains.ai_agent_reply_log (
     user_id UUID NOT NULL,                   -- 帖子作者ID(冗余,便于风控分析)
 
     -- 2. 调用结果
-    status SMALLINT NOT NULL DEFAULT 1,      -- 结果: 0=失败, 1=成功
-    error_msg VARCHAR(2048),                 -- 失败原因(截断后的错误信息)
-    latency_ms INT NOT NULL DEFAULT 0,       -- LLM调用耗时(毫秒)
-    prompt_tokens INT NOT NULL DEFAULT 0,    -- 输入token数(供应商返回,失败为0)
-    completion_tokens INT NOT NULL DEFAULT 0, -- 输出token数(供应商返回,失败为0)
+    status SMALLINT NOT NULL DEFAULT 1,      -- 结果: 0=失败, 1=成功, 2=分类器跳过
+    error_msg VARCHAR(2048),                 -- 失败原因(截断后的错误信息;status=2时为分类器跳过原因)
+    latency_ms INT NOT NULL DEFAULT 0,       -- LLM调用耗时(毫秒,两阶段总耗时)
+    prompt_tokens INT NOT NULL DEFAULT 0,    -- 输入token数(供应商返回,两阶段求和,失败为0)
+    completion_tokens INT NOT NULL DEFAULT 0, -- 输出token数(供应商返回,两阶段求和,失败为0)
 
     -- 时间字段
     create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -120,8 +123,8 @@ COMMENT ON COLUMN domains.ai_agent_reply_log.agent_id IS '机器人ID(ai_agent.i
 COMMENT ON COLUMN domains.ai_agent_reply_log.post_id IS '被回复帖子ID(post.id,无FK,应用层保证)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.comment_id IS '生成的评论ID(comment.id,调用失败时为NULL)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.user_id IS '帖子作者ID(冗余,风控分析用)';
-COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功';
-COMMENT ON COLUMN domains.ai_agent_reply_log.latency_ms IS 'LLM调用耗时(毫秒)';
+COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功, 2=分类器跳过';
+COMMENT ON COLUMN domains.ai_agent_reply_log.latency_ms IS 'LLM调用耗时(毫秒,分类器+生成两阶段总耗时)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.prompt_tokens IS '输入token数(供应商返回,失败为0)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.completion_tokens IS '输出token数(供应商返回,失败为0)';
 
@@ -148,4 +151,17 @@ ALTER TABLE domains.ai_agent_reply_log ALTER COLUMN comment_id DROP NOT NULL;
 
 ```sql
 DROP INDEX IF EXISTS domains.idx_ai_reply_unique;
+```
+
+## 存量表迁移（两阶段回复：filter_prompt 列 + status=2 语义）
+
+> 2026-08-26 变更：新增「回复判定条件」列支撑两阶段（分类器+生成器）回复链路
+> （设计见 docs/agent-reply-filter-design.md）；`ai_agent_reply_log.status` 扩展取值 2=分类器跳过
+> （无结构变更，仅注释语义扩展；限频统计口径改为排除 status=2，由应用层查询条件保证）。
+> 已建表的存量库由 DB-owner 执行：
+
+```sql
+ALTER TABLE domains.ai_agent ADD COLUMN filter_prompt TEXT NOT NULL DEFAULT '';
+COMMENT ON COLUMN domains.ai_agent.filter_prompt IS '回复判定条件(自然语言,如"只回复编程相关问题";空=不判定直接回复;仅trigger_mode=2关键词触发生效,见docs/agent-reply-filter-design.md)';
+COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功, 2=分类器跳过';
 ```

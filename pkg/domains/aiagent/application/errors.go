@@ -16,6 +16,7 @@ var (
 	errInvalidLLMParams = errors.New("llm_params has invalid key/value")
 	errInvalidRateLimit = errors.New("rate limit values must be >= 0")
 	errInvalidStatus    = errors.New("status must be 0 or 1")
+	errInvalidFilter    = errors.New("filter_prompt must be <= 2000 chars")
 	errAPIKeyNotSet     = errors.New("data key not configured (security.data_key)")
 	errNoFieldsToUpdate = errors.New("at least one field to update")
 )
@@ -26,6 +27,7 @@ var (
 	errNotManualMode    = errors.New("agent is not in manual trigger mode")
 	errPostNotReplyable = errors.New("post not replyable (not published or locked)")
 	errRateLimited      = errors.New("agent reply rate limited")
+	errSkippedByFilter  = errors.New("reply skipped by classifier")
 	errLLMCall          = errors.New("llm call failed")
 )
 
@@ -40,6 +42,7 @@ func IsInvalidTriggerErr(err error) bool   { return errors.Is(err, errInvalidTri
 func IsInvalidLLMParamsErr(err error) bool { return errors.Is(err, errInvalidLLMParams) }
 func IsInvalidRateLimitErr(err error) bool { return errors.Is(err, errInvalidRateLimit) }
 func IsInvalidStatusErr(err error) bool    { return errors.Is(err, errInvalidStatus) }
+func IsInvalidFilterErr(err error) bool    { return errors.Is(err, errInvalidFilter) }
 func IsAPIKeyNotSetErr(err error) bool     { return errors.Is(err, errAPIKeyNotSet) }
 func IsNoFieldsToUpdateErr(err error) bool { return errors.Is(err, errNoFieldsToUpdate) }
 
@@ -48,4 +51,5 @@ func IsAgentDisabledErr(err error) bool    { return errors.Is(err, errAgentDisab
 func IsNotManualModeErr(err error) bool    { return errors.Is(err, errNotManualMode) }
 func IsPostNotReplyableErr(err error) bool { return errors.Is(err, errPostNotReplyable) }
 func IsRateLimitedErr(err error) bool      { return errors.Is(err, errRateLimited) }
+func IsSkippedByFilterErr(err error) bool  { return errors.Is(err, errSkippedByFilter) }
 func IsLLMCallErr(err error) bool          { return errors.Is(err, errLLMCall) }
