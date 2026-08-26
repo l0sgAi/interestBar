@@ -43,7 +43,7 @@
 | 触发源 | 用户评论创建后（comment 域端口回调） | 管理端 `POST /agent/:id/reply/:postId` |
 | 匹配条件 | agent 启用 + mode=2 + 评论内容含任一关键词（不区分大小写子串） | agent 启用 + mode=3 + 操作者 role=1 |
 | 帖子门槛 | status=1（已发布）且未锁定，否则静默跳过（不记日志） | 同左，但返回 400 错误 |
-| 防重 | `reply_log` 已有 `(agent_id, post_id)` 行 → 静默跳过（不记日志） | 同左，返回 409 |
+| 防重 | 无（2026-08-26 调整：同帖可多次触发，用量仅靠限频约束） | 同左 |
 | 限频 | 最近 1h 行数 ≥ max_replies_per_hour（>0 时）或距最新一行 < min_interval_sec（>0 时）→ 静默跳过（不记日志） | 同左，返回 429 |
 | 协议 | openai / anthropic 走 eino；gemini/ollama → 失败日志「protocol not implemented」 | 同左，返回 502 |
 | 失败 | 不重试，写失败日志行 | 写失败日志行 + 返回 502（含原因） |
@@ -92,7 +92,7 @@ ReplyService.OnCommentCreated   ReplyService.ManualReply
    ▼                                       ▼
         executeReply(agent, postID, trigger?)  [共用核心]
    ├─ PostReader.GetPostBrief: status=1 && !lock, 否则跳过
-   ├─ ReplyLogRepo: 防重(UNIQUE) / 1h 计数 / 最小间隔
+   ├─ ReplyLogRepo: 1h 计数 / 最小间隔（限频）
    ├─ crypto.Decrypt(api_key) → LLMCaller.Generate (eino)
    ├─ CommentCreator.CreateComment(linked_user_id, …)
    └─ ReplyLogRepo.Create(status=1|0, latency, tokens, error)
@@ -118,8 +118,8 @@ aiagent:
 
 | 项 | 分析 | 对策 |
 |---|---|---|
-| 防重并发 | 同帖并发两次触发，先查后写有竞态 | DB `UNIQUE(agent_id, post_id)` 兜底，插入撞索引按「已回复」处理 |
-| 进程重启丢任务 | 异步 goroutine 在内存，未执行完即丢 | 接受：本功能是尽力而为的增强，日志表可见已处理记录；幂等防重保证重启后新评论仍可触发 |
+| 防重并发 | 同帖并发多次触发均会执行 | 接受（2026-08-26 起不设防重）：`min_interval_sec` + `max_replies_per_hour` 软限兜底用量 |
+| 进程重启丢任务 | 异步 goroutine 在内存，未执行完即丢 | 接受：本功能是尽力而为的增强，日志表可见已处理记录 |
 | 回环 | 机器人评论再触发关键词 | 入口按 `linked_user_id` 反查 agent 表丢弃 |
 | 限频竞态 | 并发下 1h 计数可能瞬时超限 | 接受（软限）；`min_interval_sec` 主导节流 |
 | key 解密失败（换 data_key） | LLM 必然失败 | 记失败日志，error_msg 含原因；管理员可经日志发现 |

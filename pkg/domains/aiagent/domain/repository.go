@@ -11,8 +11,6 @@ import (
 var (
 	// ErrAgentNotFound 机器人不存在（含已软删）。
 	ErrAgentNotFound = errors.New("agent not found")
-	// ErrReplyAlreadyExists 机器人对该帖已有回复日志（唯一索引兜底，含失败行）。
-	ErrReplyAlreadyExists = errors.New("reply log already exists for agent and post")
 )
 
 // AgentRepository 是 aiagent 领域的持久化接口（由 infrastructure 实现）。

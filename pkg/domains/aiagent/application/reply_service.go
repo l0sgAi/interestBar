@@ -219,9 +219,9 @@ func (s *replyServiceImpl) OnCommentCreated(evt CommentEvent) {
 				defer cancel()
 				_, err := s.executeReply(ctx, agent, evt.PostID, &evt)
 				if err != nil {
-					// 前置跳过（帖子不可回/防重/限频）已在 executeReply 内打 Info，不重复；
+					// 前置跳过（帖子不可回/限频）已在 executeReply 内打 Info，不重复；
 					// 调用链路失败已写日志行，这里补一条 Error 便于告警。
-					if errors.Is(err, errPostNotReplyable) || errors.Is(err, errAlreadyReplied) || errors.Is(err, errRateLimited) {
+					if errors.Is(err, errPostNotReplyable) || errors.Is(err, errRateLimited) {
 						return
 					}
 					logger.Log.Error(fmt.Sprintf("agent reply: agent=%s post=%s: %s",
@@ -268,9 +268,10 @@ func (s *replyServiceImpl) ensureReplyAdmin(ctx context.Context, adminID uuid.UU
 
 // executeReply 单个机器人对单个帖子的回复执行核心（关键词/手动共用）。
 //
-// 返回 (成功时非nil的评论ID, error)。前置条件不满足（帖子不可回/已回复/限频）
+// 返回 (成功时非nil的评论ID, error)。前置条件不满足（帖子不可回/限频）
 // 返回对应哨兵错误且不写日志；调用链路失败（解密/LLM/空回复/评论落库）写失败
-// 日志行后返回包装错误。
+// 日志行后返回包装错误。同一帖子可被同一机器人多次回复（关键词触发不设防重），
+// 仅靠限频控制用量。
 func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAgent, postID uuid.UUID, trigger *CommentEvent) (*uuid.UUID, error) {
 	if s.postReader == nil || s.commentCreator == nil || s.llm == nil {
 		return nil, errors.New("agent reply dependencies not configured")
@@ -286,17 +287,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		return nil, errPostNotReplyable
 	}
 
-	// 2. 防重（含失败行，终态语义）。
-	exists, err := s.replyLogRepo.ExistsByAgentAndPost(ctx, agent.ID, postID)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=already_replied", agent.ID, postID))
-		return nil, errAlreadyReplied
-	}
-
-	// 3. 限频：最近 1h 行数（含失败）+ 距最新一条的间隔。
+	// 2. 限频：最近 1h 行数（含失败）+ 距最新一条的间隔。
 	now := time.Now()
 	if agent.MaxRepliesPerHour > 0 {
 		count, err := s.replyLogRepo.CountSinceByAgent(ctx, agent.ID, now.Add(-time.Hour))
@@ -321,7 +312,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		}
 	}
 
-	// 4. 调用链路（失败写日志行）。
+	// 3. 调用链路（失败写日志行）。
 	start := time.Now()
 	var promptTokens, completionTokens int
 
@@ -336,7 +327,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		return nil, fmt.Errorf("%w: %s", errLLMCall, errMsg)
 	}
 
-	// 4.1 解密 api_key。
+	// 3.1 解密 api_key。
 	apiKey := ""
 	if agent.APIKeyEnc != "" {
 		apiKey, err = crypto.Decrypt(conf.Config.Security.DataKey, agent.APIKeyEnc)
@@ -345,7 +336,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		}
 	}
 
-	// 4.2 LLM 生成（system_prompt 空时用默认人设兜底）。
+	// 3.2 LLM 生成（system_prompt 空时用默认人设兜底）。
 	systemPrompt := agent.SystemPrompt
 	if systemPrompt == "" {
 		systemPrompt = defaultSystemPrompt
@@ -364,13 +355,13 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 	}
 	promptTokens, completionTokens = res.PromptTokens, res.CompletionTokens
 
-	// 4.3 清洗输出（用户文本入库前必须过 SanitizeForPg）。
+	// 3.3 清洗输出（用户文本入库前必须过 SanitizeForPg）。
 	content := utils.SanitizeForPg(strings.TrimSpace(res.Content))
 	if content == "" {
 		return fail("llm returned empty content")
 	}
 
-	// 4.4 评论落库：关键词触发挂进触发评论楼层，手动触发为顶层评论。
+	// 3.4 评论落库：关键词触发挂进触发评论楼层，手动触发为顶层评论。
 	var rootID, replyToID *uuid.UUID
 	if trigger != nil {
 		replyToID = &trigger.CommentID
@@ -388,7 +379,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		return fail("create comment failed: " + err.Error())
 	}
 
-	// 4.5 成功日志行。
+	// 3.5 成功日志行。
 	s.writeReplyLog(&domain.ReplyLog{
 		AgentID: agent.ID, PostID: postID, UserID: post.AuthorID,
 		CommentID:        &commentID,
@@ -404,10 +395,6 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 func (s *replyServiceImpl) writeReplyLog(log *domain.ReplyLog) {
 	log.ID = sharedomain.NewID()
 	if err := s.replyLogRepo.Create(context.Background(), log); err != nil {
-		// 并发防重撞唯一索引按已处理处理，不算错误。
-		if errors.Is(err, domain.ErrReplyAlreadyExists) {
-			return
-		}
 		logger.Log.Error("agent reply: write reply log failed: " + err.Error())
 	}
 }

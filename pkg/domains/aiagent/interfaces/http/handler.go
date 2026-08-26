@@ -255,8 +255,6 @@ func writeReplyError(c appctx.AppContext, err error) {
 		application.IsNotManualModeErr(err),
 		application.IsPostNotReplyableErr(err):
 		httputil.BadRequest(c, err.Error())
-	case application.IsAlreadyRepliedErr(err):
-		httputil.Conflict(c, "Agent already replied to this post")
 	case application.IsRateLimitedErr(err):
 		httputil.TooManyRequests(c, "Agent reply rate limited")
 	case application.IsLLMCallErr(err):

@@ -22,22 +22,7 @@ func NewReplyLogRepository(db *gorm.DB) domain.ReplyLogRepository {
 }
 
 func (r *replyLogRepoPG) Create(ctx context.Context, log *domain.ReplyLog) error {
-	if err := r.db.WithContext(ctx).Create(log).Error; err != nil {
-		// (agent_id, post_id) 唯一索引兜底并发防重：撞索引说明该帖已处理过。
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
-			return domain.ErrReplyAlreadyExists
-		}
-		return err
-	}
-	return nil
-}
-
-func (r *replyLogRepoPG) ExistsByAgentAndPost(ctx context.Context, agentID, postID uuid.UUID) (bool, error) {
-	var count int64
-	err := r.db.WithContext(ctx).Model(&domain.ReplyLog{}).
-		Where("agent_id = ? AND post_id = ?", agentID, postID).
-		Count(&count).Error
-	return count > 0, err
+	return r.db.WithContext(ctx).Create(log).Error
 }
 
 func (r *replyLogRepoPG) CountSinceByAgent(ctx context.Context, agentID uuid.UUID, since time.Time) (int64, error) {

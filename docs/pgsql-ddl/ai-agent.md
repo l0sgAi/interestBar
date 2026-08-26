@@ -88,7 +88,7 @@ CREATE INDEX idx_ai_agent_linked_user ON domains.ai_agent(linked_user_id) WHERE 
 > （失败/成功终态写入后不变，纠错靠新行）。
 >
 > - 频率限制执行：按 `(agent_id, create_time)` 统计最近 1 小时行数 + 取最新一行 `create_time` 算间隔。
-> - `(agent_id, post_id)` 唯一索引在 DB 层兜底「一个机器人对一帖至多回复一次」。
+> - 同一帖子可被同一机器人多次回复（关键词触发不设防重），用量仅靠频率限制约束。
 
 ```sql
 DROP TABLE IF EXISTS domains.ai_agent_reply_log;
@@ -127,10 +127,7 @@ COMMENT ON COLUMN domains.ai_agent_reply_log.completion_tokens IS '输出token�
 
 -- --- 索引优化 ---
 
--- 1. 【必须】一个机器人对一帖至多回复一次(DB层兜底,应用层先查后写 + 依赖本索引防并发重复)
-CREATE UNIQUE INDEX idx_ai_reply_unique ON domains.ai_agent_reply_log(agent_id, post_id);
-
--- 2. 频率限制统计: 最近1小时计数 + 最新回复时间
+-- 1. 频率限制统计: 最近1小时计数 + 最新回复时间
 CREATE INDEX idx_ai_reply_agent_time ON domains.ai_agent_reply_log(agent_id, create_time DESC);
 ```
 
@@ -141,4 +138,14 @@ CREATE INDEX idx_ai_reply_agent_time ON domains.ai_agent_reply_log(agent_id, cre
 
 ```sql
 ALTER TABLE domains.ai_agent_reply_log ALTER COLUMN comment_id DROP NOT NULL;
+```
+
+## 存量表迁移（去除一帖一回防重）
+
+> 2026-08-26 变更：需求调整为「同一帖子可被同一机器人多次关键词触发回复」，
+> 用量仅靠频率限制（max_replies_per_hour / min_interval_sec）约束，不再设防重。
+> 已建表的存量库由 DB-owner 执行：
+
+```sql
+DROP INDEX IF EXISTS domains.idx_ai_reply_unique;
 ```

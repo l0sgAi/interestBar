@@ -25,7 +25,6 @@ var (
 	errAgentDisabled    = errors.New("agent is disabled")
 	errNotManualMode    = errors.New("agent is not in manual trigger mode")
 	errPostNotReplyable = errors.New("post not replyable (not published or locked)")
-	errAlreadyReplied   = errors.New("agent already replied to this post")
 	errRateLimited      = errors.New("agent reply rate limited")
 	errLLMCall          = errors.New("llm call failed")
 )
@@ -48,6 +47,5 @@ func IsNoFieldsToUpdateErr(err error) bool { return errors.Is(err, errNoFieldsTo
 func IsAgentDisabledErr(err error) bool    { return errors.Is(err, errAgentDisabled) }
 func IsNotManualModeErr(err error) bool    { return errors.Is(err, errNotManualMode) }
 func IsPostNotReplyableErr(err error) bool { return errors.Is(err, errPostNotReplyable) }
-func IsAlreadyRepliedErr(err error) bool   { return errors.Is(err, errAlreadyReplied) }
 func IsRateLimitedErr(err error) bool      { return errors.Is(err, errRateLimited) }
 func IsLLMCallErr(err error) bool          { return errors.Is(err, errLLMCall) }

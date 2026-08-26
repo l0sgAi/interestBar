@@ -37,11 +37,8 @@ const (
 
 // ReplyLogRepository 是回复日志的持久化接口（由 infrastructure 实现）。
 type ReplyLogRepository interface {
-	// Create 插入一条终态日志。撞 (agent_id, post_id) 唯一索引说明该帖已处理过，
-	// 返回 ErrReplyAlreadyExists（并发防重兜底）。
+	// Create 插入一条终态日志（append-only，不设防重）。
 	Create(ctx context.Context, log *ReplyLog) error
-	// ExistsByAgentAndPost 检查机器人是否已对帖子发起过回复（含失败行）。
-	ExistsByAgentAndPost(ctx context.Context, agentID, postID uuid.UUID) (bool, error)
 	// CountSinceByAgent 统计机器人自 since 以来的日志行数（含失败，限频口径）。
 	CountSinceByAgent(ctx context.Context, agentID uuid.UUID, since time.Time) (int64, error)
 	// GetLastByAgent 取机器人最新一条日志（算最小回复间隔）。无日志返回 nil, nil。
