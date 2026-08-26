@@ -3,7 +3,7 @@
 > **目标**：让机器人「满足特定条件才回复」从 system prompt 软约束（输出空值）升级为**两阶段硬流程**——阶段1 分类器 LLM 判定该不该回（严格 JSON 输出），判定通过才进阶段2 生成回复。
 > **基线（2026-08-26 已确认决策）**：
 > - A：**两阶段**而非单次结构化输出——判定调用 max_tokens 压低，不回复时 completion 成本近零；生成质量不受 JSON schema 约束污染。
-> - B：分类器**复用机器人自己的 LLM 配置**（protocol/base_url/api_key/model），仅覆盖 `temperature=0, max_tokens=64`；零新增凭证管理与配置项。
+> - B：分类器**复用机器人自己的 LLM 配置**（protocol/base_url/api_key/model），仅覆盖 `temperature=0, max_tokens=512`（覆盖推理模型思考 token，64 曾被烧光致空输出）；零新增凭证管理与配置项。
 > - C：判定条件存 agent 新列 `filter_prompt`（自然语言，如「只回复编程相关问题」）；**空 = 跳过阶段1**，存量机器人行为完全不变（向后兼容）。
 > - D：分类器**仅关键词触发（mode=2）生效**；手动触发（mode=3）是管理员显式操作，绕过判定。
 > - E：判定「不回复」**写日志行 status=2（skipped）**，reason 入 `error_msg`——管理员可查「机器人为何不回复」。
@@ -36,7 +36,7 @@
 | 规则 | mode=2 关键词 | mode=3 手动 |
 |---|---|---|
 | 分类器判定 | `filter_prompt` 非空时：限频过后、生成之前调 LLM 判定 | **不过判定**（trigger==nil 天然绕过） |
-| 判定参数 | 复用 agent 的 protocol/base_url/api_key/model，覆盖 `temperature=0, max_tokens=64` | — |
+| 判定参数 | 复用 agent 的 protocol/base_url/api_key/model，覆盖 `temperature=0, max_tokens=512` | — |
 | 判定不通过 | 写 status=2 日志行（reason 入 error_msg），静默结束 | — |
 | 判定解析失败 | fail-closed：写 status=0 失败行「classifier parse failed」 | — |
 | 限频 | 统计口径排除 status=2 | 同左 |
@@ -52,7 +52,7 @@ system = 固定模板（judgeSystemPrompt 常量）：
 user   = "帖子标题：{title}\n帖子摘要：{summary}\n用户评论：{comment_content}\n判定条件：{filter_prompt}"
 ```
 - 各段复用 `truncateRunes` + `aiagent.max_content_chars` 截断。
-- 判定调用与生成调用共享 executeReply 的 ctx 超时（判定 max_tokens=64，秒级返回，不新增超时配置）。
+- 判定调用与生成调用共享 executeReply 的 ctx 超时（判定 max_tokens=512，秒级返回，不新增超时配置）。
 
 ### 3.3 判定结果解析（parseJudgeResult）
 
@@ -94,7 +94,7 @@ user   = "帖子标题：{title}\n帖子摘要：{summary}\n用户评论：{comm
 |---|---|
 | 存量机器人 | `filter_prompt=''` → 不过判定，行为与旧版完全一致 |
 | 分类器幻觉/误判 | fail-open 方向不存在：判定通过才回复，误判只会「多回」不会「乱回内容」；解析失败 fail-closed |
-| 判定成本 | max_tokens=64 + temperature=0，单次判定 completion ≈ 几十个 token |
+| 判定成本 | max_tokens=512 + temperature=0，单次判定 completion ≈ 几十个 token；解析失败兜底正则取 reply 字段 |
 | 限频绕过 | skipped 不计配额；但分类器本身消耗 token，靠 reply_concurrency 信号量与关键词前置匹配兜底 |
 | 超时 | 两阶段共享 executeReply ctx；分类器过慢会挤占生成时间片，超时即失败行（可接受，判定理应秒回） |
 | mode=1（全帖触发） | P2 实现时同样过分类器（trigger!=nil 即可，天然兼容） |

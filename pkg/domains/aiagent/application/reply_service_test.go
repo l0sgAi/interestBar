@@ -48,14 +48,29 @@ func TestParseJudgeResult(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "非法 JSON",
-			input:   `{"reply":true,`,
-			wantErr: true,
+			name:      "非法 JSON 但含 reply 字段（兜底救回）",
+			input:     `{"reply":true,`,
+			wantReply: true,
 		},
 		{
 			name:      "缺 reason 字段",
 			input:     `{"reply":false}`,
 			wantReply: false,
+		},
+		{
+			name:      "半截 JSON 兜底 reply=true",
+			input:     `{"reply":true,"reason":"编程相关问题，属于`,
+			wantReply: true,
+		},
+		{
+			name:      "半截 JSON 兜底 reply=false",
+			input:     `{"reply":false,"reason":"闲聊与`,
+			wantReply: false,
+		},
+		{
+			name:    "半截 JSON 无 reply 字段",
+			input:   `{"repl`,
+			wantErr: true,
 		},
 	}
 	for _, tc := range cases {

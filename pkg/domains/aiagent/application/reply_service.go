@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -114,8 +115,13 @@ const (
 const (
 	judgeSystemPrompt = "你是内容分类器。根据用户给出的判定条件，判断机器人是否应回复该帖子。" +
 		"只输出 JSON：{\"reply\":true|false,\"reason\":\"一句话原因\"}，禁止输出任何其他内容。"
-	judgeMaxTokens = 64
+	// judgeMaxTokens 分类器输出预算。需覆盖推理模型的思考 token（reasoning 计入
+	// max_completion_tokens）与较长 reason，64 曾被烧光导致空输出/半截 JSON。
+	judgeMaxTokens = 2048
 )
+
+// judgeReplyRe 半截 JSON 兜底：unmarshal 失败时抢救 reply 字段（推理模型截断高发）。
+var judgeReplyRe = regexp.MustCompile(`"reply"\s*:\s*(true|false)`)
 
 // judgeResult 分类器判定结果（阶段1 JSON 输出）。
 type judgeResult struct {
@@ -373,8 +379,8 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		completionTokens += jres.CompletionTokens
 		judge, err := parseJudgeResult(jres.Content)
 		if err != nil {
-			// fail-closed：解析失败宁可漏回，不可放进未判定内容。
-			return fail("classifier parse failed: " + err.Error())
+			// fail-closed：解析失败宁可漏回，不可放进未判定内容。error_msg 带原始输出现场便于诊断。
+			return fail("classifier parse failed: " + err.Error() + " raw=" + truncateRunes(jres.Content, 100))
 		}
 		if !judge.Reply {
 			logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=classifier_rejected detail=%s",
@@ -496,7 +502,8 @@ func buildJudgeUserPrompt(agent *domain.AiAgent, post *PostBrief, trigger *Comme
 }
 
 // parseJudgeResult 解析分类器 JSON 输出（容错剥 markdown code fence）。
-// 解析失败返回错误，调用方 fail-closed（不回复）。
+// unmarshal 失败时兜底正则抢救 "reply" 字段（截断的半截 JSON 仍可取判定）；
+// 兜底也失败返回错误，调用方 fail-closed（不回复）。
 func parseJudgeResult(content string) (*judgeResult, error) {
 	s := strings.TrimSpace(content)
 	if strings.HasPrefix(s, "```") {
@@ -507,6 +514,9 @@ func parseJudgeResult(content string) (*judgeResult, error) {
 	}
 	var r judgeResult
 	if err := json.Unmarshal([]byte(s), &r); err != nil {
+		if m := judgeReplyRe.FindStringSubmatch(s); m != nil {
+			return &judgeResult{Reply: m[1] == "true", Reason: "（输出截断，reason 丢失）"}, nil
+		}
 		return nil, err
 	}
 	return &r, nil
