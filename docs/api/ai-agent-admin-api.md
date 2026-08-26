@@ -3,6 +3,7 @@
 > **功能**：管理员（`users.role=1`）对 AI 回复机器人（agent）的增删改查 + 手动触发回复。
 > **对应实现**：`pkg/domains/aiagent/`，DDL 见 [../pgsql-ddl/ai-agent.md](../pgsql-ddl/ai-agent.md)，回复链路设计见 [../agent-reply-design.md](../agent-reply-design.md)。
 > **状态**：CRUD 已交付；回复执行链路已交付（评论关键词触发 mode=2 + 手动触发 mode=3；「全部新帖」mode=1 暂不生效，P2 待实现）。
+> 2026-08-26 起支持**两阶段回复判定**：新增 `filter_prompt` 字段（判定条件），详见 §2.3，设计见 [../agent-reply-filter-design.md](../agent-reply-filter-design.md)。
 
 ---
 
@@ -60,6 +61,7 @@ Content-Type: application/json   （POST/PUT）
 | `model` | string | 模型名，1-100 字符（如 `gpt-4o-mini` / `claude-sonnet-5`） |
 | `llm_params` | object | 通用 LLM 参数，见 §2.1 |
 | `system_prompt` | string | 系统提示词，可空 |
+| `filter_prompt` | string | 回复判定条件（自然语言），可空，≤2000 字符；**空 = 不判定直接回复**。仅 mode=2 关键词触发生效，见 §2.3 |
 | `trigger_mode` | int | 触发模式：1=全部新帖（**暂不生效**），2=评论关键词触发，3=手动 |
 | `trigger_keywords` | string[] | 触发关键词；仅 mode=2 时有意义（匹配**评论内容**，不区分大小写子串） |
 | `max_replies_per_hour` | int | 每小时回复上限，0=不限，默认 30 |
@@ -77,7 +79,19 @@ Content-Type: application/json   （POST/PUT）
 
 数值范围后端不硬校验（交给供应商报错），前端自行用输入框约束即可。
 
-### 2.2 响应示例
+### 2.3 filter_prompt 回复判定条件（两阶段回复）
+
+关键词触发（mode=2）时，机器人命中关键词后**先由 LLM 判定是否该回**，判定通过才生成回复：
+
+- **空串（默认）= 不判定**，命中关键词即回复（旧行为，完全兼容）。
+- **非空 = 开启判定**：自然语言描述条件，如「只回复编程相关问题」「只回复求助类评论，闲聊不回」。
+- 判定**仅 mode=2 生效**；手动触发（§3.6）是管理员显式操作，**不过判定**。
+- 判定不通过：不产生评论，回复日志记 `status=2`（跳过原因可查），**不消耗限频配额**。
+- 判定用机器人自己配置的模型，每次判定只多消耗几十个 token（成本极低）。
+
+**前端建议**：表单上作为「高级选项」textarea，占位文案示例 `只回复编程相关问题`；仅 `trigger_mode=2` 时展示。
+
+### 2.4 响应示例
 
 ```json
 {
@@ -95,6 +109,7 @@ Content-Type: application/json   （POST/PUT）
     "model": "gpt-4o-mini",
     "llm_params": { "temperature": 0.7, "max_tokens": 1024 },
     "system_prompt": "你是兴趣社区的吧务助手，回复要简短友好。",
+    "filter_prompt": "只回复编程相关问题",
     "trigger_mode": 2,
     "trigger_keywords": ["怎么加入", "求助", "新人"],
     "max_replies_per_hour": 30,
@@ -135,6 +150,7 @@ Content-Type: application/json   （POST/PUT）
   "model": "gpt-4o-mini",
   "llm_params": { "temperature": 0.7, "max_tokens": 1024 },
   "system_prompt": "你是兴趣社区的吧务助手，回复要简短友好。",
+  "filter_prompt": "只回复编程相关问题",
   "trigger_mode": 2,
   "trigger_keywords": ["怎么加入", "求助"],
   "max_replies_per_hour": 30,
@@ -142,7 +158,7 @@ Content-Type: application/json   （POST/PUT）
 }
 ```
 
-**默认值**（字段不传时）：`trigger_mode=1`、`max_replies_per_hour=30`、`min_interval_sec=60`、`status=1`、`llm_params={}`、`trigger_keywords=[]`。
+**默认值**（字段不传时）：`trigger_mode=1`、`max_replies_per_hour=30`、`min_interval_sec=60`、`status=1`、`llm_params={}`、`trigger_keywords=[]`、`filter_prompt=""`（不判定）。
 
 **成功**：HTTP 200，`data` 为完整 AgentVO（注意本项目创建统一回 200/`Created successfully`，非 201）。
 
@@ -190,10 +206,11 @@ Content-Type: application/json   （POST/PUT）
 { "api_key": "sk-new-key", "status": 0 }
 ```
 
-可更新字段：`name`、`avatar_url`、`api_protocol`、`base_url`、`api_key`、`model`、`llm_params`、`system_prompt`、`trigger_mode`、`trigger_keywords`、`max_replies_per_hour`、`min_interval_sec`、`status`。
+可更新字段：`name`、`avatar_url`、`api_protocol`、`base_url`、`api_key`、`model`、`llm_params`、`system_prompt`、`filter_prompt`、`trigger_mode`、`trigger_keywords`、`max_replies_per_hour`、`min_interval_sec`、`status`。
 
 **注意**：
 - `api_key` 传**空串 = 清除 key**（`has_api_key` 变 false）；要「保持不变」就不传该字段。
+- `filter_prompt` 传**空串 = 关闭判定**（回到命中即回复）；不传 = 保持原条件。
 - `llm_params` / `trigger_keywords` 是**整体替换**语义（传了就覆盖全量），不是合并。
 - `trigger_mode` 改为 2 时，同请求需带非空 `trigger_keywords`（或已存关键词非空）。
 - 空请求体（无任何可更新字段）返回 400（`at least one field to update`）。
@@ -221,12 +238,11 @@ Content-Type: application/json   （POST/PUT）
 - 机器人存在且启用（`status=1`），否则 400/404；
 - 机器人 `trigger_mode=3`（手动模式），否则 400 `agent is not in manual trigger mode`；
 - 帖子已发布且未锁定，否则 400 `post not replyable (not published or locked)`；
-- 该机器人未对该帖回复过（含失败，`ai_agent_reply_log` 唯一约束），否则 409；
-- 限频未超（最近 1h 日志行数 / 最小间隔，**失败也算额度**），否则 429。
+- 限频未超（最近 1h 日志行数 / 最小间隔，**失败也算额度**，分类器跳过 status=2 不算），否则 429。
 
-**调用失败**（LLM 报错/空回复/评论落库失败）：返回 503，`message` 含失败原因摘要；失败日志行已照常落库（`status=0`），**同帖不再重试**（终态）。
+**调用失败**（LLM 报错/空回复/评论落库失败）：返回 503，`message` 含失败原因摘要；失败日志行已照常落库（`status=0`）。
 
-**关键词触发说明**（mode=2，无管理端接口）：用户在任意帖子下发评论，评论内容命中任一 `trigger_keywords`（不区分大小写子串）即触发启用的机器人异步回复（回复挂在触发评论楼层内）。触发失败静默，仅日志表可查。机器人自己的评论不会触发（防回环）。
+**关键词触发说明**（mode=2，无管理端接口）：用户在任意帖子下发评论，评论内容命中任一 `trigger_keywords`（不区分大小写子串）即触发启用的机器人异步回复（回复挂在触发评论楼层内）。配置了 `filter_prompt` 的机器人会先经 LLM 判定，判定不通过则不回复（日志记 `status=2`，原因入 `error_msg`，不占限频配额）。触发失败静默，仅日志表可查。机器人自己的评论不会触发（防回环）。
 
 ---
 
@@ -241,6 +257,7 @@ Content-Type: application/json   （POST/PUT）
 | 400 | `llm_params has invalid key/value` | 参数键不在白名单 / 值非数字 | 固定表单字段 |
 | 400 | `rate limit values must be >= 0` | 限频字段为负 | 数字输入框 min=0 |
 | 400 | `status must be 0 or 1` | status 非法 | 开关组件 |
+| 400 | `filter_prompt must be <= 2000 chars` | 判定条件超长 | textarea 计数限制 |
 | 400 | `at least one field to update` | PUT 空更新 | 提交前检查 |
 | 400 | `Invalid agent id` | 路径 :id 非 UUID | 不会出现，防御 |
 | 401 | `Token not found` / `Invalid or expired token` | 未登录/token 过期 | 走全局 401 拦截 |
@@ -260,6 +277,6 @@ Content-Type: application/json   （POST/PUT）
 3. **列表搜索**：`GET /agent/list` 支持 `keyword` 按 `name` 模糊过滤（服务端 ILIKE，`total` 为过滤后总数）；也可继续本地过滤。
 4. **`linked_user_id` 只读**：机器人账号由后端生成（role=2，username/email 由 uuidv7+时间戳生成，明显非真人），前端仅展示。
 5. **status 语义**：停用（0）后机器人不再参与任何回复触发（关键词/手动均拒绝）。
-6. **触发/限频字段已生效**：mode=2 匹配**评论内容**（不是帖子）；mode=3 走 `POST /agent/:id/reply/:postId`；mode=1（全部新帖）暂不生效。限频按回复日志全部行（含失败）统计，防重为「一机器人一帖至多一次」（含失败，终态不重试）。
+6. **触发/限频字段已生效**：mode=2 匹配**评论内容**（不是帖子）；mode=3 走 `POST /agent/:id/reply/:postId`；mode=1（全部新帖）暂不生效。同一帖子可被同一机器人多次回复（不设防重），限频按回复日志行统计（含失败、排除分类器跳过 status=2）。
 7. **时间字段**：RFC3339 带时区（+08:00），直接 `new Date()` 解析即可。
 8. **并发编辑**：无版本控制，后写覆盖；管理后台单人使用场景可接受。
