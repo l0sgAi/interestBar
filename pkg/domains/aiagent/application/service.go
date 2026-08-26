@@ -14,6 +14,7 @@ import (
 
 	"interestBar/pkg/conf"
 	"interestBar/pkg/domains/aiagent/domain"
+	"interestBar/pkg/logger"
 	"interestBar/pkg/server/utils"
 	sharedomain "interestBar/pkg/shared/domain"
 	"interestBar/pkg/util/crypto"
@@ -31,8 +32,17 @@ type RoleReader interface {
 
 // BotUserCreator 跨域端口：创建机器人关联系统用户（role=2 机器人账号，不发帖不登录）。
 type BotUserCreator interface {
-	// CreateBotUser 按给定 username/email 创建系统用户，返回其 ID。
-	CreateBotUser(ctx context.Context, username, email string) (uuid.UUID, error)
+	// CreateBotUser 按给定 username/email/avatarURL 创建系统用户，返回其 ID。
+	// username 用机器人 name（users.username 无唯一约束，允许重复）；
+	// email 由调用方保证全局唯一（users.email 有唯一索引）。
+	CreateBotUser(ctx context.Context, username, email, avatarURL string) (uuid.UUID, error)
+}
+
+// BotUserProfileUpdater 跨域端口：同步机器人资料到关联系统用户。
+// 机器人改名/换头像时同步 users.username/avatar_url，评论区展示才跟随。
+type BotUserProfileUpdater interface {
+	// UpdateBotUserProfile 部分更新机器人账号的 username/avatar_url（nil 字段不动）。
+	UpdateBotUserProfile(ctx context.Context, userID uuid.UUID, username, avatarURL *string) error
 }
 
 // 管理员 role 常量（users.role，权威定义在 user 领域/DDL）。
@@ -131,12 +141,15 @@ type AgentService interface {
 	SetRoleReader(r RoleReader)
 	// SetBotUserCreator 注入跨域机器人账号创建端口（composition 桥接）。
 	SetBotUserCreator(c BotUserCreator)
+	// SetBotUserProfileUpdater 注入跨域机器人资料同步端口（composition 桥接）。
+	SetBotUserProfileUpdater(u BotUserProfileUpdater)
 }
 
 type agentServiceImpl struct {
 	repo           domain.AgentRepository
-	roleReader     RoleReader     // 注入前 nil，鉴权 fail-closed
-	botUserCreator BotUserCreator // 注入前 nil，创建时 fail-fast
+	roleReader     RoleReader            // 注入前 nil，鉴权 fail-closed
+	botUserCreator BotUserCreator        // 注入前 nil，创建时 fail-fast
+	botUserUpdater BotUserProfileUpdater // 注入前 nil，改名/换头像时跳过同步
 }
 
 // NewAgentService 构造一个 AgentService（跨域依赖 setter 注入）。
@@ -144,8 +157,11 @@ func NewAgentService(repo domain.AgentRepository) AgentService {
 	return &agentServiceImpl{repo: repo}
 }
 
-func (s *agentServiceImpl) SetRoleReader(r RoleReader)         { s.roleReader = r }
-func (s *agentServiceImpl) SetBotUserCreator(c BotUserCreator) { s.botUserCreator = c }
+func (s *agentServiceImpl) SetRoleReader(r RoleReader)                { s.roleReader = r }
+func (s *agentServiceImpl) SetBotUserCreator(c BotUserCreator)        { s.botUserCreator = c }
+func (s *agentServiceImpl) SetBotUserProfileUpdater(u BotUserProfileUpdater) {
+	s.botUserUpdater = u
+}
 
 // ensureAdmin 校验操作者是 role=1 管理员。端口未注入/用户不存在均拒绝（fail-closed）。
 func (s *agentServiceImpl) ensureAdmin(ctx context.Context, adminID uuid.UUID) error {
@@ -214,15 +230,16 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 	}
 
 	// 创建关联系统用户（role=2 机器人账号）。
-	// 命名规则：uuidv7 id + 时间戳，保证 username/email 全局唯一且明显非真人。
+	// username 直接用机器人 name（users.username 允许重复，评论区展示该名）；
+	// email 需全局唯一（users.email 唯一索引），用 uuidv7 + 时间戳保证。
 	if s.botUserCreator == nil {
 		return nil, errNotAdmin // 端口未注入视为装配错误，拒绝创建
 	}
 	agentID := sharedomain.NewID()
 	ts := time.Now().UnixMilli()
-	botUsername := fmt.Sprintf("agent_%s_%d", agentID.String()[:13], ts)
 	botEmail := fmt.Sprintf("%s.%d@bot.qubar.local", agentID.String(), ts)
-	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, botUsername, botEmail)
+	avatarURL := utils.SanitizeForPg(input.AvatarURL)
+	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, name, botEmail, avatarURL)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +247,7 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 	agent := &domain.AiAgent{
 		ID:                agentID,
 		Name:              name,
-		AvatarURL:         utils.SanitizeForPg(input.AvatarURL),
+		AvatarURL:         avatarURL,
 		LinkedUserID:      linkedUserID,
 		APIProtocol:       input.APIProtocol,
 		BaseURL:           utils.SanitizeForPg(strings.TrimSpace(input.BaseURL)),
@@ -416,6 +433,23 @@ func (s *agentServiceImpl) UpdateAgent(ctx context.Context, adminID, agentID uui
 	if err != nil {
 		return nil, mapRepoError(err)
 	}
+
+	// 改名/换头像时同步到关联系统用户（users.username/avatar_url），
+	// 评论区展示从 users 表取。同步失败仅记日志：ai_agent 已是最新，
+	// 用户侧下次同步或回填可补齐，不阻塞本次更新。
+	if s.botUserUpdater != nil && (input.Name != nil || input.AvatarURL != nil) {
+		var username, avatar *string
+		if v, ok := fields["name"].(string); ok {
+			username = &v
+		}
+		if v, ok := fields["avatar_url"].(string); ok {
+			avatar = &v
+		}
+		if err := s.botUserUpdater.UpdateBotUserProfile(ctx, agent.LinkedUserID, username, avatar); err != nil {
+			logger.Log.Error("Sync bot user profile failed: " + err.Error())
+		}
+	}
+
 	vo := s.toVO(agent)
 	return &vo, nil
 }

@@ -52,14 +52,16 @@ const botUserRole = 2
 
 // CreateBotUser 创建 role=2 的机器人系统用户，返回其 ID。
 // 机器人账号不登录不发帖，仅作为 ai_agent 以该身份发评论的载体。
-func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email string) (uuid.UUID, error) {
+// username 用机器人 name（允许重复）；email 由调用方保证唯一；avatarURL 为机器人头像。
+func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string) (uuid.UUID, error) {
 	u := userdomain.SysUser{
-		ID:       sharedomain.NewID(),
-		Username: username,
-		Email:    email,
-		Role:     botUserRole,
-		Status:   userdomain.UserStatusActive,
-		Deleted:  0,
+		ID:        sharedomain.NewID(),
+		Username:  username,
+		Email:     email,
+		AvatarURL: avatarURL,
+		Role:      botUserRole,
+		Status:    userdomain.UserStatusActive,
+		Deleted:   0,
 	}
 	if err := b.db.WithContext(ctx).Create(&u).Error; err != nil {
 		return uuid.Nil, err
@@ -67,12 +69,29 @@ func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email
 	return u.ID, nil
 }
 
+// agentBotUserUpdater 桥接 aiagent.BotUserProfileUpdater -> user.UserService.UpdateProfile。
+//
+// 走 UpdateProfile 而非直写库：更新后自动刷新 userinfo 缓存（避免评论区旧头像/旧名）。
+type agentBotUserUpdater struct {
+	delegate userapp.UserService
+}
+
+// UpdateBotUserProfile 部分更新机器人账号的 username/avatar_url（nil 字段不动）。
+func (b *agentBotUserUpdater) UpdateBotUserProfile(ctx context.Context, userID uuid.UUID, username, avatarURL *string) error {
+	_, err := b.delegate.UpdateProfile(ctx, userID, userapp.UpdateProfileInput{
+		Username:  username,
+		AvatarURL: avatarURL,
+	})
+	return err
+}
+
 // 编译期保证：桥接器满足 aiagent 领域端口。
 var (
-	_ agentapp.RoleReader     = (*agentRoleReader)(nil)
-	_ agentapp.BotUserCreator = (*agentBotUserCreator)(nil)
-	_ agentapp.PostReader     = (*agentPostReader)(nil)
-	_ agentapp.CommentCreator = (*agentCommentCreator)(nil)
+	_ agentapp.RoleReader            = (*agentRoleReader)(nil)
+	_ agentapp.BotUserCreator        = (*agentBotUserCreator)(nil)
+	_ agentapp.BotUserProfileUpdater = (*agentBotUserUpdater)(nil)
+	_ agentapp.PostReader            = (*agentPostReader)(nil)
+	_ agentapp.CommentCreator        = (*agentCommentCreator)(nil)
 )
 
 // agentPostReader 桥接 aiagent.PostReader -> post.PostService.GetPostBrief。

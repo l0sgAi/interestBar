@@ -120,6 +120,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	agentSvc := newAgentService(deps)
 	agentSvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
 	agentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
+	agentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
 
 	// aiagent 回复执行链路：LLM(eino) + 帖子摘要(post) + 评论创建(comment)。
 	replySvc := newAgentReplyService(deps, postSvc, commentSvc)
