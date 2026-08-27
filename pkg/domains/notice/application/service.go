@@ -65,8 +65,8 @@ type NoticeListResult struct {
 // NoticeService 是 notice 领域的应用服务接口。
 type NoticeService interface {
 	// ListNotifications 获取当前用户通知列表（keyset 游标分页，id DESC）。
-	// noticeType=0 全部；1-6 按类型过滤。
-	ListNotifications(ctx context.Context, userID uuid.UUID, noticeType int16, size int, cursor string) (*NoticeListResult, error)
+	// noticeTypes 为空=全部；非空按类型集合过滤（如「赞」tab 传 [1,2]）。
+	ListNotifications(ctx context.Context, userID uuid.UUID, noticeTypes []int16, size int, cursor string) (*NoticeListResult, error)
 	// GetUnreadCount 获取当前用户未读通知数。
 	GetUnreadCount(ctx context.Context, userID uuid.UUID) (int64, error)
 	// MarkRead 批量标记已读（仅本人通知）。
@@ -95,15 +95,17 @@ func NewNoticeService(repo domain.NotificationRepository, cache domain.NoticeUnr
 func (s *noticeServiceImpl) SetUserFacade(f UserFacade) { s.userFacade = f }
 
 // ListNotifications 获取当前用户通知列表。
-func (s *noticeServiceImpl) ListNotifications(ctx context.Context, userID uuid.UUID, noticeType int16, size int, cursor string) (*NoticeListResult, error) {
-	if noticeType < 0 || noticeType > domain.NoticeTypeMention {
-		return nil, errInvalidNoticeType
+func (s *noticeServiceImpl) ListNotifications(ctx context.Context, userID uuid.UUID, noticeTypes []int16, size int, cursor string) (*NoticeListResult, error) {
+	for _, t := range noticeTypes {
+		if t < domain.NoticeTypeLikePost || t > domain.NoticeTypeMention {
+			return nil, errInvalidNoticeType
+		}
 	}
 	if size <= 0 || size > 100 {
 		size = 20
 	}
 
-	notices, nextCursor, err := s.repo.ListByCursor(ctx, userID, noticeType, size, cursor)
+	notices, nextCursor, err := s.repo.ListByCursor(ctx, userID, noticeTypes, size, cursor)
 	if err != nil {
 		return nil, err
 	}

@@ -3,6 +3,9 @@ package http
 
 import (
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 
 	"interestBar/pkg/domains/notice/application"
 	"interestBar/pkg/domains/notice/domain"
@@ -25,7 +28,7 @@ func NewHandler(svc application.NoticeService) *Handler {
 
 // ListNoticesRequest 通知列表请求。
 type ListNoticesRequest struct {
-	Type   int16  `query:"type"`   // 0=全部, 1-6 按类型过滤
+	Type   string `query:"type"`   // 空/"0"=全部; 单值"1"-"6"; 或逗号分隔多值"1,2"(分类 tab 聚合)
 	Size   int    `query:"size"`   // 每页条数(<=0 或 >100 回落 20)
 	Cursor string `query:"cursor"` // 上一页返回的游标, 空=第一页
 }
@@ -43,7 +46,13 @@ func (h *Handler) ListNotices(c appctx.AppContext) {
 		return
 	}
 
-	result, err := h.svc.ListNotifications(c, userID, req.Type, normalizeSize(req.Size), req.Cursor)
+	noticeTypes, err := parseNoticeTypes(req.Type)
+	if err != nil {
+		httputil.BadRequest(c, err.Error())
+		return
+	}
+
+	result, err := h.svc.ListNotifications(c, userID, noticeTypes, normalizeSize(req.Size), req.Cursor)
 	if err != nil {
 		writeNoticeError(c, err)
 		return
@@ -138,6 +147,26 @@ func normalizeSize(size int) int {
 		return 20
 	}
 	return size
+}
+
+// parseNoticeTypes 解析 type 查询参数为类型集合。
+// 空串或 "0" = 全部（nil）；否则按逗号拆分，每段须为 1-6 的整数。
+func parseNoticeTypes(raw string) ([]int16, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw == "0" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	types := make([]int16, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		v, err := strconv.Atoi(p)
+		if err != nil || v < int(domain.NoticeTypeLikePost) || v > int(domain.NoticeTypeMention) {
+			return nil, fmt.Errorf("invalid notice type: %s", p)
+		}
+		types = append(types, int16(v))
+	}
+	return types, nil
 }
 
 // writeNoticeError 把 service 层错误映射到 HTTP 响应。

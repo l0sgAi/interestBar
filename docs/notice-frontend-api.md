@@ -45,15 +45,26 @@ Query 参数：
 
 | 参数 | 类型 | 必填 | 说明 |
 |---|---|---|---|
-| `type` | int | 否 | 0=全部（默认），1-6 按类型过滤。传其它值返回 400 |
+| `type` | string | 否 | 空或 `0`=全部（默认）；单值 `1`-`6` 按类型过滤；逗号分隔多值如 `1,2` 按类型集合过滤（`IN`）。含非法值返回 400 |
 | `size` | int | 否 | 每页条数，≤0 或 >100 按 20 处理 |
 | `cursor` | string | 否 | 上一页返回的游标，首页不传 |
+
+分类 Tab 建议映射（类型 1/2 同属「赞」，单值过滤会漏掉评论被赞）：
+
+| Tab | `type` 传值 |
+|---|---|
+| 全部 | 不传或 `0` |
+| 赞 | `1,2` |
+| 收藏 | `3` |
+| 评论 | `4` |
+| 回复 | `5` |
+| 提及 | `6` |
 
 请求示例：
 
 ```
-GET /notice/list?type=0&size=20
-GET /notice/list?type=1&size=20&cursor=eyJpZCI6IjAxOT...In0=
+GET /notice/list?size=20
+GET /notice/list?type=1,2&size=20&cursor=eyJpZCI6IjAxOT...In0=
 ```
 
 响应 `data`：
@@ -177,7 +188,7 @@ GET /notice/list?type=1&size=20&cursor=eyJpZCI6IjAxOT...In0=
 | 场景 | HTTP | message 示例 |
 |---|---|---|
 | 未登录 | 401 | `Token not found` |
-| `type` 超出 0-6 | 400 | `invalid notice type` |
+| `type` 含非法值（非 1-6 整数） | 400 | `invalid notice type: xxx` |
 | `cursor` 非法 | 400 | `Invalid cursor` |
 | `ids` 为空或 >100 | 400 | `Invalid request parameters` |
 | `ids` 含非法 uuid | 400 | `Invalid notice id: xxx` |
@@ -185,7 +196,7 @@ GET /notice/list?type=1&size=20&cursor=eyJpZCI6IjAxOT...In0=
 
 ## 七、联调清单
 
-- [ ] 列表页：类型 Tab（全部/赞/收藏/评论/提及 可自行组合 type 过滤）+ 无限滚动（cursor 空即止）
+- [ ] 列表页：类型 Tab（赞 tab 传 `1,2`，见 §3.1 映射表）+ 无限滚动（cursor 空即止）
 - [ ] 未读样式 + 点击标读（`/notice/read`）
 - [ ] 角标：进入消息页拉 `/notice/unread-count`，read/read-all 后本地校正
 - [ ] 「全部已读」按钮（`/notice/read-all`）

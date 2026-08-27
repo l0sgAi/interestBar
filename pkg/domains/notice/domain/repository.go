@@ -10,9 +10,10 @@ import (
 // 写入由 Redpanda consumer 直写 DB，见 notification_consumer.go）。
 type NotificationRepository interface {
 	// ListByCursor keyset 游标分页获取用户通知（ORDER BY id DESC，UUIDv7 字典序==时间序）。
-	// noticeType=0 表示全部类型；cursor="" 表示第一页。
+	// noticeTypes 为空表示全部类型；非空按 notice_type IN (...) 过滤（支持前端分类 tab
+	// 聚合多个类型，如「赞」= 1,2）；cursor="" 表示第一页。
 	// 返回通知列表、下一页游标（无更多时为 ""）、错误。
-	ListByCursor(ctx context.Context, recipientID uuid.UUID, noticeType int16, size int, cursor string) ([]Notification, string, error)
+	ListByCursor(ctx context.Context, recipientID uuid.UUID, noticeTypes []int16, size int, cursor string) ([]Notification, string, error)
 	// CountUnread 统计用户未读通知数（缓存 miss 回源用）。
 	CountUnread(ctx context.Context, recipientID uuid.UUID) (int64, error)
 	// MarkRead 批量标记已读（仅本人 + 未读行）。返回实际更新行数（供计数器 DECRBY）。

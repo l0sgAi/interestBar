@@ -25,12 +25,13 @@ func NewNotificationRepository(db *gorm.DB) domain.NotificationRepository {
 
 // ListByCursor keyset 游标分页（ORDER BY id DESC，游标条件 id < cursor.id）。
 //
-// 多取一条探测 hasMore；返回的游标取本页最后一条的 id。
-func (r *notificationRepoPG) ListByCursor(ctx context.Context, recipientID uuid.UUID, noticeType int16, size int, cursor string) ([]domain.Notification, string, error) {
+// noticeTypes 非空时按 notice_type IN (...) 过滤；多取一条探测 hasMore；
+// 返回的游标取本页最后一条的 id。
+func (r *notificationRepoPG) ListByCursor(ctx context.Context, recipientID uuid.UUID, noticeTypes []int16, size int, cursor string) ([]domain.Notification, string, error) {
 	query := r.db.WithContext(ctx).
 		Where("recipient_id = ? AND deleted = ?", recipientID, 0)
-	if noticeType > 0 {
-		query = query.Where("notice_type = ?", noticeType)
+	if len(noticeTypes) > 0 {
+		query = query.Where("notice_type IN ?", noticeTypes)
 	}
 
 	if cursor != "" {
