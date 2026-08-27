@@ -244,6 +244,12 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 			// 获取被回复用户ID
 			uid := replyToComment.UserID
 			replyToUserID = &uid
+		} else {
+			// 未指定 reply_to_id = 直接回复根评论：被回复人即根评论作者。
+			// 不置 nil 而解析出作者，回复通知（reply_comment）才有接收人，
+			// 否则该评论既不是顶层也不是回复，通知被静默丢弃（docs/notice-design.md）。
+			uid := rootComment.UserID
+			replyToUserID = &uid
 		}
 	}
 
@@ -621,6 +627,7 @@ func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID u
 	}
 
 	seen := make(map[uuid.UUID]struct{}, len(mentionUserIDs))
+	ordered := make([]uuid.UUID, 0, len(mentionUserIDs))
 	candidates := make([]string, 0, len(mentionUserIDs))
 	for _, id := range mentionUserIDs {
 		if id == uuid.Nil || id == actorID {
@@ -630,6 +637,7 @@ func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID u
 			continue
 		}
 		seen[id] = struct{}{}
+		ordered = append(ordered, id)
 		candidates = append(candidates, id.String())
 	}
 	if len(candidates) == 0 {
@@ -646,8 +654,9 @@ func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID u
 	if max <= 0 {
 		max = 10
 	}
+	// 按去重后的原始顺序筛选：重复提及既不重复入列，也不占用 MentionMax 配额。
 	valid := make([]uuid.UUID, 0, len(briefs))
-	for _, id := range mentionUserIDs {
+	for _, id := range ordered {
 		if _, ok := briefs[id.String()]; !ok {
 			continue // 不存在的用户静默过滤
 		}

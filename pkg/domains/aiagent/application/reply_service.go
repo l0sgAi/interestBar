@@ -164,7 +164,8 @@ func (s *replyServiceImpl) SetRoleReader(r RoleReader)         { s.roleReader = 
 func (s *replyServiceImpl) SetPostReader(r PostReader)         { s.postReader = r }
 func (s *replyServiceImpl) SetCommentCreator(c CommentCreator) { s.commentCreator = c }
 
-// replyTimeoutSec LLM 调用超时（配置兜底）。
+// replyTimeoutSec 单阶段 LLM 调用超时（配置兜底）。分类器与生成各自持有一份
+// 该额度的子预算，互不挤占；关键词触发的整链兜底上限为 2*replyTimeout。
 func replyTimeout() time.Duration {
 	sec := conf.Config.AiAgent.TimeoutSec
 	if sec <= 0 {
@@ -227,6 +228,9 @@ func (s *replyServiceImpl) OnCommentCreated(evt CommentEvent) {
 			}
 			// 每个命中 agent 独立 goroutine + 独立超时：sem 真正限制并发，
 			// 单个慢 LLM 调用不再挤占其它机器人的时间片。
+			// 整体预算 2*replyTimeout：分类器（阶段1）与生成（阶段2）各自持有
+			// replyTimeout 子预算（见 runClassifier 与生成调用处的 WithTimeout），
+			// 分类器耗时不再吃掉生成预算，超时降级后仍有完整额度产出直接回复。
 			// defer 释放信号量：executeReply panic（本 goroutine recover 兜底）
 			// 也必须归还槽位，否则并发上限被永久占用。
 			go func(agent *domain.AiAgent) {
@@ -236,7 +240,7 @@ func (s *replyServiceImpl) OnCommentCreated(evt CommentEvent) {
 						logger.Log.Error(fmt.Sprintf("agent reply panic: agent=%s post=%s: %v", agent.ID, evt.PostID, r))
 					}
 				}()
-				ctx, cancel := context.WithTimeout(context.Background(), replyTimeout())
+				ctx, cancel := context.WithTimeout(context.Background(), 2*replyTimeout())
 				defer cancel()
 				_, err := s.executeReply(ctx, agent, evt.PostID, &evt)
 				if err != nil {
@@ -367,11 +371,15 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 	}
 
 	// 3.3 LLM 生成（阶段2，system_prompt 空时用默认人设兜底）。
+	// 生成持独立子预算 replyTimeout：分类器（阶段1）耗时不影响本阶段额度，
+	// 分类器超时降级后仍有完整时间产出直接回复；父 ctx 取消（手动触发的
+	// 请求取消 / 关键词整链 2*replyTimeout 兜底）仍会正常中断本阶段。
 	systemPrompt := agent.SystemPrompt
 	if systemPrompt == "" {
 		systemPrompt = defaultSystemPrompt
 	}
-	res, err := s.llm.Generate(ctx, LLMRequest{
+	genCtx, genCancel := context.WithTimeout(ctx, replyTimeout())
+	res, err := s.llm.Generate(genCtx, LLMRequest{
 		Protocol:     agent.APIProtocol,
 		BaseURL:      agent.BaseURL,
 		APIKey:       apiKey,
@@ -380,6 +388,7 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 		SystemPrompt: systemPrompt,
 		UserPrompt:   buildUserPrompt(agent, post, trigger),
 	})
+	genCancel()
 	if err != nil {
 		return fail("llm generate failed: " + err.Error())
 	}
@@ -428,8 +437,12 @@ func (s *replyServiceImpl) executeReply(ctx context.Context, agent *domain.AiAge
 //
 // 超时（context.DeadlineExceeded）是唯一 fail-open 路径：判定是省 token/提质的
 // 优化而非门槛，慢端点（如方舟 coding 推理模型，TTFT 数十秒）超时降级直回，
-// 记 status=2 日志（error_msg 前缀 classifier_timeout_fallback）便于观察频率。
-// 分类器用独立子 ctx：额度与整链相同但互不挤占，分类器耗时不吃掉生成预算。
+// 记 status=3（ReplyStatusClassifierTimeout）运维事件日志，error_msg 前缀
+// classifier_timeout_fallback 便于观察频率；与 status=2（分类器判定不回复）
+// 区分，避免运维事件被误读为内容拒绝。status=3 同样不参与限频统计（若降级后
+// 产出回复，另有 status=0/1 行计数）。
+// 分类器持独立子预算 replyTimeout：父 ctx（关键词整链 2*replyTimeout / 手动
+// 触发为请求 ctx）取消仍会中断本阶段，但分类器耗时不吃掉生成阶段预算。
 func (s *replyServiceImpl) runClassifier(
 	ctx context.Context,
 	agent *domain.AiAgent,
@@ -456,11 +469,11 @@ func (s *replyServiceImpl) runClassifier(
 	judgeCancel()
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			// token 未知，不计入。
+			// token 未知，不计入。status=3 运维事件（非分类器拒绝），不参与限频统计。
 			logger.Log.Info(fmt.Sprintf("agent reply: classifier timeout, fallback to direct reply: agent=%s post=%s", agent.ID, post.ID))
 			s.writeReplyLog(&domain.ReplyLog{
 				AgentID: agent.ID, PostID: post.ID, UserID: post.AuthorID,
-				Status:    domain.ReplyStatusSkipped,
+				Status:    domain.ReplyStatusClassifierTimeout,
 				ErrorMsg:  truncateErr("classifier_timeout_fallback: " + err.Error()),
 				LatencyMs: int(time.Since(start).Milliseconds()),
 			})

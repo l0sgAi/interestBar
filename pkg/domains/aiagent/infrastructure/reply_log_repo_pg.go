@@ -25,20 +25,20 @@ func (r *replyLogRepoPG) Create(ctx context.Context, log *domain.ReplyLog) error
 	return r.db.WithContext(ctx).Create(log).Error
 }
 
-// CountSinceByAgent 限频口径排除 status=2（分类器跳过未产出回复，不占配额）。
+// CountSinceByAgent 限频口径排除 status=2/3（分类器未产出回复的判定/运维事件，不占配额）。
 func (r *replyLogRepoPG) CountSinceByAgent(ctx context.Context, agentID uuid.UUID, since time.Time) (int64, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&domain.ReplyLog{}).
-		Where("agent_id = ? AND create_time >= ? AND status <> ?", agentID, since, domain.ReplyStatusSkipped).
+		Where("agent_id = ? AND create_time >= ? AND status NOT IN ?", agentID, since, domain.RateLimitExcludedStatuses).
 		Count(&count).Error
 	return count, err
 }
 
-// GetLastByAgent 限频口径排除 status=2（同上，最小间隔只相对真实回复/失败尝试计算）。
+// GetLastByAgent 限频口径排除 status=2/3（同上，最小间隔只相对真实回复/失败尝试计算）。
 func (r *replyLogRepoPG) GetLastByAgent(ctx context.Context, agentID uuid.UUID) (*domain.ReplyLog, error) {
 	var log domain.ReplyLog
 	err := r.db.WithContext(ctx).
-		Where("agent_id = ? AND status <> ?", agentID, domain.ReplyStatusSkipped).
+		Where("agent_id = ? AND status NOT IN ?", agentID, domain.RateLimitExcludedStatuses).
 		Order("create_time DESC").
 		First(&log).Error
 	if err != nil {

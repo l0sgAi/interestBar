@@ -453,8 +453,9 @@ func (s *agentServiceImpl) UpdateAgent(ctx context.Context, adminID, agentID uui
 	}
 
 	// 改名/换头像时同步到关联系统用户（users.username/avatar_url），
-	// 评论区展示从 users 表取。同步失败仅记日志：ai_agent 已是最新，
-	// 用户侧下次同步或回填可补齐，不阻塞本次更新。
+	// 评论区展示从 users 表取。同步失败转异步重试（指数退避，有限次数）：
+	// ai_agent 已提交最新值，不能让瞬时失败把 users 资料长期撂在不一致状态；
+	// 重试耗尽后记 Error 日志，待人工回填（当前无 outbox 表，进程重启即丢）。
 	if s.botUserUpdater != nil && (input.Name != nil || input.AvatarURL != nil) {
 		var username, avatar *string
 		if v, ok := fields["name"].(string); ok {
@@ -464,12 +465,42 @@ func (s *agentServiceImpl) UpdateAgent(ctx context.Context, adminID, agentID uui
 			avatar = &v
 		}
 		if err := s.botUserUpdater.UpdateBotUserProfile(ctx, agent.LinkedUserID, username, avatar); err != nil {
-			logger.Log.Error("Sync bot user profile failed: " + err.Error())
+			logger.Log.Error("Sync bot user profile failed, scheduling async retry: " + err.Error())
+			go s.retryBotUserProfileSync(agent.LinkedUserID, username, avatar)
 		}
 	}
 
 	vo := s.toVO(agent)
 	return &vo, nil
+}
+
+// botProfileSyncMaxAttempts 资料同步失败后的异步重试次数（不含首次同步调用）。
+const botProfileSyncMaxAttempts = 3
+
+// retryBotUserProfileSync 机器人资料同步失败后的异步补偿：指数退避重试，
+// 带全量载荷（username/avatar 指针 + linkedUserID），任一尝试成功即收敛。
+// 重试耗尽后只能依赖人工回填（当前无 outbox 表，进程退出即丢失待重试任务）。
+func (s *agentServiceImpl) retryBotUserProfileSync(userID uuid.UUID, username, avatarURL *string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Log.Error(fmt.Sprintf("bot user profile sync retry panic: user=%s: %v", userID, r))
+		}
+	}()
+	backoff := time.Second
+	for attempt := 1; attempt <= botProfileSyncMaxAttempts; attempt++ {
+		time.Sleep(backoff)
+		// 脱离请求 ctx：更新接口已返回，重试不应随请求取消而中断。
+		if err := s.botUserUpdater.UpdateBotUserProfile(context.Background(), userID, username, avatarURL); err == nil {
+			logger.Log.Info(fmt.Sprintf("Bot user profile sync recovered on retry %d: user=%s", attempt, userID))
+			return
+		} else {
+			logger.Log.Warn(fmt.Sprintf("Bot user profile sync retry %d/%d failed: user=%s: %s",
+				attempt, botProfileSyncMaxAttempts, userID, err.Error()))
+		}
+		backoff *= 4
+	}
+	logger.Log.Error(fmt.Sprintf("Bot user profile sync permanently failed after %d retries, manual backfill required: user=%s",
+		botProfileSyncMaxAttempts, userID))
 }
 
 // DeleteAgent 软删（deleted=1 且 status=0）。

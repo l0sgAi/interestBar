@@ -123,7 +123,7 @@ COMMENT ON COLUMN domains.ai_agent_reply_log.agent_id IS '机器人ID(ai_agent.i
 COMMENT ON COLUMN domains.ai_agent_reply_log.post_id IS '被回复帖子ID(post.id,无FK,应用层保证)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.comment_id IS '生成的评论ID(comment.id,调用失败时为NULL)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.user_id IS '帖子作者ID(冗余,风控分析用)';
-COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功, 2=分类器跳过';
+COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功, 2=分类器跳过, 3=分类器超时降级直回(运维事件,不参与限频统计)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.latency_ms IS 'LLM调用耗时(毫秒,分类器+生成两阶段总耗时)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.prompt_tokens IS '输入token数(供应商返回,失败为0)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.completion_tokens IS '输出token数(供应商返回,失败为0)';
@@ -163,5 +163,5 @@ DROP INDEX IF EXISTS domains.idx_ai_reply_unique;
 ```sql
 ALTER TABLE domains.ai_agent ADD COLUMN filter_prompt TEXT NOT NULL DEFAULT '';
 COMMENT ON COLUMN domains.ai_agent.filter_prompt IS '回复判定条件(自然语言,如"只回复编程相关问题";空=不判定直接回复;仅trigger_mode=2关键词触发生效,见docs/agent-reply-filter-design.md)';
-COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功, 2=分类器跳过';
+COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功, 2=分类器跳过, 3=分类器超时降级直回(运维事件,不参与限频统计)';
 ```

@@ -409,8 +409,8 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		}
 	}
 
-	// @提及 通知（仅非草稿；best-effort 不阻断发帖）
-	if postStatus != domain.PostStatusDraft && len(input.MentionUserIDs) > 0 {
+	// @提及 通知（仅已发布；草稿/审核中帖子不应对外产生通知。best-effort 不阻断发帖）
+	if postStatus == domain.PostStatusPublished && len(input.MentionUserIDs) > 0 {
 		if mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs); len(mentionIDs) > 0 && s.publisher != nil {
 			if err := s.publisher.PublishMentionNotice(ctx, userID, post.ID, mentionIDs, title); err != nil {
 				logger.Log.Error("Failed to publish post mention notice: " + err.Error())

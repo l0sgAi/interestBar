@@ -41,8 +41,16 @@ type NotificationEventAggregator struct {
 	events   []NotificationEventMessage
 	ticker   *time.Ticker
 	stopChan chan struct{}
+	done     chan struct{} // run() 退出（末次 flush 完成）后关闭
 	stopped  bool
+	cancel   context.CancelFunc // 停掉 reader 的 ReadMessage 阻塞
 }
+
+// 全局句柄：StartNotificationEventConsumer 注册，供关停流程排干缓冲事件。
+var (
+	notificationConsumerMu sync.Mutex
+	notificationAggregator *NotificationEventAggregator
+)
 
 // StartNotificationEventConsumer 启动通知事件消费者。
 func StartNotificationEventConsumer() error {
@@ -71,30 +79,48 @@ func StartNotificationEventConsumer() error {
 	if flushInterval <= 0 {
 		flushInterval = 5 // 兜底 5 秒
 	}
+	// reader 用可取消 ctx：关停时 cancel 解除 ReadMessage 阻塞，
+	// 聚合器随后 close(stopChan) 触发最后一次 flush 排干缓冲。
+	readerCtx, readerCancel := context.WithCancel(context.Background())
 	aggregator := &NotificationEventAggregator{
 		events:   make([]NotificationEventMessage, 0, 256),
 		ticker:   time.NewTicker(time.Duration(flushInterval) * time.Second),
 		stopChan: make(chan struct{}),
+		done:     make(chan struct{}),
+		cancel:   readerCancel,
 	}
+
+	notificationConsumerMu.Lock()
+	notificationAggregator = aggregator
+	notificationConsumerMu.Unlock()
 
 	go aggregator.run()
 
 	go func() {
 		defer r.Close()
 		for {
-			msg, err := r.ReadMessage(context.Background())
+			msg, err := r.ReadMessage(readerCtx)
 			if err != nil {
+				if readerCtx.Err() != nil {
+					return // 关停：cancel 已触发，退出读循环
+				}
 				errStr := err.Error()
 				if containsIgnoreCase(errStr, "no data") ||
 					containsIgnoreCase(errStr, "multiple Read calls return no data") ||
 					containsIgnoreCase(errStr, "context deadline exceeded") ||
 					containsIgnoreCase(errStr, "timeout") {
+					// 队列无数据是常态，短退避后立即恢复轮询（长睡眠会
+					// 让通知延迟积压，且阻塞关停——已改为可取消 ctx 双保险）。
 					logger.Log.Debug("No messages in notification event queue, waiting...")
-					time.Sleep(30 * time.Minute)
+					if !sleepOrDone(readerCtx, 5*time.Second) {
+						return
+					}
 					continue
 				}
 				logger.Log.Error("Failed to read notification event message: " + errStr)
-				time.Sleep(5 * time.Second)
+				if !sleepOrDone(readerCtx, 5*time.Second) {
+					return
+				}
 				continue
 			}
 
@@ -111,6 +137,16 @@ func StartNotificationEventConsumer() error {
 	return nil
 }
 
+// sleepOrDone 睡眠 d 或 ctx 取消即醒。返回 false 表示应停止循环。
+func sleepOrDone(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-time.After(d):
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 func (a *NotificationEventAggregator) addMessage(msg NotificationEventMessage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -121,6 +157,7 @@ func (a *NotificationEventAggregator) addMessage(msg NotificationEventMessage) {
 }
 
 func (a *NotificationEventAggregator) run() {
+	defer close(a.done)
 	for {
 		select {
 		case <-a.ticker.C:
@@ -133,7 +170,9 @@ func (a *NotificationEventAggregator) run() {
 	}
 }
 
-// StopNotificationEventConsumer 优雅排干（幂等）。在关停流程中调用。
+// StopNotificationEventConsumer 优雅排干（幂等）。先 cancel reader 停止拉取，
+// 再 close stopChan 触发最后一次 flush，并等待其完成（缓冲事件落库）后返回。
+// 在关停流程中调用。
 func (a *NotificationEventAggregator) StopNotificationEventConsumer() {
 	a.mu.Lock()
 	if a.stopped {
@@ -142,7 +181,24 @@ func (a *NotificationEventAggregator) StopNotificationEventConsumer() {
 	}
 	a.stopped = true
 	a.mu.Unlock()
+	if a.cancel != nil {
+		a.cancel()
+	}
 	close(a.stopChan)
+	<-a.done // 等末次 flush 完成，确保缓冲事件真正排干
+}
+
+// StopNotificationEventConsumerGlobal 停止全局通知事件消费者（幂等）。
+// 在 server 关停序列中调用，确保 flush 窗口内缓冲的事件排干落库。
+// 未启动（producer 初始化失败未走 Start）时为空操作。
+func StopNotificationEventConsumerGlobal() {
+	notificationConsumerMu.Lock()
+	a := notificationAggregator
+	notificationConsumerMu.Unlock()
+	if a == nil {
+		return
+	}
+	a.StopNotificationEventConsumer()
 }
 
 func (a *NotificationEventAggregator) flush() {
