@@ -30,6 +30,9 @@ import (
 	likeapp "interestBar/pkg/domains/like/application"
 	likeinfra "interestBar/pkg/domains/like/infrastructure"
 	likehttp "interestBar/pkg/domains/like/interfaces/http"
+	noticeapp "interestBar/pkg/domains/notice/application"
+	noticeinfra "interestBar/pkg/domains/notice/infrastructure"
+	noticehttp "interestBar/pkg/domains/notice/interfaces/http"
 	postapp "interestBar/pkg/domains/post/application"
 	postinfra "interestBar/pkg/domains/post/infrastructure"
 	posthttp "interestBar/pkg/domains/post/interfaces/http"
@@ -71,6 +74,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	likeSvc := newLikeService(deps)
 	collectSvc := newCollectService(deps)
 	historySvc := newHistoryService(deps)
+	noticeSvc := newNoticeService(deps)
 
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
@@ -99,6 +103,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	// history 需要 post 组装端口（「最近浏览」列表 ES 查询）;post 需要 history 记录器（详情页 async 回调）
 	historySvc.SetPostFetcher(&historyPostFetcher{delegate: postSvc})
 	postSvc.SetHistoryRecorder(&postHistoryRecorder{delegate: historySvc})
+
+	// notice 需要 user Facade（通知列表 actor 批量组装）
+	noticeSvc.SetUserFacade(&noticeUserFacade{delegate: userFacade})
 
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
@@ -139,6 +146,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerLike(root, likeSvc, authCheck)
 	registerCollect(root, collectSvc, authCheck)
 	registerHistory(root, historySvc, authCheck)
+	registerNotice(root, noticeSvc, authCheck)
 	registerRecommend(root, recommendSvc, authCheck, OptionalLoginFn)
 	registerTrending(root, trendingSvc, authCheck, OptionalLoginFn)
 	registerDiscover(root, discoverSvc, authCheck)
@@ -208,6 +216,20 @@ func registerCollect(root routing.RouterGroup, svc collectapp.CollectService, au
 // registerHistory 装配 history 领域。
 func registerHistory(root routing.RouterGroup, svc historyapp.HistoryService, authCheck routing.HandlerFunc) {
 	historyhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerNotice 装配 notice 领域。
+func registerNotice(root routing.RouterGroup, svc noticeapp.NoticeService, authCheck routing.HandlerFunc) {
+	noticehttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// newNoticeService 构造 NoticeService。
+//
+// user 跨领域依赖（actor 批量组装）通过 setter 注入（见 RegisterDomainRoutes）。
+func newNoticeService(deps *Deps) noticeapp.NoticeService {
+	repo := noticeinfra.NewNotificationRepository(deps.DB.Get())
+	cache := noticeinfra.NewNoticeUnreadCache()
+	return noticeapp.NewNoticeService(repo, cache)
 }
 
 // newRecommendService 构造 RecommendService。

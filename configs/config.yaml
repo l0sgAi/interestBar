@@ -119,6 +119,13 @@ redpanda:
   post_interaction_consumer_group: "post_interaction_consumer_group" # 帖子互动消费者组
   post_interaction_flush_interval: 2 # 帖子互动刷新间隔(分钟)
   post_interaction_flush_messages: 1000 # 帖子互动批量刷新条数阈值
+  notice_event_topic: "notification_events" # 通知事件topic（消息中心）
+  notice_event_consumer_group: "notification_events_consumer_group" # 通知事件消费者组
+  notice_event_flush_interval: 5 # 通知落库间隔(秒)
+
+# 消息中心配置（设计见 docs/notice-design.md）
+notice:
+  mention_max: 10 # 单条内容 @ 提及用户上限(<=0 兜底 10)
 
 # 热度计算配置（权重 + 上限）
 hot:

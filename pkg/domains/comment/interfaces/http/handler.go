@@ -26,11 +26,12 @@ func NewHandler(svc application.CommentService) *Handler {
 
 // CreateCommentRequest 发评论/回复的请求结构。
 type CreateCommentRequest struct {
-	PostID    uuid.UUID       `json:"post_id" binding:"required"`
-	Content   string          `json:"content" binding:"required,min=1,max=10000"`
-	ExtraData json.RawMessage `json:"extra_data" binding:"omitempty"`
-	RootID    *uuid.UUID      `json:"root_id" binding:"omitempty"`
-	ReplyToID *uuid.UUID      `json:"reply_to_id" binding:"omitempty"`
+	PostID         uuid.UUID       `json:"post_id" binding:"required"`
+	Content        string          `json:"content" binding:"required,min=1,max=10000"`
+	ExtraData      json.RawMessage `json:"extra_data" binding:"omitempty"`
+	RootID         *uuid.UUID      `json:"root_id" binding:"omitempty"`
+	ReplyToID      *uuid.UUID      `json:"reply_to_id" binding:"omitempty"`
+	MentionUserIDs []string        `json:"mention_user_ids" binding:"omitempty,max=50"` // @提及用户ID(uuid 字符串)
 }
 
 // CreateComment POST /comment/create
@@ -46,12 +47,18 @@ func (h *Handler) CreateComment(c appctx.AppContext) {
 		return
 	}
 
+	mentionIDs, ok := parseMentionUserIDs(c, req.MentionUserIDs)
+	if !ok {
+		return
+	}
+
 	commentID, err := h.svc.CreateComment(c, userID, application.CreateCommentInput{
-		PostID:    req.PostID,
-		Content:   req.Content,
-		ExtraData: req.ExtraData,
-		RootID:    req.RootID,
-		ReplyToID: req.ReplyToID,
+		PostID:         req.PostID,
+		Content:        req.Content,
+		ExtraData:      req.ExtraData,
+		RootID:         req.RootID,
+		ReplyToID:      req.ReplyToID,
+		MentionUserIDs: mentionIDs,
 	})
 	if err != nil {
 		writeCommentError(c, err)
@@ -165,6 +172,23 @@ func (h *Handler) GetCommentDetail(c appctx.AppContext) {
 }
 
 // ===== 辅助函数 =====
+
+// parseMentionUserIDs 解析 @提及 用户 ID 列表；任一非法写 400 并返回 ok=false。
+func parseMentionUserIDs(c appctx.AppContext, raw []string) ([]uuid.UUID, bool) {
+	if len(raw) == 0 {
+		return nil, true
+	}
+	ids := make([]uuid.UUID, 0, len(raw))
+	for _, s := range raw {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			httputil.BadRequest(c, "Invalid mention user id: "+s)
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
 
 // requireUserID 要求登录并返回 userID。未登录返回 false（已写 401）。
 func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {

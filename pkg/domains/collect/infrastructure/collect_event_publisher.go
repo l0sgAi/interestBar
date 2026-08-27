@@ -41,6 +41,14 @@ func (p *collectEventPublisherRedpanda) PublishPostCollect(ctx context.Context, 
 		if err := redpanda.PublishPostInteraction(userID, postID, redpanda.InteractionCollect, redpanda.InteractionWeightCollect); err != nil {
 			logger.Log.Error("Failed to publish post_collect interaction: " + err.Error())
 		}
+		// 通知：帖子被收藏 → 帖子作者（接收人由 consumer 反查）。负向不通知不回收。
+		if err := redpanda.PublishNotificationEvent(redpanda.NotificationEventMessage{
+			Type:    redpanda.NoticeTypeCollectPost,
+			ActorID: userID,
+			PostID:  &postID,
+		}); err != nil {
+			logger.Log.Error("Failed to publish post_collect notification: " + err.Error())
+		}
 	}
 	return nil
 }

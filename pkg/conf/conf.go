@@ -28,6 +28,7 @@ type AppConfig struct {
 	AiAgent       AiAgent       `mapstructure:"aiagent" json:"aiagent" yaml:"aiagent"`
 	Trending      Trending      `mapstructure:"trending" json:"trending" yaml:"trending"`
 	Discover      Discover      `mapstructure:"discover" json:"discover" yaml:"discover"`
+	Notice        Notice        `mapstructure:"notice" json:"notice" yaml:"notice"`
 	Mailtrap      Mailtrap      `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
 	Security      Security      `mapstructure:"security" json:"security" yaml:"security"`
 }
@@ -165,6 +166,15 @@ type Redpanda struct {
 	PostInteractionConsumerGroup string `mapstructure:"post_interaction_consumer_group" json:"post_interaction_consumer_group" yaml:"post_interaction_consumer_group"` // 帖子互动事件消费者组
 	PostInteractionFlushInterval int    `mapstructure:"post_interaction_flush_interval" json:"post_interaction_flush_interval" yaml:"post_interaction_flush_interval"` // 帖子互动刷新间隔(分钟)
 	PostInteractionFlushMessages int    `mapstructure:"post_interaction_flush_messages" json:"post_interaction_flush_messages" yaml:"post_interaction_flush_messages"` // 帖子互动批量刷新条数阈值
+
+	NoticeEventTopic         string `mapstructure:"notice_event_topic" json:"notice_event_topic" yaml:"notice_event_topic"`                            // 通知事件 topic
+	NoticeEventConsumerGroup string `mapstructure:"notice_event_consumer_group" json:"notice_event_consumer_group" yaml:"notice_event_consumer_group"` // 通知事件消费者组
+	NoticeEventFlushInterval int    `mapstructure:"notice_event_flush_interval" json:"notice_event_flush_interval" yaml:"notice_event_flush_interval"` // 通知落库间隔(秒)
+}
+
+// Notice 消息中心配置。设计见 docs/notice-design.md。
+type Notice struct {
+	MentionMax int `mapstructure:"mention_max" json:"mention_max" yaml:"mention_max"` // 单条内容 @ 提及用户上限(<=0 兜底 10)
 }
 
 // Hot 热度计算配置（权重 + 上限）。

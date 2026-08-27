@@ -71,6 +71,9 @@ type PostCollectCache interface {
 type PostEventPublisher interface {
 	// PublishViewCount 发布浏览量变化事件。
 	PublishViewCount(ctx context.Context, postID uuid.UUID) error
+	// PublishMentionNotice 发布 @提及 通知事件（消息中心）。
+	// mentionUserIDs 由调用方校验（存在性/去自/截断）后传入；snippet 为帖子标题。
+	PublishMentionNotice(ctx context.Context, actorID, postID uuid.UUID, mentionUserIDs []uuid.UUID, snippet string) error
 }
 
 // PostStatistics 帖子统计信息。

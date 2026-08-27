@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"interestBar/pkg/conf"
 	"interestBar/pkg/domains/comment/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/utils"
@@ -107,11 +108,12 @@ type CommentListResult struct {
 
 // CreateCommentInput 发评论/回复入参。
 type CreateCommentInput struct {
-	PostID    uuid.UUID
-	Content   string
-	ExtraData []byte // json.RawMessage
-	RootID    *uuid.UUID
-	ReplyToID *uuid.UUID
+	PostID         uuid.UUID
+	Content        string
+	ExtraData      []byte // json.RawMessage
+	RootID         *uuid.UUID
+	ReplyToID      *uuid.UUID
+	MentionUserIDs []uuid.UUID // @提及用户（前端选人传入；后端校验存在性/去自/截断）
 }
 
 // ===== Service 接口 =====
@@ -282,6 +284,8 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 		if err := s.publisher.PublishCommentInteraction(ctx, userID, input.PostID); err != nil {
 			logger.Log.Error("Failed to publish comment interaction: " + err.Error())
 		}
+		// 消息中心通知（评论/回复 + @提及，best-effort）
+		s.publishCommentNotifications(ctx, userID, input.PostID, comment.ID, input.RootID == nil, replyToUserID != nil, input.MentionUserIDs, content)
 	}
 
 	// 7. AI 机器人回复触发（同步回调、实现方立即返回；机器人自身评论由实现方防回环）。
@@ -577,4 +581,89 @@ func (s *commentServiceImpl) checkLiked(ctx context.Context, userID, commentID u
 		return isLiked
 	}
 	return false
+}
+
+// ===== 消息中心通知辅助 =====
+
+// noticeSnippetMaxRunes 通知快照上限（与 notification.snippet VARCHAR(200) 对齐留余量）。
+const noticeSnippetMaxRunes = 100
+
+// publishCommentNotifications 发布评论相关的消息中心通知（best-effort，不阻断主流程）。
+//
+// 顶层评论 → comment_post（接收人=帖子作者）；回复 → reply_comment（接收人=被回复评论作者）；
+// @提及 → mention（接收人=被提及用户，先校验）。接收人除 mention 外均由 consumer 反查解析。
+func (s *commentServiceImpl) publishCommentNotifications(ctx context.Context, userID, postID, commentID uuid.UUID, isTopLevel, isReply bool, mentionUserIDs []uuid.UUID, content string) {
+	snippet := truncateRunes(content, noticeSnippetMaxRunes)
+
+	switch {
+	case isTopLevel:
+		if err := s.publisher.PublishCommentNotice(ctx, userID, postID, commentID, false, snippet); err != nil {
+			logger.Log.Error("Failed to publish comment_post notification: " + err.Error())
+		}
+	case isReply:
+		if err := s.publisher.PublishCommentNotice(ctx, userID, postID, commentID, true, snippet); err != nil {
+			logger.Log.Error("Failed to publish reply_comment notification: " + err.Error())
+		}
+	}
+
+	if mentionIDs := s.filterMentionUserIDs(ctx, userID, mentionUserIDs); len(mentionIDs) > 0 {
+		if err := s.publisher.PublishMentionNotice(ctx, userID, &postID, &commentID, mentionIDs, snippet); err != nil {
+			logger.Log.Error("Failed to publish mention notification: " + err.Error())
+		}
+	}
+}
+
+// filterMentionUserIDs 校验 @提及用户列表：去重 → 去自己 → 存在性（UserFacade）→ 截断上限。
+// 校验失败（如 user 服务不可用）降级为不发 mention 通知，不影响评论主流程。
+func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid.UUID, mentionUserIDs []uuid.UUID) []uuid.UUID {
+	if len(mentionUserIDs) == 0 || s.userFacade == nil {
+		return nil
+	}
+
+	seen := make(map[uuid.UUID]struct{}, len(mentionUserIDs))
+	candidates := make([]string, 0, len(mentionUserIDs))
+	for _, id := range mentionUserIDs {
+		if id == uuid.Nil || id == actorID {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		candidates = append(candidates, id.String())
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	briefs, err := s.userFacade.GetBriefs(ctx, candidates)
+	if err != nil {
+		logger.Log.Error("Failed to validate mention user ids: " + err.Error())
+		return nil
+	}
+
+	max := conf.Config.Notice.MentionMax
+	if max <= 0 {
+		max = 10
+	}
+	valid := make([]uuid.UUID, 0, len(briefs))
+	for _, id := range mentionUserIDs {
+		if _, ok := briefs[id.String()]; !ok {
+			continue // 不存在的用户静默过滤
+		}
+		valid = append(valid, id)
+		if len(valid) >= max {
+			break
+		}
+	}
+	return valid
+}
+
+// truncateRunes 按 rune 截断字符串。
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) > max {
+		return string(r[:max])
+	}
+	return s
 }
