@@ -1,0 +1,194 @@
+# 消息中心（站内通知）前端对接文档
+
+> 面向前端同学。后端实现见 `docs/notice-design.md`。
+> 本文只讲前端需要对接的部分：**4 个通知接口** + **2 个 @提及 入参**。
+> 通知的「产生」全自动（点赞/收藏/评论/回复/@ 都会触发），前端无需调用任何"发送通知"接口。
+
+## 一、总览
+
+| 能力 | 接口 | 说明 |
+|---|---|---|
+| 通知列表 | `GET /notice/list` | keyset 游标分页，最新在前 |
+| 未读数 | `GET /notice/unread-count` | 红点/角标数字 |
+| 批量已读 | `POST /notice/read` | 点击进入详情等场景 |
+| 全部已读 | `POST /notice/read-all` | 「全部已读」按钮 |
+| @提及（发帖） | `POST /post/create` 加 `mention_user_ids` | 复用现有发帖接口 |
+| @提及（评论/回复） | `POST /comment/create` 加 `mention_user_ids` | 复用现有评论接口 |
+
+- 全部通知接口**需要登录**（与现有接口同一套 token 鉴权）。
+- 统一响应信封：`{code, message, data}`，下文只描述 `data` 部分。
+- 通知落库有 **约 5 秒延迟**（后端批量聚合刷写），用户操作后不会立刻出现在列表里，属预期行为。
+
+## 二、通知类型枚举
+
+`notice_type` 为 int，列表接口可用它过滤，渲染时用它决定文案模板：
+
+| 值 | 类型 | 建议文案模板 | 必然携带的跳转字段 |
+|---|---|---|---|
+| 1 | 帖子被赞 | 「{actor} 赞了你的帖子《{snippet}》」 | `post_id` |
+| 2 | 评论被赞 | 「{actor} 赞了你的评论「{snippet}」」 | `post_id` + `comment_id` |
+| 3 | 帖子被收藏 | 「{actor} 收藏了你的帖子《{snippet}》」 | `post_id` |
+| 4 | 帖子被评论 | 「{actor} 评论了你的帖子：{snippet}」 | `post_id` + `comment_id` |
+| 5 | 评论被回复 | 「{actor} 回复了你的评论：{snippet}」 | `post_id` + `comment_id` |
+| 6 | @提及 | 「{actor} 在帖子/评论中提到了你：{snippet}」 | `post_id`，可能带 `comment_id` |
+
+字段语义：
+- `snippet`：摘要快照，≤100 字符。like/collect 类为**帖子标题**；comment/reply/mention 类为**评论正文截取**。直接渲染即可，无需再请求详情。
+- `post_id` 一定有值（6 类通知都挂在帖子下），`comment_id` 见上表。
+- 跳转规则建议：有 `comment_id` → 跳帖子详情并定位该评论；只有 `post_id` → 跳帖子详情。type=6 且只有 `post_id` → 跳帖子详情（提及发生在帖子里）。
+
+## 三、接口详情
+
+### 3.1 通知列表 `GET /notice/list`
+
+Query 参数：
+
+| 参数 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `type` | int | 否 | 0=全部（默认），1-6 按类型过滤。传其它值返回 400 |
+| `size` | int | 否 | 每页条数，≤0 或 >100 按 20 处理 |
+| `cursor` | string | 否 | 上一页返回的游标，首页不传 |
+
+请求示例：
+
+```
+GET /notice/list?type=0&size=20
+GET /notice/list?type=1&size=20&cursor=eyJpZCI6IjAxOT...In0=
+```
+
+响应 `data`：
+
+```json
+{
+  "notices": [
+    {
+      "id": "0192f8c1-...",
+      "notice_type": 1,
+      "actor": {
+        "id": "0192a...",
+        "username": "小明",
+        "avatar_url": "https://..."
+      },
+      "post_id": "0192b...",
+      "comment_id": "0192c...",
+      "snippet": "帖子标题或评论正文截取",
+      "is_read": false,
+      "create_time": "2026-08-27T10:00:00+08:00"
+    }
+  ],
+  "size": 20,
+  "cursor": "eyJpZCI6IjAxOT...In0="
+}
+```
+
+字段说明：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `notices[].id` | string | 通知 ID（uuid），已读操作和分页锚点都用它 |
+| `notices[].actor` | object | 触发人。**可能缺省**（omitempty，用户已注销等降级场景），渲染时兜底为"有人" |
+| `notices[].post_id` / `comment_id` | string | omitempty，无值时不出现 |
+| `notices[].is_read` | bool | 未读建议高亮样式 |
+| `size` | int | 本页实际条数 |
+| `cursor` | string | **空字符串 = 没有更多**；非空则原样带入下一页请求，**不要自行解析/拼接** |
+
+分页方式（加载更多 / 无限滚动）：
+
+```text
+第一页: GET /notice/list?size=20
+后续页: GET /notice/list?size=20&cursor=<上一页响应的 cursor>
+结束:   响应 cursor === ""
+```
+
+注意：游标分页不支持"跳页"，只能顺序向后翻。切换 `type` 过滤时必须重置 cursor 为空重新拉。
+
+### 3.2 未读数 `GET /notice/unread-count`
+
+无参数。响应 `data`：
+
+```json
+{ "unread_count": 7 }
+```
+
+使用建议：
+- 进入 App/页面聚焦时拉一次，驱动 Tab 红点或角标。
+- 轮询间隔建议 ≥30s，或配合 WebSocket/推送（P1 才做，当前只能轮询/被动刷新）。
+- 未读数是软实时：用户在他端操作后，本端需重新拉取才会同步。
+
+### 3.3 批量已读 `POST /notice/read`
+
+请求体：
+
+```json
+{ "ids": ["0192f8c1-...", "0192f8c2-..."] }
+```
+
+- `ids`：1-100 个通知 ID（uuid 字符串），任一非法返回 400。
+- 只会把**当前用户自己**的通知标记为已读；重复已读、已删除的 ID 静默跳过（幂等，可安全重试）。
+- 响应 `data` 为 `null`，以 `code` 判成功。
+
+典型场景：用户点击某条未读通知跳详情时，顺手把这一条标已读；列表「本页全读」可批量传。
+
+### 3.4 全部已读 `POST /notice/read-all`
+
+无请求体。响应 `data` 为 `null`。把当前用户所有未读标为已读，未读数归零。
+
+已读操作后建议**本地同步更新**未读角标（read 按条数减、read-all 清零），并刷新列表项 `is_read` 样式；也可直接重拉 `/notice/unread-count`。
+
+## 四、@提及 对接
+
+提及不产生新接口，是在**发帖**和**发评论**两个既有接口上各加一个可选字段：
+
+| 接口 | 新字段 | 类型 | 说明 |
+|---|---|---|---|
+| `POST /post/create` | `mention_user_ids` | `string[]` | 被 @ 用户的 uuid 列表，最多 50 个 |
+| `POST /comment/create` | `mention_user_ids` | `string[]` | 同上（顶层评论和回复都支持） |
+
+请求示例（评论）：
+
+```json
+{
+  "post_id": "0192b...",
+  "content": "@小明 说得好",
+  "mention_user_ids": ["0192a1b2-..."]
+}
+```
+
+规则与注意：
+
+1. **前端选人，传 uuid**：@ 弹窗选择用户后，把选中用户的 **user id（uuid 字符串）**放进数组。正文里的 `@用户名` 只是展示文本，后端不解析正文。
+2. **数量上限**：单条最多生效 **10 人**，超出部分后端静默截断（接口字段允许传 50，实际生效 10）。建议前端在选人 UI 上就限制 10 人并给出提示。
+3. **后端静默过滤**：重复 ID、@自己、不存在的用户都会被静默剔除，**不会报错**；只有"不是合法 uuid"才会 400（`Invalid mention user id: xxx`）。
+4. **可传可不传**：不传或空数组 = 无提及，行为与旧版完全一致。
+5. 草稿（`status` 为草稿）不发提及通知；帖子正式发布才发。
+6. 同一用户对同一评论既被回复又被 @ 时，只收到 **@提及** 一条通知，不会收到两条。
+
+## 五、行为规则（前端需知的产品逻辑）
+
+1. **取消不回收**：A 赞了又取消，已产生的通知不会消失。
+2. **重复动作复用**：A 多次赞同一帖子（赞→取消→再赞），作者只有**一条**通知，但会重新变成未读；通知在列表中的**位置不变**（不顶到最前）。
+3. **自动作不通知**：自己赞/评/收藏自己的内容、@自己，都不会产生通知。
+4. **延迟**：动作 → 通知可见约 5s（批量落库窗口）。未读角标同理。
+5. **机器人账号**：机器人（AI 回复）触发的通知与真人一致；被 @ 的若是机器人，通知也会正常落库（前端无感知）。
+6. **不存在的目标**：动作发生后帖子/评论被删除，该条通知可能被丢弃（不产生），已产生的历史通知仍保留（`snippet` 快照可读，跳转目标可能 404，前端跳详情需处理目标不存在的情况）。
+
+## 六、错误码速查
+
+| 场景 | HTTP | message 示例 |
+|---|---|---|
+| 未登录 | 401 | `Token not found` |
+| `type` 超出 0-6 | 400 | `invalid notice type` |
+| `cursor` 非法 | 400 | `Invalid cursor` |
+| `ids` 为空或 >100 | 400 | `Invalid request parameters` |
+| `ids` 含非法 uuid | 400 | `Invalid notice id: xxx` |
+| `mention_user_ids` 含非法 uuid | 400 | `Invalid mention user id: xxx` |
+
+## 七、联调清单
+
+- [ ] 列表页：类型 Tab（全部/赞/收藏/评论/提及 可自行组合 type 过滤）+ 无限滚动（cursor 空即止）
+- [ ] 未读样式 + 点击标读（`/notice/read`）
+- [ ] 角标：进入消息页拉 `/notice/unread-count`，read/read-all 后本地校正
+- [ ] 「全部已读」按钮（`/notice/read-all`）
+- [ ] 发帖/评论编辑器 @ 组件：选人传 uuid，上限 10 人
+- [ ] 通知跳转：有 `comment_id` 定位评论，无则进帖子详情；处理目标已删 404
+- [ ] actor 缺省兜底文案
