@@ -51,4 +51,11 @@ type CommentEventPublisher interface {
 	// PublishCommentInteraction 发布评论者对帖子的 CF 互动（weight=comment）。
 	// 由 CreateComment 调用（有 userID + postID；PublishCommentHot 不带 userID 故单独方法）。
 	PublishCommentInteraction(ctx context.Context, userID, postID uuid.UUID) error
+	// PublishCommentNotice 发布评论通知事件（消息中心）。
+	// isReply=false → comment_post（接收人=帖子作者）；isReply=true → reply_comment
+	// （接收人=被回复评论作者）。接收人均由 consumer 反查解析。
+	PublishCommentNotice(ctx context.Context, userID, postID, commentID uuid.UUID, isReply bool, snippet string) error
+	// PublishMentionNotice 发布 @提及 通知事件（消息中心）。
+	// mentionUserIDs 由调用方校验（存在性/去自/截断）后传入；commentID 可空（帖子提及）。
+	PublishMentionNotice(ctx context.Context, actorID uuid.UUID, postID, commentID *uuid.UUID, mentionUserIDs []uuid.UUID, snippet string) error
 }

@@ -102,3 +102,30 @@ type HistoryEventMessage struct {
 	UserID uuid.UUID `json:"user_id"`
 	PostID uuid.UUID `json:"post_id"` // 被浏览的帖子ID
 }
+
+// ==================== 通知事件（消息中心） ====================
+
+// 通知事件类型（与 domains.notification.notice_type 一一对应）。
+const (
+	NoticeTypeLikePost     = "like_post"     // 帖子被赞 → 帖子作者
+	NoticeTypeLikeComment  = "like_comment"  // 评论被赞 → 评论作者
+	NoticeTypeCollectPost  = "collect_post"  // 帖子被收藏 → 帖子作者
+	NoticeTypeCommentPost  = "comment_post"  // 帖子被评论(顶层) → 帖子作者
+	NoticeTypeReplyComment = "reply_comment" // 评论被回复 → 被回复评论作者
+	NoticeTypeMention      = "mention"       // @提及 → 被提及用户
+)
+
+// NotificationEventMessage 通知事件消息（topic: notification_events）。
+//
+// 仅正向动作发布（取消赞/收藏不通知也不回收，触发端直接不发）。
+// 接收人不在事件里：consumer 按类型批量反查 post/comment 表解析（mention 例外，
+// 接收人由触发端校验后自带 MentionUserIDs）。
+type NotificationEventMessage struct {
+	Type           string      `json:"type"` // NoticeType* 常量
+	ActorID        uuid.UUID   `json:"actor_id"`
+	PostID         *uuid.UUID  `json:"post_id,omitempty"`          // 跳转用；like_post/collect_post/comment_post/mention(post) 必填
+	CommentID      *uuid.UUID  `json:"comment_id,omitempty"`       // like_comment/comment_post/reply_comment/mention(comment) 必填
+	MentionUserIDs []uuid.UUID `json:"mention_user_ids,omitempty"` // type=mention 专用（触发端已校验+截断）
+	Snippet        string      `json:"snippet,omitempty"`          // comment 类：正文快照（已 SanitizeForPg）；like/collect 由 consumer 反查帖子标题
+	Ts             int64       `json:"ts"`                         // 事件时间 Unix 毫秒
+}

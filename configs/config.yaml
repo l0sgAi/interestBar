@@ -119,6 +119,13 @@ redpanda:
   post_interaction_consumer_group: "post_interaction_consumer_group" # 帖子互动消费者组
   post_interaction_flush_interval: 2 # 帖子互动刷新间隔(分钟)
   post_interaction_flush_messages: 1000 # 帖子互动批量刷新条数阈值
+  notice_event_topic: "notification_events" # 通知事件topic（消息中心）
+  notice_event_consumer_group: "notification_events_consumer_group" # 通知事件消费者组
+  notice_event_flush_interval: 5 # 通知落库间隔(秒)
+
+# 消息中心配置（设计见 docs/notice-design.md）
+notice:
+  mention_max: 10 # 单条内容 @ 提及用户上限(<=0 兜底 10)
 
 # 热度计算配置（权重 + 上限）
 hot:
@@ -175,6 +182,12 @@ discover:
   max_size: 50                     # 接口 size 上限
   seed_limit: 500                  # 反气泡读取已交互帖上限(liked/collected/viewed 各)
 
+# AI 机器人回复执行链路（<=0 时用代码内默认值）
+aiagent:
+  timeout_sec: 30          # LLM 单次调用超时(秒)，默认 30
+  max_content_chars: 4000  # Prompt 各段(title/summary/评论)截断长度，默认 4000
+  reply_concurrency: 3     # 关键词触发异步执行并发上限，默认 3
+
 # 安全相关配置
 security:
   # 密码哈希参数 (Argon2id, OWASP 2024 推荐 RFC 9106)
@@ -186,4 +199,8 @@ security:
     threads: 4         # 并行度 (1-4)，默认 4
     key_len: 32        # 输出哈希长度（字节），默认 32
     salt_len: 16       # 随机 salt 长度（字节），默认 16
+
+  # 敏感字段应用层加密密钥（AES-256-GCM，任意长度字符串经 SHA-256 派生）
+  # 用于 ai_agent.api_key 入库前加密。生产环境必须配置且妥善保管。
+  data_key: "TEST_DATA_KEY_1234567890" # 生产环境请替换为随机安全密钥，并妥善保管
 

@@ -13,8 +13,8 @@
 |---|---|---|
 | 帖子统计 Hash | `post:stats:{postID}`（[redis/constants.go](../pkg/server/storage/redis/constants.go)） | view/comment/like/collect 四计数，Lua 原子切换 |
 | 圈子统计 Hash | `circle:stats:{circleID}` | member_count/post_count/**hot**，hot 字段已存在但**从未被递增** |
-| 圈子 DB hot 列 | `domains.circle.hot`（[db.md:172](db.md#L172)） | 存在 |
-| 帖子 DB hot 列 | `domains.post.hot`（[db.md:305](db.md#L305)） | 存在 |
+| 圈子 DB hot 列 | `domains.circle.hot`（[pgsql-ddl/circle.md](../pgsql-ddl/circle.md)） | 存在 |
+| 帖子 DB hot 列 | `domains.post.hot`（[pgsql-ddl/post.md](../pgsql-ddl/post.md)） | 存在 |
 | 帖子 ES hot 字段 + 排序公式 | [elasticsearch/post.go:570](../pkg/server/storage/elasticsearch/post.go#L570) | sortType=1 已实现 `rank_score = hot / (age_hours + 2)^0.8` runtime script |
 | MQ 聚合消费框架 | [redpanda/consumer.go](../pkg/server/storage/redpanda/consumer.go) | StatisticsAggregator / PostStatisticsAggregator，map 累加 + ticker flush + `jsonb_to_recordset` 批量 UPDATE |
 | 事件 publisher | like/collect/comment/post 各域 | Toggle 后已发 ±1 增量事件 |

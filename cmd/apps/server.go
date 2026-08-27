@@ -121,6 +121,15 @@ func Run(configPath, bootstrapPath string) {
 		logger.Log.Info("Collect Lua scripts loaded successfully")
 	}
 
+	// 8.12 Init Notification event Redpanda producer（消息中心：点赞/收藏/评论/@提及 通知）
+	if err := redpanda.InitNotificationEventProducer(); err != nil {
+		logger.Log.Error("Failed to initialize notification event producer: " + err.Error())
+		logger.Log.Warn("Notification persistence to database is disabled.")
+	} else {
+		logger.Log.Info("Notification event producer initialized successfully")
+		go redpanda.StartNotificationEventConsumerWithRetry()
+	}
+
 	// 8.9 Init View Lua scripts in Redis
 	if err := redis.InitViewLuaScripts(); err != nil {
 		logger.Log.Error("Failed to load view Lua scripts: " + err.Error())
@@ -195,6 +204,9 @@ func Run(configPath, bootstrapPath string) {
 
 	// 收到信号后 Spin 返回，执行资源清理。
 	logger.Log.Info("Shutdown Server ...")
+	// 先停通知消费者：排干 flush 窗口内缓冲事件（落库 + 未读计数依赖 DB/Redis，
+	// 必须先于 CloseRedis 执行）。
+	redpanda.StopNotificationEventConsumerGlobal()
 	redis.CloseRedis()
 	auth.CloseSaToken()
 	redpanda.CloseRedpandaProducer()
@@ -204,6 +216,7 @@ func Run(configPath, bootstrapPath string) {
 	redpanda.CloseHistoryEventProducer()
 	redpanda.ClosePostHotProducer()
 	redpanda.ClosePostInteractionProducer()
+	redpanda.CloseNotificationEventProducer()
 	redpanda.StopCircleHotSyncer()
 	redpanda.StopItemCFSyncer()
 	redpanda.StopTrendingSyncer()

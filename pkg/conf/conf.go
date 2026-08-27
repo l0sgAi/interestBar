@@ -25,8 +25,10 @@ type AppConfig struct {
 	Redpanda      Redpanda      `mapstructure:"redpanda" json:"redpanda" yaml:"redpanda"`
 	Hot           Hot           `mapstructure:"hot" json:"hot" yaml:"hot"`
 	Recommend     Recommend     `mapstructure:"recommend" json:"recommend" yaml:"recommend"`
+	AiAgent       AiAgent       `mapstructure:"aiagent" json:"aiagent" yaml:"aiagent"`
 	Trending      Trending      `mapstructure:"trending" json:"trending" yaml:"trending"`
 	Discover      Discover      `mapstructure:"discover" json:"discover" yaml:"discover"`
+	Notice        Notice        `mapstructure:"notice" json:"notice" yaml:"notice"`
 	Mailtrap      Mailtrap      `mapstructure:"mailtrap" json:"mailtrap" yaml:"mailtrap"`
 	Security      Security      `mapstructure:"security" json:"security" yaml:"security"`
 }
@@ -164,6 +166,15 @@ type Redpanda struct {
 	PostInteractionConsumerGroup string `mapstructure:"post_interaction_consumer_group" json:"post_interaction_consumer_group" yaml:"post_interaction_consumer_group"` // 帖子互动事件消费者组
 	PostInteractionFlushInterval int    `mapstructure:"post_interaction_flush_interval" json:"post_interaction_flush_interval" yaml:"post_interaction_flush_interval"` // 帖子互动刷新间隔(分钟)
 	PostInteractionFlushMessages int    `mapstructure:"post_interaction_flush_messages" json:"post_interaction_flush_messages" yaml:"post_interaction_flush_messages"` // 帖子互动批量刷新条数阈值
+
+	NoticeEventTopic         string `mapstructure:"notice_event_topic" json:"notice_event_topic" yaml:"notice_event_topic"`                            // 通知事件 topic
+	NoticeEventConsumerGroup string `mapstructure:"notice_event_consumer_group" json:"notice_event_consumer_group" yaml:"notice_event_consumer_group"` // 通知事件消费者组
+	NoticeEventFlushInterval int    `mapstructure:"notice_event_flush_interval" json:"notice_event_flush_interval" yaml:"notice_event_flush_interval"` // 通知落库间隔(秒)
+}
+
+// Notice 消息中心配置。设计见 docs/notice-design.md。
+type Notice struct {
+	MentionMax int `mapstructure:"mention_max" json:"mention_max" yaml:"mention_max"` // 单条内容 @ 提及用户上限(<=0 兜底 10)
 }
 
 // Hot 热度计算配置（权重 + 上限）。
@@ -192,6 +203,14 @@ type HotCap struct {
 type Recommend struct {
 	CF   CF   `mapstructure:"cf" json:"cf" yaml:"cf"`
 	Feed Feed `mapstructure:"feed" json:"feed" yaml:"feed"`
+}
+
+// AiAgent AI 机器人回复执行链路配置（设计见 docs/agent-reply-design.md）。
+// 各字段 <=0 时用代码内默认值（30s / 4000 字符 / 3）。
+type AiAgent struct {
+	TimeoutSec       int `mapstructure:"timeout_sec" json:"timeout_sec" yaml:"timeout_sec"`                   // LLM 单次调用超时(秒)，默认 30
+	MaxContentChars  int `mapstructure:"max_content_chars" json:"max_content_chars" yaml:"max_content_chars"` // Prompt 各段(title/summary/评论)截断长度，默认 4000
+	ReplyConcurrency int `mapstructure:"reply_concurrency" json:"reply_concurrency" yaml:"reply_concurrency"` // 关键词触发异步执行并发上限，默认 3
 }
 
 // Feed 推荐流候选池 + 多路召回配额配置。
@@ -225,21 +244,21 @@ type CF struct {
 // Trending 热点榜配置（trending 领域 + TrendingRankSyncer）。设计见 docs/trending-design.md §九。
 type Trending struct {
 	FlushIntervalMinutes int      `mapstructure:"flush_interval_minutes" json:"flush_interval_minutes" yaml:"flush_interval_minutes"` // TrendingRankSyncer 周期(分钟)
-	TopN                 int      `mapstructure:"top_n" json:"top_n" yaml:"top_n"`                                                      // 每个 ZSET 榜单保留条数(> max_size 留翻页余量)
-	Windows              []string `mapstructure:"windows" json:"windows" yaml:"windows"`                                                // 启用的时间窗(24h/7d)
-	DefaultSize          int      `mapstructure:"default_size" json:"default_size" yaml:"default_size"`                                 // 接口默认 size
-	MaxSize              int      `mapstructure:"max_size" json:"max_size" yaml:"max_size"`                                             // 接口 size 上限
+	TopN                 int      `mapstructure:"top_n" json:"top_n" yaml:"top_n"`                                                    // 每个 ZSET 榜单保留条数(> max_size 留翻页余量)
+	Windows              []string `mapstructure:"windows" json:"windows" yaml:"windows"`                                              // 启用的时间窗(24h/7d)
+	DefaultSize          int      `mapstructure:"default_size" json:"default_size" yaml:"default_size"`                               // 接口默认 size
+	MaxSize              int      `mapstructure:"max_size" json:"max_size" yaml:"max_size"`                                           // 接口 size 上限
 }
 
 // Discover 发现页配置（discover 领域 + DiscoverPoolSyncer）。设计见 docs/discover-design.md §九。
 type Discover struct {
 	RefreshIntervalMinutes int `mapstructure:"refresh_interval_minutes" json:"refresh_interval_minutes" yaml:"refresh_interval_minutes"` // DiscoverPoolSyncer 周期(分钟)
-	PoolSize               int `mapstructure:"pool_size" json:"pool_size" yaml:"pool_size"`                                               // 每分区候选池大小(采样数)
-	MinPoolPosts           int `mapstructure:"min_pool_posts" json:"min_pool_posts" yaml:"min_pool_posts"`                                 // 反气泡剔除后帖子最少保留数(不足则不排除重采)
-	TTLMinutes             int `mapstructure:"ttl_minutes" json:"ttl_minutes" yaml:"ttl_minutes"`                                         // 候选池 + token TTL(分钟)
-	DefaultSize            int `mapstructure:"default_size" json:"default_size" yaml:"default_size"`                                      // 接口默认 size
-	MaxSize                int `mapstructure:"max_size" json:"max_size" yaml:"max_size"`                                                  // 接口 size 上限
-	SeedLimit              int `mapstructure:"seed_limit" json:"seed_limit" yaml:"seed_limit"`                                            // 反气泡读取已交互帖上限(liked/collected/viewed 各)
+	PoolSize               int `mapstructure:"pool_size" json:"pool_size" yaml:"pool_size"`                                              // 每分区候选池大小(采样数)
+	MinPoolPosts           int `mapstructure:"min_pool_posts" json:"min_pool_posts" yaml:"min_pool_posts"`                               // 反气泡剔除后帖子最少保留数(不足则不排除重采)
+	TTLMinutes             int `mapstructure:"ttl_minutes" json:"ttl_minutes" yaml:"ttl_minutes"`                                        // 候选池 + token TTL(分钟)
+	DefaultSize            int `mapstructure:"default_size" json:"default_size" yaml:"default_size"`                                     // 接口默认 size
+	MaxSize                int `mapstructure:"max_size" json:"max_size" yaml:"max_size"`                                                 // 接口 size 上限
+	SeedLimit              int `mapstructure:"seed_limit" json:"seed_limit" yaml:"seed_limit"`                                           // 反气泡读取已交互帖上限(liked/collected/viewed 各)
 }
 
 // Mailtrap 邮件发送配置
@@ -267,6 +286,10 @@ type MailtrapTemplate struct {
 type Security struct {
 	// PasswordHash 密码哈希配置。
 	PasswordHash PasswordHash `mapstructure:"password_hash" json:"password_hash" yaml:"password_hash"`
+
+	// DataKey 敏感字段应用层加密密钥（AES-256-GCM，SHA-256 派生）。
+	// 用于 ai_agent.api_key 等入库前加密。为空时相关加密接口返回 ErrEmptyKey。
+	DataKey string `mapstructure:"data_key" json:"data_key" yaml:"data_key"`
 }
 
 // PasswordHash 密码哈希算法参数（Argon2id）。

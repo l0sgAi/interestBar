@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"interestBar/pkg/conf"
 	"interestBar/pkg/domains/comment/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/utils"
@@ -54,6 +55,16 @@ type PostLookup interface {
 	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
 	// 然后递增帖子评论计数（Redis Hash 实时 + DB 同步持久化）。
 	RestoreStatsAndIncrCommentCount(ctx context.Context, postID uuid.UUID) error
+}
+
+// AgentReplyTrigger AI 机器人回复触发端口（composition 桥接 aiagent.ReplyService）。
+//
+// 评论创建成功后同步回调；实现方必须立即返回（内部异步执行），
+// 不向评论创建链路传播任何错误。
+type AgentReplyTrigger interface {
+	// OnCommentCreated 评论创建完成后的触发入口。
+	// rootID 为 nil 表示顶层评论。
+	OnCommentCreated(postID, commentID, userID uuid.UUID, rootID *uuid.UUID, content string)
 }
 
 // ===== DTO =====
@@ -97,11 +108,12 @@ type CommentListResult struct {
 
 // CreateCommentInput 发评论/回复入参。
 type CreateCommentInput struct {
-	PostID    uuid.UUID
-	Content   string
-	ExtraData []byte // json.RawMessage
-	RootID    *uuid.UUID
-	ReplyToID *uuid.UUID
+	PostID         uuid.UUID
+	Content        string
+	ExtraData      []byte // json.RawMessage
+	RootID         *uuid.UUID
+	ReplyToID      *uuid.UUID
+	MentionUserIDs []uuid.UUID // @提及用户（前端选人传入；后端校验存在性/去自/截断）
 }
 
 // ===== Service 接口 =====
@@ -130,15 +142,18 @@ type CommentService interface {
 	SetUserFacade(f UserFacade)
 	// SetPostLookup 注入帖子查询端口（发评论校验 + 帖子评论计数用）。
 	SetPostLookup(p PostLookup)
+	// SetAgentTrigger 注入 AI 机器人回复触发端口（评论创建后回调）。
+	SetAgentTrigger(t AgentReplyTrigger)
 }
 
 type commentServiceImpl struct {
-	repo       domain.CommentRepository
-	statsCache domain.CommentStatsCache
-	likeCache  domain.CommentLikeCache
-	publisher  domain.CommentEventPublisher
-	userFacade UserFacade
-	postLookup PostLookup
+	repo         domain.CommentRepository
+	statsCache   domain.CommentStatsCache
+	likeCache    domain.CommentLikeCache
+	publisher    domain.CommentEventPublisher
+	userFacade   UserFacade
+	postLookup   PostLookup
+	agentTrigger AgentReplyTrigger
 }
 
 // NewCommentService 构造 CommentService。
@@ -162,6 +177,9 @@ func NewCommentService(
 // Setter 方法供 composition 注入跨领域依赖。
 func (s *commentServiceImpl) SetUserFacade(f UserFacade) { s.userFacade = f }
 func (s *commentServiceImpl) SetPostLookup(p PostLookup) { s.postLookup = p }
+
+// SetAgentTrigger 注入 AI 机器人回复触发端口（未注入则评论创建不触发机器人）。
+func (s *commentServiceImpl) SetAgentTrigger(t AgentReplyTrigger) { s.agentTrigger = t }
 
 // CreateComment 发评论（支持顶层评论和回复）。
 //
@@ -226,6 +244,12 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 			// 获取被回复用户ID
 			uid := replyToComment.UserID
 			replyToUserID = &uid
+		} else {
+			// 未指定 reply_to_id = 直接回复根评论：被回复人即根评论作者。
+			// 不置 nil 而解析出作者，回复通知（reply_comment）才有接收人，
+			// 否则该评论既不是顶层也不是回复，通知被静默丢弃（docs/notice-design.md）。
+			uid := rootComment.UserID
+			replyToUserID = &uid
 		}
 	}
 
@@ -266,6 +290,13 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 		if err := s.publisher.PublishCommentInteraction(ctx, userID, input.PostID); err != nil {
 			logger.Log.Error("Failed to publish comment interaction: " + err.Error())
 		}
+		// 消息中心通知（评论/回复 + @提及，best-effort）
+		s.publishCommentNotifications(ctx, userID, input.PostID, comment.ID, input.RootID == nil, replyToUserID != nil, input.MentionUserIDs, content)
+	}
+
+	// 7. AI 机器人回复触发（同步回调、实现方立即返回；机器人自身评论由实现方防回环）。
+	if s.agentTrigger != nil {
+		s.agentTrigger.OnCommentCreated(input.PostID, comment.ID, userID, comment.RootID, content)
 	}
 
 	return comment.ID, nil
@@ -556,4 +587,92 @@ func (s *commentServiceImpl) checkLiked(ctx context.Context, userID, commentID u
 		return isLiked
 	}
 	return false
+}
+
+// ===== 消息中心通知辅助 =====
+
+// noticeSnippetMaxRunes 通知快照上限（与 notification.snippet VARCHAR(200) 对齐留余量）。
+const noticeSnippetMaxRunes = 100
+
+// publishCommentNotifications 发布评论相关的消息中心通知（best-effort，不阻断主流程）。
+//
+// 顶层评论 → comment_post（接收人=帖子作者）；回复 → reply_comment（接收人=被回复评论作者）；
+// @提及 → mention（接收人=被提及用户，先校验）。接收人除 mention 外均由 consumer 反查解析。
+func (s *commentServiceImpl) publishCommentNotifications(ctx context.Context, userID, postID, commentID uuid.UUID, isTopLevel, isReply bool, mentionUserIDs []uuid.UUID, content string) {
+	snippet := truncateRunes(content, noticeSnippetMaxRunes)
+
+	switch {
+	case isTopLevel:
+		if err := s.publisher.PublishCommentNotice(ctx, userID, postID, commentID, false, snippet); err != nil {
+			logger.Log.Error("Failed to publish comment_post notification: " + err.Error())
+		}
+	case isReply:
+		if err := s.publisher.PublishCommentNotice(ctx, userID, postID, commentID, true, snippet); err != nil {
+			logger.Log.Error("Failed to publish reply_comment notification: " + err.Error())
+		}
+	}
+
+	if mentionIDs := s.filterMentionUserIDs(ctx, userID, mentionUserIDs); len(mentionIDs) > 0 {
+		if err := s.publisher.PublishMentionNotice(ctx, userID, &postID, &commentID, mentionIDs, snippet); err != nil {
+			logger.Log.Error("Failed to publish mention notification: " + err.Error())
+		}
+	}
+}
+
+// filterMentionUserIDs 校验 @提及用户列表：去重 → 去自己 → 存在性（UserFacade）→ 截断上限。
+// 校验失败（如 user 服务不可用）降级为不发 mention 通知，不影响评论主流程。
+func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid.UUID, mentionUserIDs []uuid.UUID) []uuid.UUID {
+	if len(mentionUserIDs) == 0 || s.userFacade == nil {
+		return nil
+	}
+
+	seen := make(map[uuid.UUID]struct{}, len(mentionUserIDs))
+	ordered := make([]uuid.UUID, 0, len(mentionUserIDs))
+	candidates := make([]string, 0, len(mentionUserIDs))
+	for _, id := range mentionUserIDs {
+		if id == uuid.Nil || id == actorID {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ordered = append(ordered, id)
+		candidates = append(candidates, id.String())
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	briefs, err := s.userFacade.GetBriefs(ctx, candidates)
+	if err != nil {
+		logger.Log.Error("Failed to validate mention user ids: " + err.Error())
+		return nil
+	}
+
+	max := conf.Config.Notice.MentionMax
+	if max <= 0 {
+		max = 10
+	}
+	// 按去重后的原始顺序筛选：重复提及既不重复入列，也不占用 MentionMax 配额。
+	valid := make([]uuid.UUID, 0, len(briefs))
+	for _, id := range ordered {
+		if _, ok := briefs[id.String()]; !ok {
+			continue // 不存在的用户静默过滤
+		}
+		valid = append(valid, id)
+		if len(valid) >= max {
+			break
+		}
+	}
+	return valid
+}
+
+// truncateRunes 按 rune 截断字符串。
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if len(r) > max {
+		return string(r[:max])
+	}
+	return s
 }

@@ -102,7 +102,8 @@ qubar/
 │   └── bootstrap.yaml    # Nacos 引导配置（地址、命名空间、分组）
 │
 ├── docs/
-│   ├── db.md             # 数据库表结构（UUIDv7 主键版）
+│   ├── pgsql-ddl/        # 数据库表结构（UUIDv7 主键版，按领域拆分）
+│   ├── db.md             # DDL 跳转入口（指向 pgsql-ddl/）
 │   ├── api-post-my.md    # API 文档
 │   └── email_verify_template.html
 │
@@ -153,7 +154,7 @@ CREATE DATABASE qubar;
 CREATE SCHEMA IF NOT EXISTS domains;
 ```
 
-数据库表结构及种子数据请参考 [docs/db.md](docs/db.md)
+数据库表结构及种子数据请参考 [docs/pgsql-ddl/](docs/pgsql-ddl/)（按领域拆分，入口 [README.md](docs/pgsql-ddl/README.md)）
 
 ### 4. 配置应用
 

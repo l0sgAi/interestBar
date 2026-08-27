@@ -19,6 +19,7 @@ import (
 	commentapp "interestBar/pkg/domains/comment/application"
 	discoverdomain "interestBar/pkg/domains/discover/domain"
 	historyapp "interestBar/pkg/domains/history/application"
+	noticeapp "interestBar/pkg/domains/notice/application"
 	postapp "interestBar/pkg/domains/post/application"
 	recommenddomain "interestBar/pkg/domains/recommend/domain"
 	trendingdomain "interestBar/pkg/domains/trending/domain"
@@ -176,6 +177,25 @@ func (f *commentUserFacade) GetBrief(ctx context.Context, userID string) (*comme
 		return nil, err
 	}
 	return &commentapp.UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}, nil
+}
+
+// ===== user → notice =====
+
+// noticeUserFacade 把 user.application.UserFacade 适配为 notice.application.UserFacade。
+type noticeUserFacade struct {
+	delegate userapp.UserFacade
+}
+
+func (f *noticeUserFacade) GetBriefs(ctx context.Context, userIDs []string) (map[string]noticeapp.UserBrief, error) {
+	briefs, err := f.delegate.GetBriefs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]noticeapp.UserBrief, len(briefs))
+	for id, b := range briefs {
+		result[id] = noticeapp.UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}
+	}
+	return result, nil
 }
 
 // ===== post → comment（帖子元信息 + 评论计数端口）=====
