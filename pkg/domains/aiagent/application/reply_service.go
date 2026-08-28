@@ -81,6 +81,14 @@ type CommentEvent struct {
 	Content   string
 }
 
+// PostMentionEvent 发帖 @提及 事件（post 域触发钩子回调载荷）。
+type PostMentionEvent struct {
+	PostID uuid.UUID
+	UserID uuid.UUID // 发帖人
+	// MentionUserIDs 为 post 域已校验落库的最终 @ 名单（存在性/去自/截断已过）。
+	MentionUserIDs []uuid.UUID
+}
+
 // ===== Service 接口 =====
 
 // ReplyService 机器人回复执行服务（设计见 docs/agent-reply-design.md）。
@@ -89,6 +97,11 @@ type ReplyService interface {
 	// 同步调用、立即返回（内部异步执行）；任何失败静默（仅日志表 + zap），
 	// 绝不向评论创建链路返回错误。机器人自己的评论不触发（防回环）。
 	OnCommentCreated(evt CommentEvent)
+	// OnPostMentioned 发帖 @机器人 触发入口。
+	// 同步调用、立即返回（内部异步执行）；任何失败静默（仅日志表 + zap），
+	// 绝不向发帖链路返回错误。被 @ 的启用机器人即触发：显式 @ 视为直接点名，
+	// 不校验 trigger_mode/关键词（mode 仅约束关键词/手动入口的被动触发）。
+	OnPostMentioned(evt PostMentionEvent)
 	// ManualReply 管理员手动触发回复（同步，仅 trigger_mode=3 的启用机器人）。
 	// 返回生成的评论 ID；失败返回错误（同时已写失败日志行）。
 	ManualReply(ctx context.Context, adminID, agentID, postID uuid.UUID) (uuid.UUID, error)
@@ -243,6 +256,78 @@ func (s *replyServiceImpl) OnCommentCreated(evt CommentEvent) {
 				ctx, cancel := context.WithTimeout(context.Background(), 2*replyTimeout())
 				defer cancel()
 				_, err := s.executeReply(ctx, agent, evt.PostID, &evt)
+				if err != nil {
+					// 前置跳过（帖子不可回/限频）已在 executeReply 内打 Info，不重复；
+					// 调用链路失败已写日志行，这里补一条 Error 便于告警。
+					if errors.Is(err, errPostNotReplyable) || errors.Is(err, errRateLimited) || errors.Is(err, errSkippedByFilter) {
+						return
+					}
+					logger.Log.Error(fmt.Sprintf("agent reply: agent=%s post=%s: %s",
+						agent.ID, evt.PostID, err.Error()))
+				}
+			}(agent)
+		}
+	}()
+}
+
+// OnPostMentioned 发帖 @提及 触发（异步、静默）。
+//
+// 与评论关键词触发的差异：
+//   - 候选集按「被 @ 的 linked_user_id」精确过滤，命中才进入执行；
+//   - 不校验 trigger_mode/关键词：显式 @ 即点名，任何启用机器人都应回应；
+//   - trigger=nil 走 executeReply 手动触发同构路径：顶层评论、title+summary
+//     组 prompt、绕过分类器（filter_prompt 仅关键词触发生效）。
+//
+// 防回环：机器人当前不发帖；发帖人即机器人关联账号时兜底跳过。
+func (s *replyServiceImpl) OnPostMentioned(evt PostMentionEvent) {
+	if len(evt.MentionUserIDs) == 0 {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Log.Error(fmt.Sprintf("agent reply panic: %v", r))
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), replyTimeout())
+		defer cancel()
+
+		agents, err := s.agentRepo.ListEnabled(ctx)
+		if err != nil {
+			logger.Log.Error("agent reply: list enabled agents failed: " + err.Error())
+			return
+		}
+		mentioned := make(map[uuid.UUID]struct{}, len(evt.MentionUserIDs))
+		for _, id := range evt.MentionUserIDs {
+			mentioned[id] = struct{}{}
+		}
+		for i := range agents {
+			agent := &agents[i]
+			if _, ok := mentioned[agent.LinkedUserID]; !ok {
+				continue
+			}
+			if agent.LinkedUserID == evt.UserID {
+				continue
+			}
+			// 并发上限满则跳过本轮（尽力而为，不阻塞发帖链路）。
+			select {
+			case s.sem <- struct{}{}:
+			default:
+				logger.Log.Warn(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=concurrency_full", agent.ID, evt.PostID))
+				continue
+			}
+			// 与关键词触发同一并发模型：每命中 agent 独立 goroutine + 独立
+			// 2*replyTimeout 预算；defer 释放信号量，panic 也必须归还槽位。
+			go func(agent *domain.AiAgent) {
+				defer func() { <-s.sem }()
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Log.Error(fmt.Sprintf("agent reply panic: agent=%s post=%s: %v", agent.ID, evt.PostID, r))
+					}
+				}()
+				ctx, cancel := context.WithTimeout(context.Background(), 2*replyTimeout())
+				defer cancel()
+				_, err := s.executeReply(ctx, agent, evt.PostID, nil)
 				if err != nil {
 					// 前置跳过（帖子不可回/限频）已在 executeReply 内打 Info，不重复；
 					// 调用链路失败已写日志行，这里补一条 Error 便于告警。

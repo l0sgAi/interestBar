@@ -81,6 +81,16 @@ type CirclePostCountPort interface {
 	IncrPostCount(ctx context.Context, circleID uuid.UUID) error
 }
 
+// AgentPostTrigger AI 机器人回复触发端口（composition 桥接 aiagent.ReplyService）。
+//
+// 已发布帖子的 @提及 落库后同步回调；实现方必须立即返回（内部异步执行），
+// 不向发帖链路传播任何错误。
+type AgentPostTrigger interface {
+	// OnPostMentioned 发帖 @提及 触发入口。
+	// mentionUserIDs 为已校验落库的最终名单；authorID 为发帖人。
+	OnPostMentioned(postID, authorID uuid.UUID, mentionUserIDs []uuid.UUID)
+}
+
 // ===== 搜索结果 DTO =====
 
 // PostDoc 帖子搜索结果项（ES PostDocument 精简版）。
@@ -260,6 +270,8 @@ type PostService interface {
 	SetCollectCache(c domain.PostCollectCache)
 	// SetHistoryRecorder 注入浏览历史记录器（详情页浏览 async 回调用）。
 	SetHistoryRecorder(r domain.HistoryRecorder)
+	// SetAgentTrigger 注入 AI 机器人回复触发端口（未注入则发帖 @机器人 不触发回复）。
+	SetAgentTrigger(t AgentPostTrigger)
 }
 
 // PostMeta 帖子元信息（供 comment/like 领域校验用）。
@@ -294,6 +306,7 @@ type postServiceImpl struct {
 	statusCheck   CircleStatusChecker
 	postCountPort CirclePostCountPort
 	historyRec    domain.HistoryRecorder
+	agentTrigger  AgentPostTrigger
 }
 
 // NewPostService 构造 PostService。
@@ -326,6 +339,7 @@ func (s *postServiceImpl) SetStatusChecker(c CircleStatusChecker)      { s.statu
 func (s *postServiceImpl) SetPostCountPort(p CirclePostCountPort)      { s.postCountPort = p }
 func (s *postServiceImpl) SetCollectCache(c domain.PostCollectCache)   { s.collectCache = c }
 func (s *postServiceImpl) SetHistoryRecorder(r domain.HistoryRecorder) { s.historyRec = r }
+func (s *postServiceImpl) SetAgentTrigger(t AgentPostTrigger)          { s.agentTrigger = t }
 
 // CreatePost 创建帖子。
 //
@@ -436,6 +450,11 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 			if err := s.publisher.PublishMentionNotice(ctx, userID, post.ID, mentionIDs, title); err != nil {
 				logger.Log.Error("Failed to publish post mention notice: " + err.Error())
 			}
+		}
+		// AI 机器人触发：与通知同一门槛（仅已发布）、同一名单；
+		// 同步回调立即返回，内部异步执行，不向发帖链路传播错误。
+		if postStatus == domain.PostStatusPublished && s.agentTrigger != nil {
+			s.agentTrigger.OnPostMentioned(post.ID, userID, mentionIDs)
 		}
 	}
 
