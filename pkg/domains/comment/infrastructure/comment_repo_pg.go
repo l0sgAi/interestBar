@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // commentRepoPG 基于 GORM 的 CommentRepository 实现。
@@ -158,6 +159,49 @@ func (r *commentRepoPG) BatchCheckLiked(ctx context.Context, userID uuid.UUID, c
 	result := make(map[uuid.UUID]bool, len(likes))
 	for _, like := range likes {
 		result[like.CommentID] = true
+	}
+	return result, nil
+}
+
+// CreateMentions 批量写入评论提及名单（append-only，幂等：重复行忽略）。
+//
+// CommentMention 未内嵌 BaseModel、无 BeforeCreate 钩子，须在此显式预生成 UUIDv7，
+// 否则 GORM 会把 uuid.Nil 当有效值发送覆盖 DB 默认值。
+func (r *commentRepoPG) CreateMentions(ctx context.Context, commentID uuid.UUID, userIDs []uuid.UUID) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+	mentions := make([]domain.CommentMention, 0, len(userIDs))
+	for _, uid := range userIDs {
+		mentions = append(mentions, domain.CommentMention{
+			ID:        sharedomain.NewID(),
+			CommentID: commentID,
+			UserID:    uid,
+		})
+	}
+	return r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&mentions).Error
+}
+
+// GetMentionUserIDsByCommentIDs 批量获取评论提及用户ID。
+//
+// 按 id ASC 排序：UUIDv7 字典序 == 时间序，即提及写入顺序（≈正文出现顺序）。
+func (r *commentRepoPG) GetMentionUserIDsByCommentIDs(ctx context.Context, commentIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
+	result := make(map[uuid.UUID][]uuid.UUID, len(commentIDs))
+	if len(commentIDs) == 0 {
+		return result, nil
+	}
+	var mentions []domain.CommentMention
+	err := r.db.WithContext(ctx).
+		Where("comment_id IN ?", commentIDs).
+		Order("id ASC").
+		Find(&mentions).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range mentions {
+		result[m.CommentID] = append(result[m.CommentID], m.UserID)
 	}
 	return result, nil
 }

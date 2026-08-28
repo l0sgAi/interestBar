@@ -29,6 +29,16 @@ type UserBrief struct {
 	AvatarURL string
 }
 
+// MentionVO 帖子 @提及 用户视图（详情接口 mentions 数组元素）。
+//
+// username 为当前用户名（发帖时可能不同）：前端与正文 token 做大小写不敏感
+// 整名比对，改名后旧内容可能匹配不上（不建链、不会错链），为契约内边界。
+type MentionVO struct {
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
 // UserFacade post 领域需要的 user 查询接口。
 type UserFacade interface {
 	GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error)
@@ -177,6 +187,10 @@ type PostDetailVO struct {
 	AuthorAvatar  string                `json:"author_avatar"`
 	IsLiked       bool                  `json:"is_liked"`
 	IsCollected   bool                  `json:"is_collected"`
+
+	// @提及 用户列表（发帖时落库的最终名单，仅含未注销用户）。
+	// 缺失/为空时前端回退文本反查建链，不报错。
+	Mentions []MentionVO `json:"mentions"`
 }
 
 // CreatePostInput 发帖入参。
@@ -409,9 +423,14 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		}
 	}
 
-	// @提及 通知（仅已发布；草稿/审核中帖子不应对外产生通知。best-effort 不阻断发帖）
-	if postStatus == domain.PostStatusPublished && len(input.MentionUserIDs) > 0 {
-		if mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs); len(mentionIDs) > 0 && s.publisher != nil {
+	// @提及：校验一次得到最终名单 → 落库（不区分状态，草稿正文同样含提及）→
+	// 仅已发布按同一名单发通知（草稿/审核中帖子不应对外产生通知）。
+	// 落库/通知均为 best-effort，不阻断发帖；通知名单 == 落库名单。
+	if mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs); len(mentionIDs) > 0 {
+		if err := s.repo.CreateMentions(ctx, post.ID, mentionIDs); err != nil {
+			logger.Log.Error("Failed to save post mentions: " + err.Error())
+		}
+		if postStatus == domain.PostStatusPublished && s.publisher != nil {
 			if err := s.publisher.PublishMentionNotice(ctx, userID, post.ID, mentionIDs, title); err != nil {
 				logger.Log.Error("Failed to publish post mention notice: " + err.Error())
 			}
@@ -554,6 +573,9 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		IsCollected: isCollected,
 	}
 
+	// @提及 用户列表（落库名单 → GetBriefs 过滤未注销；失败置空数组，前端回退文本反查）
+	vo.Mentions = s.assembleMentions(ctx, postID)
+
 	// 用 Redis 实时统计覆盖 DB 值（全 4 字段）；缓存缺失则用 DB 兜底（值已在 vo）并回种 Redis。
 	// 回种用 HSetNX：async 浏览量 goroutine 会 HINCRBY view_count，普通 HSet 会 clobber 它的 +1。
 	if stats, _ := s.statsCache.Get(ctx, postID); stats != nil {
@@ -569,6 +591,34 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	}
 
 	return vo, nil
+}
+
+// assembleMentions 组装帖子 @提及 用户列表（详情接口回传）。
+//
+// 落库名单 → UserFacade 批量取精简视图（内部过滤已注销/已删除用户）→ VO。
+// 任一环节失败返回空切片（非 nil，前端按"缺失/空数组回退文本反查"处理，不报错）。
+func (s *postServiceImpl) assembleMentions(ctx context.Context, postID uuid.UUID) []MentionVO {
+	mentionIDs, err := s.repo.GetMentionUserIDsByPostIDs(ctx, []uuid.UUID{postID})
+	if err != nil {
+		logger.Log.Error("Failed to get post mentions: " + err.Error())
+		return []MentionVO{}
+	}
+	ids := mentionIDs[postID]
+	if len(ids) == 0 || s.userFacade == nil {
+		return []MentionVO{}
+	}
+	briefs, err := s.userFacade.GetBriefs(ctx, toStrings(ids))
+	if err != nil {
+		logger.Log.Error("Failed to get mention user briefs: " + err.Error())
+		return []MentionVO{}
+	}
+	mentions := make([]MentionVO, 0, len(ids))
+	for _, id := range ids {
+		if b, ok := briefs[id.String()]; ok {
+			mentions = append(mentions, MentionVO{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL})
+		}
+	}
+	return mentions
 }
 
 // checkLiked 检查点赞状态（缓存优先，miss 回源 DB + 回填）。

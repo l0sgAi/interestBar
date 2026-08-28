@@ -114,3 +114,40 @@ CREATE INDEX idx_clike_user_active ON domains.comment_like(user_id, create_time 
 -- 配合 `deleted=0` 查询有效点赞者。
 CREATE INDEX idx_clike_comment_active ON domains.comment_like(comment_id, create_time DESC) WHERE deleted = 0;
 ```
+
+## 评论提及表
+
+> 发评论/回复时正文 @提及 的最终持久化名单（评论人选择并经后端校验：存在且未注销、
+> 去重、剔除评论人本人、上限截断）。append-only：随评论创建写入，不设 deleted（提及行
+> 随内容生灭）。消息中心通知只对落库名单发；`GET /comment/list`、`GET /comment/replies`
+> 据此按条回传 `mentions` 数组。
+
+```sql
+-- 评论提及表 (comment_mention)
+DROP TABLE IF EXISTS domains.comment_mention;
+
+CREATE TABLE domains.comment_mention (
+    -- ID主键 (UUIDv7)
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
+
+    -- 核心关系
+    comment_id UUID NOT NULL,        -- 被提及所在的评论
+    user_id UUID NOT NULL,           -- 被提及的用户
+
+    create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- --- 注释 ---
+COMMENT ON TABLE domains.comment_mention IS '评论@提及表：发评论时的最终提及名单（去重/去评论人/上限截断后）';
+COMMENT ON COLUMN domains.comment_mention.comment_id IS '提及所在评论ID(UUID)';
+COMMENT ON COLUMN domains.comment_mention.user_id IS '被提及用户ID(UUID)';
+
+-- --- 索引优化 ---
+
+-- 1. 【核心】一评论一用户仅一条提及记录；按 comment_id 批量读（列表按条回传 mentions）
+-- id 为主键升序读出（UUIDv7 字典序=时间序），近似正文出现顺序
+CREATE UNIQUE INDEX uk_comment_mention_comment_user ON domains.comment_mention(comment_id, user_id);
+
+-- 2. 【预留】"提及我的" 反查列表
+CREATE INDEX idx_comment_mention_user ON domains.comment_mention(user_id, create_time DESC);
+```
