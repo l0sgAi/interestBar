@@ -83,3 +83,39 @@ CREATE INDEX idx_post_status ON domains.post(status, create_time DESC);
 -- 场景：置顶帖数量很少(3-5条)，通常不走ES，直接查DB置顶然后插在列表最前面
 CREATE INDEX idx_post_pinned ON domains.post(circle_id) WHERE is_pinned = 1 AND deleted = 0;
 ```
+
+## 帖子提及表
+
+> 发帖时正文 @提及 的最终持久化名单（发帖人选择并经后端校验：存在且未注销、去重、
+> 剔除作者本人、上限截断）。append-only：随帖子创建写入，不设 deleted（提及行随内容生灭）。
+> 消息中心通知只对落库名单发；详情接口 `GET /post/detail` 据此回传 `mentions` 数组。
+
+```sql
+-- 帖子提及表 (post_mention)
+DROP TABLE IF EXISTS domains.post_mention;
+
+CREATE TABLE domains.post_mention (
+    -- ID主键 (UUIDv7)
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
+
+    -- 核心关系
+    post_id UUID NOT NULL,           -- 被提及所在的帖子
+    user_id UUID NOT NULL,           -- 被提及的用户
+
+    create_time TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- --- 注释 ---
+COMMENT ON TABLE domains.post_mention IS '帖子@提及表：发帖时的最终提及名单（去重/去作者/上限截断后）';
+COMMENT ON COLUMN domains.post_mention.post_id IS '提及所在帖子ID(UUID)';
+COMMENT ON COLUMN domains.post_mention.user_id IS '被提及用户ID(UUID)';
+
+-- --- 索引优化 ---
+
+-- 1. 【核心】一帖一用户仅一条提及记录；按 post_id 批量读（详情回传 mentions）
+-- id 为主键升序读出（UUIDv7 字典序=时间序），近似正文出现顺序
+CREATE UNIQUE INDEX uk_post_mention_post_user ON domains.post_mention(post_id, user_id);
+
+-- 2. 【预留】"提及我的" 反查列表
+CREATE INDEX idx_post_mention_user ON domains.post_mention(user_id, create_time DESC);
+```

@@ -97,6 +97,20 @@ type CommentVO struct {
 
 	// 用户交互状态
 	Liked bool `json:"liked"` // 当前用户是否点赞了该评论
+
+	// @提及 用户列表（发评论时落库的最终名单，仅含未注销用户）。
+	// 缺失/为空时前端回退文本反查建链，不报错。
+	Mentions []MentionVO `json:"mentions"`
+}
+
+// MentionVO 评论 @提及 用户视图（mentions 数组元素）。
+//
+// username 为当前用户名（发评论时可能不同）：前端与正文 token 做大小写不敏感
+// 整名比对，改名后旧内容可能匹配不上（不建链、不会错链），为契约内边界。
+type MentionVO struct {
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
 // CommentListResult 评论列表结果（游标分页）。
@@ -282,6 +296,15 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 	}
 
 	// 6. 累积帖子热度（评论 +5，per-post 上限 cap.comment，Lua 原子 clamp；best-effort）
+	// @提及：校验一次得到最终名单 → 落库（best-effort 不阻断发评论）→
+	// 通知使用同一份落库名单（通知名单 == 落库名单）。
+	mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs)
+	if len(mentionIDs) > 0 {
+		if err := s.repo.CreateMentions(ctx, comment.ID, mentionIDs); err != nil {
+			logger.Log.Error("Failed to save comment mentions: " + err.Error())
+		}
+	}
+
 	if s.publisher != nil {
 		if err := s.publisher.PublishCommentHot(ctx, input.PostID, 1); err != nil {
 			logger.Log.Error("Failed to publish comment hot: " + err.Error())
@@ -291,7 +314,7 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 			logger.Log.Error("Failed to publish comment interaction: " + err.Error())
 		}
 		// 消息中心通知（评论/回复 + @提及，best-effort）
-		s.publishCommentNotifications(ctx, userID, input.PostID, comment.ID, input.RootID == nil, replyToUserID != nil, input.MentionUserIDs, content)
+		s.publishCommentNotifications(ctx, userID, input.PostID, comment.ID, input.RootID == nil, replyToUserID != nil, mentionIDs, content)
 	}
 
 	// 7. AI 机器人回复触发（同步回调、实现方立即返回；机器人自身评论由实现方防回环）。
@@ -380,6 +403,16 @@ func (s *commentServiceImpl) GetCommentDetail(ctx context.Context, userID, comme
 		}
 	}
 
+	// 填充 @提及 用户列表（落库名单 → GetBrief 过滤未注销；失败置空数组，前端回退文本反查）
+	vo.Mentions = []MentionVO{}
+	if mentionIDsMap, err := s.repo.GetMentionUserIDsByCommentIDs(ctx, []uuid.UUID{commentID}); err == nil {
+		if ids := mentionIDsMap[commentID]; len(ids) > 0 && s.userFacade != nil {
+			if briefs, err := s.userFacade.GetBriefs(ctx, toStrings(ids)); err == nil {
+				vo.Mentions = buildMentionVOs(ids, briefs)
+			}
+		}
+	}
+
 	return vo, nil
 }
 
@@ -426,7 +459,21 @@ func (s *commentServiceImpl) RestoreCommentStats(ctx context.Context, commentID 
 //  3. 批量查询当前用户点赞状态（Redis 优先，miss 回源 DB + 回填）；
 //  4. 组装 VO。
 func (s *commentServiceImpl) buildCommentVOs(ctx context.Context, userID uuid.UUID, comments []domain.Comment) []CommentVO {
-	// 收集所有需要查询用户信息的用户ID
+	// 本页评论的提及名单（一次 IN 查询；mention 用户并入 userIDSet 共用一次 GetBriefs）
+	commentIDs := make([]uuid.UUID, 0, len(comments))
+	for _, cm := range comments {
+		commentIDs = append(commentIDs, cm.ID)
+	}
+	mentionIDsMap := make(map[uuid.UUID][]uuid.UUID, len(comments))
+	if len(commentIDs) > 0 {
+		var err error
+		mentionIDsMap, err = s.repo.GetMentionUserIDsByCommentIDs(ctx, commentIDs)
+		if err != nil {
+			logger.Log.Error("Failed to get comment mentions: " + err.Error())
+		}
+	}
+
+	// 收集所有需要查询用户信息（评论者/被回复人/@提及用户）的用户ID
 	userIDSet := make(map[uuid.UUID]struct{})
 	for _, cm := range comments {
 		userIDSet[cm.UserID] = struct{}{}
@@ -434,15 +481,22 @@ func (s *commentServiceImpl) buildCommentVOs(ctx context.Context, userID uuid.UU
 			userIDSet[*cm.ReplyToUserID] = struct{}{}
 		}
 	}
+	for _, ids := range mentionIDsMap {
+		for _, id := range ids {
+			userIDSet[id] = struct{}{}
+		}
+	}
 
-	// 批量查询所有用户信息
+	// 批量查询所有用户信息（保留 string-keyed briefs 供提及组装复用）
+	briefs := make(map[string]UserBrief, len(userIDSet))
 	userMap := make(map[uuid.UUID]UserBrief, len(userIDSet))
 	if s.userFacade != nil && len(userIDSet) > 0 {
 		idStrs := make([]string, 0, len(userIDSet))
 		for id := range userIDSet {
 			idStrs = append(idStrs, id.String())
 		}
-		if briefs, err := s.userFacade.GetBriefs(ctx, idStrs); err == nil {
+		if fetched, err := s.userFacade.GetBriefs(ctx, idStrs); err == nil {
+			briefs = fetched
 			for idStr, b := range briefs {
 				if uid, parseErr := uuid.Parse(idStr); parseErr == nil {
 					userMap[uid] = UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}
@@ -486,10 +540,27 @@ func (s *commentServiceImpl) buildCommentVOs(ctx context.Context, userID uuid.UU
 			}
 		}
 
+		// 填充 @提及 用户列表（空名单给非 nil 空切片，序列化为 [] 而非 null）
+		vo.Mentions = buildMentionVOs(mentionIDsMap[cm.ID], briefs)
+
 		vos = append(vos, vo)
 	}
 
 	return vos
+}
+
+// buildMentionVOs 由提及用户ID组装 MentionVO 列表（保持提及写入顺序≈正文出现顺序）。
+//
+// briefs 为 GetBriefs 的返回（内部已过滤未注销用户），未命中的提及ID被静默跳过。
+// 空名单返回非 nil 空切片，序列化为 [] 而非 null。
+func buildMentionVOs(ids []uuid.UUID, briefs map[string]UserBrief) []MentionVO {
+	mentions := make([]MentionVO, 0, len(ids))
+	for _, id := range ids {
+		if b, ok := briefs[id.String()]; ok {
+			mentions = append(mentions, MentionVO{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL})
+		}
+	}
+	return mentions
 }
 
 // batchLikedStatus 批量获取评论点赞状态（先查 Redis ZSET，miss 时回源 DB）。
@@ -597,8 +668,10 @@ const noticeSnippetMaxRunes = 100
 // publishCommentNotifications 发布评论相关的消息中心通知（best-effort，不阻断主流程）。
 //
 // 顶层评论 → comment_post（接收人=帖子作者）；回复 → reply_comment（接收人=被回复评论作者）；
-// @提及 → mention（接收人=被提及用户，先校验）。接收人除 mention 外均由 consumer 反查解析。
-func (s *commentServiceImpl) publishCommentNotifications(ctx context.Context, userID, postID, commentID uuid.UUID, isTopLevel, isReply bool, mentionUserIDs []uuid.UUID, content string) {
+// @提及 → mention（接收人=被提及用户）。mentionIDs 为已校验并落库的最终名单
+// （CreateComment 中 filterMentionUserIDs 的结果，通知名单 == 落库名单）；
+// 接收人除 mention 外均由 consumer 反查解析。
+func (s *commentServiceImpl) publishCommentNotifications(ctx context.Context, userID, postID, commentID uuid.UUID, isTopLevel, isReply bool, mentionIDs []uuid.UUID, content string) {
 	snippet := truncateRunes(content, noticeSnippetMaxRunes)
 
 	switch {
@@ -612,7 +685,7 @@ func (s *commentServiceImpl) publishCommentNotifications(ctx context.Context, us
 		}
 	}
 
-	if mentionIDs := s.filterMentionUserIDs(ctx, userID, mentionUserIDs); len(mentionIDs) > 0 {
+	if len(mentionIDs) > 0 {
 		if err := s.publisher.PublishMentionNotice(ctx, userID, &postID, &commentID, mentionIDs, snippet); err != nil {
 			logger.Log.Error("Failed to publish mention notification: " + err.Error())
 		}
@@ -675,4 +748,13 @@ func truncateRunes(s string, max int) string {
 		return string(r[:max])
 	}
 	return s
+}
+
+// toStrings 批量转换 uuid 列表为字符串列表。
+func toStrings(ids []uuid.UUID) []string {
+	result := make([]string, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, id.String())
+	}
+	return result
 }

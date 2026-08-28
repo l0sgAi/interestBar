@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // postRepoPG 基于 GORM 的 PostRepository 实现。
@@ -98,4 +99,47 @@ func (r *postRepoPG) IncrCommentCount(ctx context.Context, postID uuid.UUID) err
 	return r.db.WithContext(ctx).Model(&domain.Post{}).
 		Where("id = ? AND deleted = ?", postID, 0).
 		UpdateColumn("comment_count", gorm.Expr("GREATEST(comment_count + 1, 0)")).Error
+}
+
+// CreateMentions 批量写入帖子提及名单（append-only，幂等：重复行忽略）。
+//
+// PostMention 未内嵌 BaseModel、无 BeforeCreate 钩子，须在此显式预生成 UUIDv7，
+// 否则 GORM 会把 uuid.Nil 当有效值发送覆盖 DB 默认值。
+func (r *postRepoPG) CreateMentions(ctx context.Context, postID uuid.UUID, userIDs []uuid.UUID) error {
+	if len(userIDs) == 0 {
+		return nil
+	}
+	mentions := make([]domain.PostMention, 0, len(userIDs))
+	for _, uid := range userIDs {
+		mentions = append(mentions, domain.PostMention{
+			ID:     sharedomain.NewID(),
+			PostID: postID,
+			UserID: uid,
+		})
+	}
+	return r.db.WithContext(ctx).
+		Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&mentions).Error
+}
+
+// GetMentionUserIDsByPostIDs 批量获取帖子提及用户ID。
+//
+// 按 id ASC 排序：UUIDv7 字典序 == 时间序，即提及写入顺序（≈正文出现顺序）。
+func (r *postRepoPG) GetMentionUserIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error) {
+	result := make(map[uuid.UUID][]uuid.UUID, len(postIDs))
+	if len(postIDs) == 0 {
+		return result, nil
+	}
+	var mentions []domain.PostMention
+	err := r.db.WithContext(ctx).
+		Where("post_id IN ?", postIDs).
+		Order("id ASC").
+		Find(&mentions).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range mentions {
+		result[m.PostID] = append(result[m.PostID], m.UserID)
+	}
+	return result, nil
 }
