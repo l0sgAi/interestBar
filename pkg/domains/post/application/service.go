@@ -329,8 +329,8 @@ func (s *postServiceImpl) SetHistoryRecorder(r domain.HistoryRecorder) { s.histo
 
 // CreatePost 创建帖子。
 //
-// 与旧 controller.CreatePost 行为一致：
-//  1. 默认 type=1(图文)，默认 status=2(审核中)；
+// 与旧 controller.CreatePost 行为一致（除默认状态外）：
+//  1. 默认 type=1(图文)；默认 status=1(已发布)，原为 2(审核中)——见下方 TODO；
 //  2. 非草稿校验 circle_id/title 非空；
 //  3. 校验成员身份与状态（pending/muted/banned）；
 //  4. 校验圈子可用性；
@@ -344,7 +344,9 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	}
 	postStatus := input.Status
 	if postStatus == 0 {
-		postStatus = domain.PostStatusReviewing
+		// TODO(review-flow): 审核流未上线，新帖暂直接置为已发布；
+		// 审核能力就绪后恢复为 domain.PostStatusReviewing。
+		postStatus = domain.PostStatusPublished
 	}
 
 	// 非草稿校验
