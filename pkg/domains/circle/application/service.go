@@ -275,6 +275,28 @@ type CircleService interface {
 	// 供 recommend 域 C1 兴趣圈子召回用。ZSET miss 时从 DB 全量重建。
 	ListJoinedCircleIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error)
 
+	// ===== 圈子管理（owner/admin，权限矩阵见 manage.go）=====
+
+	// ListCircleMembers 管理端成员列表（admin+，可见全部状态含待审/拉黑，keyset 分页）。
+	// role/status 传 -1 表示不过滤。
+	ListCircleMembers(ctx context.Context, operatorID, circleID uuid.UUID, role, status int16, cursor string, size int) (*CircleMemberListResult, error)
+	// SetMemberRole 设为/取消管理员（仅圈主；role ∈ {10,20}，转让走 TransferOwner）。
+	SetMemberRole(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID, role int16) error
+	// TransferOwner 转让圈主（仅圈主；目标须为正常状态的非圈主成员）。
+	TransferOwner(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
+	// MuteMember 禁言（admin+；durationHours 1-720，仍计数为成员）。
+	MuteMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID, durationHours int) error
+	// UnmuteMember 解除禁言（admin+）。
+	UnmuteMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
+	// BanMember 拉黑/踢出（admin+；normal/muted → banned，member_count-1）。
+	BanMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
+	// UnbanMember 解除拉黑（admin+；banned → left，需重新申请加入）。
+	UnbanMember(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID) error
+	// ReviewJoinRequest 入圈审核（admin+；pending → normal/left）。
+	ReviewJoinRequest(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID, approve bool) error
+	// UpdateCircleProfile 编辑圈子资料（name/slug/join_type/category_id 仅圈主，其余 admin+）。
+	UpdateCircleProfile(ctx context.Context, operatorID, circleID uuid.UUID, input UpdateCircleProfileInput) error
+
 	// SetUserFacade 注入 user Facade（GetCirclePosts 组装作者信息用）。
 	SetUserFacade(f UserFacade)
 	// SetPostFetcher 注入 post 媒体查询器（GetCirclePosts 组装图片用）。

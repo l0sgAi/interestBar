@@ -3,6 +3,8 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
+	"strconv"
 
 	"interestBar/pkg/domains/circle/application"
 	"interestBar/pkg/domains/circle/domain"
@@ -307,6 +309,280 @@ func (h *Handler) GetActiveCircles(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
+// ===== 圈子管理（owner/admin，权限矩阵在 service 层校验）=====
+
+// GetCircleMembersRequest 成员列表请求（管理端）。
+// role/status 为字符串参数：空或 "-1" 表示不过滤（status=0 待审是合法过滤值，不能用零值默认）。
+type GetCircleMembersRequest struct {
+	CircleID string `query:"circle_id" binding:"required,uuid"`
+	Role     string `query:"role"`
+	Status   string `query:"status"`
+	Cursor   string `query:"cursor"`
+	Size     int    `query:"size"`
+}
+
+// GetCircleMembers GET /circle/members —— 管理端成员列表（admin+，keyset 分页）。
+func (h *Handler) GetCircleMembers(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req GetCircleMembersRequest
+	if err := c.BindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	circleID, err := uuid.Parse(req.CircleID)
+	if err != nil {
+		httputil.BadRequest(c, "Invalid circle_id")
+		return
+	}
+	role, ok := parseMemberFilterParam(c, req.Role, "role")
+	if !ok {
+		return
+	}
+	status, ok := parseMemberFilterParam(c, req.Status, "status")
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.ListCircleMembers(c, userID, circleID, role, status, req.Cursor, normalizeSize(req.Size))
+	if err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	httputil.Success(c, result)
+}
+
+// ManageRoleRequest 角色变更请求（仅圈主）。
+type ManageRoleRequest struct {
+	CircleID     uuid.UUID `json:"circle_id" binding:"required"`
+	TargetUserID uuid.UUID `json:"target_user_id" binding:"required"`
+	Role         int16     `json:"role" binding:"required"`
+}
+
+// ManageRole POST /circle/manage/role —— 设为/取消管理员。
+func (h *Handler) ManageRole(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req ManageRoleRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	if err := h.svc.SetMemberRole(c, userID, req.CircleID, req.TargetUserID, req.Role); err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Member role updated", nil)
+}
+
+// TransferOwnerRequest 转让圈主请求（仅圈主）。
+type TransferOwnerRequest struct {
+	CircleID     uuid.UUID `json:"circle_id" binding:"required"`
+	TargetUserID uuid.UUID `json:"target_user_id" binding:"required"`
+}
+
+// ManageTransfer POST /circle/manage/transfer —— 转让圈主。
+func (h *Handler) ManageTransfer(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req TransferOwnerRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	if err := h.svc.TransferOwner(c, userID, req.CircleID, req.TargetUserID); err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Circle ownership transferred", nil)
+}
+
+// MuteMemberRequest 禁言请求（admin+）。
+type MuteMemberRequest struct {
+	CircleID      uuid.UUID `json:"circle_id" binding:"required"`
+	TargetUserID  uuid.UUID `json:"target_user_id" binding:"required"`
+	DurationHours int       `json:"duration_hours" binding:"required"`
+}
+
+// ManageMute POST /circle/manage/mute —— 禁言成员。
+func (h *Handler) ManageMute(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req MuteMemberRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	if err := h.svc.MuteMember(c, userID, req.CircleID, req.TargetUserID, req.DurationHours); err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Member muted", nil)
+}
+
+// UnmuteMemberRequest 解禁请求（admin+）。
+type UnmuteMemberRequest struct {
+	CircleID     uuid.UUID `json:"circle_id" binding:"required"`
+	TargetUserID uuid.UUID `json:"target_user_id" binding:"required"`
+}
+
+// ManageUnmute POST /circle/manage/unmute —— 解除禁言。
+func (h *Handler) ManageUnmute(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req UnmuteMemberRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	if err := h.svc.UnmuteMember(c, userID, req.CircleID, req.TargetUserID); err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Member unmuted", nil)
+}
+
+// BanMemberRequest 拉黑请求（admin+）。
+type BanMemberRequest struct {
+	CircleID     uuid.UUID `json:"circle_id" binding:"required"`
+	TargetUserID uuid.UUID `json:"target_user_id" binding:"required"`
+}
+
+// ManageBan POST /circle/manage/ban —— 拉黑/踢出成员。
+func (h *Handler) ManageBan(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req BanMemberRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	if err := h.svc.BanMember(c, userID, req.CircleID, req.TargetUserID); err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Member banned", nil)
+}
+
+// UnbanMemberRequest 解除拉黑请求（admin+）。
+type UnbanMemberRequest struct {
+	CircleID     uuid.UUID `json:"circle_id" binding:"required"`
+	TargetUserID uuid.UUID `json:"target_user_id" binding:"required"`
+}
+
+// ManageUnban POST /circle/manage/unban —— 解除拉黑（成员需重新申请加入）。
+func (h *Handler) ManageUnban(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req UnbanMemberRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	if err := h.svc.UnbanMember(c, userID, req.CircleID, req.TargetUserID); err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Member unbanned", nil)
+}
+
+// ReviewMemberRequest 入圈审核请求（admin+）。
+type ReviewMemberRequest struct {
+	CircleID     uuid.UUID `json:"circle_id" binding:"required"`
+	TargetUserID uuid.UUID `json:"target_user_id" binding:"required"`
+	Approve      bool      `json:"approve"`
+}
+
+// ManageReview POST /circle/manage/review —— 审核入圈申请。
+func (h *Handler) ManageReview(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req ReviewMemberRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	if err := h.svc.ReviewJoinRequest(c, userID, req.CircleID, req.TargetUserID, req.Approve); err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	if req.Approve {
+		httputil.SuccessWithMessage(c, "Join request approved", nil)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Join request rejected", nil)
+}
+
+// UpdateCircleRequest 编辑圈子资料请求（分字段权限：name/slug/join_type/category_id 仅圈主）。
+// 指针字段 nil = 不更新；slug 传空串清除；category_id 传全零 UUID 清除分类。
+type UpdateCircleRequest struct {
+	CircleID    uuid.UUID  `json:"circle_id" binding:"required"`
+	Name        *string    `json:"name"`
+	Slug        *string    `json:"slug"`
+	AvatarURL   *string    `json:"avatar_url"`
+	CoverURL    *string    `json:"cover_url"`
+	Description *string    `json:"description"`
+	Rule        *string    `json:"rule"`
+	CategoryID  *uuid.UUID `json:"category_id"`
+	JoinType    *int16     `json:"join_type"`
+}
+
+// UpdateCircleProfile PUT /circle/update —— 编辑圈子资料。
+func (h *Handler) UpdateCircleProfile(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req UpdateCircleRequest
+	if err := c.BindJSON(&req); err != nil {
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	if err := h.svc.UpdateCircleProfile(c, userID, req.CircleID, application.UpdateCircleProfileInput{
+		Name: req.Name, Slug: req.Slug, AvatarURL: req.AvatarURL, CoverURL: req.CoverURL,
+		Description: req.Description, Rule: req.Rule, CategoryID: req.CategoryID, JoinType: req.JoinType,
+	}); err != nil {
+		writeCircleError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "Circle updated", nil)
+}
+
 // ===== 辅助函数 =====
 
 func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
@@ -346,6 +622,21 @@ func normalizeSize(size int) int {
 	return size
 }
 
+// parseMemberFilterParam 解析成员列表 role/status 过滤参数（字符串形式，
+// 空或 "-1" → -1 表示不过滤）。非法时写入 BadRequest 并返回 ok=false。
+// 用字符串而非数值绑定：status=0（待审）是合法过滤值，无法与"未传"区分。
+func parseMemberFilterParam(c appctx.AppContext, raw, name string) (int16, bool) {
+	if raw == "" || raw == "-1" {
+		return -1, true
+	}
+	v, err := strconv.ParseInt(raw, 10, 16)
+	if err != nil || v < -1 {
+		httputil.BadRequest(c, "Invalid "+name+" filter parameter")
+		return 0, false
+	}
+	return int16(v), true
+}
+
 // parseSearchAfter 解析 search_after 参数。非法时写入 BadRequest 并返回 ok=false。
 func parseSearchAfter(c appctx.AppContext, s string) ([]interface{}, bool) {
 	if s == "" {
@@ -382,6 +673,26 @@ func writeCircleError(c appctx.AppContext, err error) {
 		httputil.Forbidden(c, "Circle owner cannot leave the circle")
 	case application.IsNotMemberErr(err):
 		httputil.NotFound(c, "Not a member of this circle")
+	case application.IsInvalidMemberRoleErr(err):
+		httputil.BadRequest(c, "role must be 10 (member) or 20 (admin); use /circle/manage/transfer to transfer ownership")
+	case application.IsInvalidMuteDurationErr(err):
+		httputil.BadRequest(c, "duration_hours must be between 1 and 720")
+	case application.IsInvalidMemberFilterErr(err):
+		httputil.BadRequest(c, "Invalid role or status filter parameter")
+	case application.IsNoCircleUpdateFieldErr(err):
+		httputil.BadRequest(c, "At least one field is required to update")
+	case application.IsInvalidCircleProfileErr(err):
+		httputil.BadRequest(c, "Invalid circle profile fields (name 1-50, slug ≤60, description 1-2000, rule ≤2000, url ≤500 chars)")
+	case application.IsNotCircleAdminErr(err):
+		httputil.Forbidden(c, "Circle admin privileges required")
+	case application.IsNotCircleOwnerErr(err):
+		httputil.Forbidden(c, "Circle owner privileges required")
+	case application.IsCannotManageTargetErr(err):
+		httputil.Forbidden(c, "Cannot manage a member with equal or higher role")
+	case errors.Is(err, domain.ErrMemberStateConflict):
+		httputil.Conflict(c, "Member state conflict, please refresh and retry")
+	case errors.Is(err, domain.ErrInvalidCursor):
+		httputil.BadRequest(c, "Invalid cursor parameter")
 	case err == domain.ErrCircleNotFound:
 		httputil.NotFound(c, "Circle not found")
 	case err == domain.ErrMemberNotFound:
