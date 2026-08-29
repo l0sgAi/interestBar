@@ -116,3 +116,103 @@ handler(bind+requireUserID)
 |---|---|
 | **P0** | repo 新方法(ListMembers/UpdateRole/UpdateStatus/UpdateCircle/TransferOwner);service 权限矩阵+8 个管理方法+编辑圈子;handler+routes;GetMember 惰性解禁;计数/缓存副作用;`errors.go` 新错误谓词 |
 | **P1** | notice 域通知扇出(被禁言/拉黑/任免/审核结果);审计表+写审计;普通成员可见的成员列表(normal only) |
+
+## 八、P0.1 追加:成员搜索(已实施)
+
+> 需求:管理端成员列表支持按**用户名/邮箱**搜索(超大圈友好);P0 的 ListMembers 只有 role/status 过滤。
+
+### 8.1 方案:复用 user 域 ES 搜索,Facade 桥接(不建第二套)
+
+ES 用户索引**已同时检索 username(权重3)/email(权重1)**(`elasticsearch/user.go:87` multi_match,
+@提及 用户搜索同一链路),email 不落任何响应字段(仅用于匹配,无隐私泄漏)。跨域走 Facade 红线不变。
+
+```
+GET /circle/members?keyword=x
+  → circle/application/manage.go ListCircleMembers
+      1. 权限校验(admin+,关键词搜索在权限之后,防未授权消耗 ES)
+      2. userFacade.SearchBriefs(keyword, 100)          ← 新增 Facade 方法
+         composition 桥接 → user.application.UserFacade.SearchBriefs
+           → userFacadeAdapter: ES SearchUsers(multi_match, 按 _score 排序) → []UserBrief
+      3. 命中 0 个 → 直接空页;命中 ≤100 个 → user_id IN (...) 过滤成员表
+      4. memberRepo.ListMembers(+userIDs 过滤, 与 role/status/游标条件正交组合)
+```
+
+### 8.2 大圈正确性论证(为什么游标翻页仍精确)
+
+- `circle_member` 对 (circle_id, user_id) 唯一 → 关键词命中 N 个用户 ⇒ 过滤后**至多 N 行**;
+- N ≤ memberSearchMaxUsers=100(`manage.go`) → 结果集有限,`(role, create_time, id)` keyset 游标
+  与 `user_id IN` 条件正交组合,翻页不重不漏;
+- 超过 100 命中取相关性 Top-100(ES 按 _score DESC),前端提示细化关键词;
+- 翻页须带同一 keyword(keyword 变化时客户端重置 cursor)——同一关键词下候选集视为页间一致快照。
+
+### 8.3 改动清单
+
+| 位置 | 改动 |
+|---|---|
+| `user/application/service.go` | UserFacade 接口 + userFacadeAdapter 加 `SearchBriefs(keyword, limit)`(空关键词短路,limit ≤100 对齐 ES size 语义,直接映射 ES 结果不回源) |
+| `circle/application/service.go` | circle 域 UserFacade 接口 + CircleService.ListCircleMembers 签名加 keyword |
+| `circle/domain/repository.go` | ListMembers 加 `userIDs []uuid.UUID` 参数(nil=不过滤) |
+| `circle/infrastructure/circle_repo_pg.go` | `user_id IN ?` 过滤(走 idx_member_unique 前缀) |
+| `circle/application/manage.go` | 搜索分支 + `memberSearchMaxUsers=100`;ES 失败 → `errUserSearchUnavailable`(503) |
+| `circle/application/errors.go` | errUserSearchUnavailable + IsUserSearchUnavailableErr |
+| `composition/facade_bridges.go` | circleUserFacade.SearchBriefs 保序类型映射 |
+| `circle/interfaces/http/handler.go` | keyword query 参数 + 503 映射 |
+| 无 DDL/无新 Redis key/无新 topic | ES 索引与 CDC 链路现成 |
+
+### 8.4 边界/风险
+
+| 项 | 决策 |
+|---|---|
+| ES 不可用 | 成员搜索返回 503(不静默降级为"无结果",避免管理员误判);不带 keyword 的列表不受影响 |
+| ES 索引延迟(CDC) | 新注册用户秒级内可能搜不到,与 @提及 用户搜索一致,接受 |
+| email 匹配 | ES 分词匹配(非精确等于);email 永不进入响应体 |
+| keyword 为空串 | 短路,行为与 P0 完全一致(不触发 ES 查询) |
+| 无 keyword 时 userIDs=nil | ListMembers 走原路径,零额外开销 |
+
+## 九、P0.2 追加:搜索拼写容错 + 截断显式化(已实施)
+
+> 需求:成员搜索支持**拼写容错**(如 "alic" 命中 "alice");命中超 100 截断从静默改为显式返回。
+
+### 9.1 方案:ES 查询增强 + total 透传(不加第二套链路)
+
+ES `SearchUsers` 关键词分支从单 `multi_match` 改为 `bool should` 两路召回
+(`minimum_should_match=1`,`elasticsearch/user.go` buildUserSearchQuery):
+
+1. `username multi_match + fuzziness:"AUTO"`(权重 3)——拼写容错,编辑距离自适应
+   (1-2 字符词 0、3-5 字符词 1、更长 2);
+2. `email match`(不做容错)——保留邮箱分词匹配能力。
+
+**公开用户搜索与成员搜索共用此函数,模糊化同步生效**(用户域 `Search` API 行为随之改变)。
+排序 `_score DESC, id DESC` 不变,search_after 语义不受影响(无关键词分支完全不动)。
+
+截断显式化:ES 已 `track_total_hits`,`SearchBriefs` 签名改返 `([]UserBrief, total, error)`
+三层透传(user 域 adapter → composition 桥 → circle 域);`total > 100` 即
+`CircleMemberListResult.Truncated=true`,前端提示细化关键词。
+
+### 9.2 为何候选集固定上限 100 而非直接分页
+
+两阶段排序不同源:阶段 1 ES 按 `_score` 相关性,阶段 2 成员表按 `(role, create_time)`
+keyset。要正确翻页必须先拿到**完整候选用户集**再交集排序;若 ES 也分页,第 N 页用户的
+加入时间与已返回成员交错,页序即错。且 `IN` 列表长度与 ES 单次召回必须设界。
+代价=召回超 100 截断,由 `truncated` 标志显式暴露。
+
+### 9.3 改动清单(P0.2 增量)
+
+| 位置 | 改动 |
+|---|---|
+| `server/storage/elasticsearch/user.go` | 关键词分支改 bool should(username fuzziness AUTO + email match);查询构建抽为 `buildUserSearchQuery` |
+| `user/application/service.go` | `SearchBriefs` 签名加 `total int64` 返回值 |
+| `circle/application/service.go` | circle 域 UserFacade.SearchBriefs 签名同步 |
+| `composition/facade_bridges.go` | circleUserFacade.SearchBriefs 透传 total |
+| `circle/application/manage.go` | `CircleMemberListResult` 加 `Truncated bool`;`total > memberSearchMaxUsers` 填充 |
+| `docs/circle-management-frontend-api.md` | 搜索语义 + 响应体加 `truncated` |
+| 无 DDL/无索引变更/无新配置 | 纯查询 DSL 与签名变更 |
+
+### 9.4 边界/风险(P0.2 增量)
+
+| 项 | 决策 |
+|---|---|
+| fuzziness 对中文用户名 | ik 分词后按词容错,单字词(≤2 字符)不容错;中文拼写容错收益有限但无害 |
+| email 不做容错 | 防邮箱近似串误召回(隐私面不扩大) |
+| 公开用户搜索行为变化 | 与成员搜索共用函数,同步获得容错;排序/分页契约不变 |
+| 截断判定 | `total > 100` 用 ES track_total_hits 精确值,非"拿满 100 即猜" |

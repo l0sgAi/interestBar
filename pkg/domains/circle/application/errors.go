@@ -26,14 +26,15 @@ var (
 
 // 圈子管理（circle management）的错误。
 var (
-	errNotCircleAdmin       = errors.New("circle admin privileges required")
-	errNotCircleOwner       = errors.New("circle owner privileges required")
-	errCannotManageTarget   = errors.New("cannot manage a member with equal or higher role")
-	errInvalidMemberRole    = errors.New("role must be 10 (member) or 20 (admin); transfer ownership via /circle/manage/transfer")
-	errInvalidMuteDuration  = errors.New("duration_hours must be between 1 and 720")
-	errInvalidMemberFilter  = errors.New("role filter must be 10/20/30 or -1; status filter must be 0-4 or -1")
-	errNoCircleUpdateField  = errors.New("at least one field is required to update")
-	errInvalidCircleProfile = errors.New("invalid circle profile field")
+	errNotCircleAdmin        = errors.New("circle admin privileges required")
+	errNotCircleOwner        = errors.New("circle owner privileges required")
+	errCannotManageTarget    = errors.New("cannot manage a member with equal or higher role")
+	errInvalidMemberRole     = errors.New("role must be 10 (member) or 20 (admin); transfer ownership via /circle/manage/transfer")
+	errInvalidMuteDuration   = errors.New("duration_hours must be between 1 and 720")
+	errInvalidMemberFilter   = errors.New("role filter must be 10/20/30 or -1; status filter must be 0-4 or -1")
+	errNoCircleUpdateField   = errors.New("at least one field is required to update")
+	errInvalidCircleProfile  = errors.New("invalid circle profile field")
+	errUserSearchUnavailable = errors.New("user search service unavailable")
 )
 
 // 错误判断函数（供 handler 层使用）。
@@ -48,14 +49,15 @@ func IsOwnerCannotLeaveErr(err error) bool   { return errors.Is(err, errOwnerCan
 func IsNotMemberErr(err error) bool          { return errors.Is(err, errNotMember) }
 
 // 管理操作错误判断函数。
-func IsNotCircleAdminErr(err error) bool       { return errors.Is(err, errNotCircleAdmin) }
-func IsNotCircleOwnerErr(err error) bool       { return errors.Is(err, errNotCircleOwner) }
-func IsCannotManageTargetErr(err error) bool   { return errors.Is(err, errCannotManageTarget) }
-func IsInvalidMemberRoleErr(err error) bool    { return errors.Is(err, errInvalidMemberRole) }
-func IsInvalidMuteDurationErr(err error) bool  { return errors.Is(err, errInvalidMuteDuration) }
-func IsInvalidMemberFilterErr(err error) bool  { return errors.Is(err, errInvalidMemberFilter) }
-func IsNoCircleUpdateFieldErr(err error) bool  { return errors.Is(err, errNoCircleUpdateField) }
-func IsInvalidCircleProfileErr(err error) bool { return errors.Is(err, errInvalidCircleProfile) }
+func IsNotCircleAdminErr(err error) bool        { return errors.Is(err, errNotCircleAdmin) }
+func IsNotCircleOwnerErr(err error) bool        { return errors.Is(err, errNotCircleOwner) }
+func IsCannotManageTargetErr(err error) bool    { return errors.Is(err, errCannotManageTarget) }
+func IsInvalidMemberRoleErr(err error) bool     { return errors.Is(err, errInvalidMemberRole) }
+func IsInvalidMuteDurationErr(err error) bool   { return errors.Is(err, errInvalidMuteDuration) }
+func IsInvalidMemberFilterErr(err error) bool   { return errors.Is(err, errInvalidMemberFilter) }
+func IsNoCircleUpdateFieldErr(err error) bool   { return errors.Is(err, errNoCircleUpdateField) }
+func IsInvalidCircleProfileErr(err error) bool  { return errors.Is(err, errInvalidCircleProfile) }
+func IsUserSearchUnavailableErr(err error) bool { return errors.Is(err, errUserSearchUnavailable) }
 
 // mapJoinLeaveError 把 memberRepo 返回的错误（字符串匹配）映射为可识别错误。
 //

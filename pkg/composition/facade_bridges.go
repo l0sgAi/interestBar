@@ -48,6 +48,20 @@ func (f *circleUserFacade) GetBriefs(ctx context.Context, userIDs []string) (map
 	return result, nil
 }
 
+// SearchBriefs 按关键字搜索用户（circle 成员管理搜索用），保序映射为 circle 域的
+// UserBrief，并透传命中总数 total（total > len(列表) 表示按 limit 截断）。
+func (f *circleUserFacade) SearchBriefs(ctx context.Context, keyword string, limit int) ([]circleapp.UserBrief, int64, error) {
+	briefs, total, err := f.delegate.SearchBriefs(ctx, keyword, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	result := make([]circleapp.UserBrief, 0, len(briefs))
+	for _, b := range briefs {
+		result = append(result, circleapp.UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL})
+	}
+	return result, total, nil
+}
+
 // postUserFacade 把 user.application.UserFacade 适配为 post.application.UserFacade。
 type postUserFacade struct {
 	delegate userapp.UserFacade

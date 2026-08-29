@@ -313,10 +313,12 @@ func (h *Handler) GetActiveCircles(c appctx.AppContext) {
 
 // GetCircleMembersRequest 成员列表请求（管理端）。
 // role/status 为字符串参数：空或 "-1" 表示不过滤（status=0 待审是合法过滤值，不能用零值默认）。
+// keyword 非空时按用户名/邮箱搜索过滤（翻页须带同一 keyword）。
 type GetCircleMembersRequest struct {
 	CircleID string `query:"circle_id" binding:"required,uuid"`
 	Role     string `query:"role"`
 	Status   string `query:"status"`
+	Keyword  string `query:"keyword"`
 	Cursor   string `query:"cursor"`
 	Size     int    `query:"size"`
 }
@@ -349,7 +351,7 @@ func (h *Handler) GetCircleMembers(c appctx.AppContext) {
 		return
 	}
 
-	result, err := h.svc.ListCircleMembers(c, userID, circleID, role, status, req.Cursor, normalizeSize(req.Size))
+	result, err := h.svc.ListCircleMembers(c, userID, circleID, role, status, req.Keyword, req.Cursor, normalizeSize(req.Size))
 	if err != nil {
 		writeCircleError(c, err)
 		return
@@ -683,6 +685,8 @@ func writeCircleError(c appctx.AppContext, err error) {
 		httputil.BadRequest(c, "At least one field is required to update")
 	case application.IsInvalidCircleProfileErr(err):
 		httputil.BadRequest(c, "Invalid circle profile fields (name 1-50, slug ≤60, description 1-2000, rule ≤2000, url ≤500 chars)")
+	case application.IsUserSearchUnavailableErr(err):
+		httputil.ServiceUnavailable(c, "User search service unavailable, please retry later")
 	case application.IsNotCircleAdminErr(err):
 		httputil.Forbidden(c, "Circle admin privileges required")
 	case application.IsNotCircleOwnerErr(err):

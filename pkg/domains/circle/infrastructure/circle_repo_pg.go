@@ -311,7 +311,7 @@ func (r *memberRepoPG) LeaveCircle(ctx context.Context, circleID, userID uuid.UU
 //
 // 排序 role DESC, create_time DESC, id DESC（id 为 UUIDv7，字典序 == 时间序，
 // 作同毫秒写入的确定性 tiebreaker）。多取 1 行（size+1）判断 hasMore。
-func (r *memberRepoPG) ListMembers(ctx context.Context, circleID uuid.UUID, role, status int16, cursor string, size int) ([]domain.CircleMember, string, error) {
+func (r *memberRepoPG) ListMembers(ctx context.Context, circleID uuid.UUID, role, status int16, userIDs []uuid.UUID, cursor string, size int) ([]domain.CircleMember, string, error) {
 	// 惰性解禁：批量自愈已过期的禁言，保证管理列表状态准确。best-effort，失败不阻断查询。
 	_ = r.healExpiredMutes(ctx, circleID)
 
@@ -322,6 +322,10 @@ func (r *memberRepoPG) ListMembers(ctx context.Context, circleID uuid.UUID, role
 	}
 	if status >= 0 {
 		q = q.Where("status = ?", status)
+	}
+	if len(userIDs) > 0 {
+		// 成员搜索过滤：user_id IN 走 idx_member_unique(circle_id, user_id) 前缀。
+		q = q.Where("user_id IN ?", userIDs)
 	}
 	if cursor != "" {
 		c, err := decodeMemberCursor(cursor)

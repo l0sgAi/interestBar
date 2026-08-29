@@ -26,6 +26,11 @@ import (
 // maxMuteHours 禁言时长上限（30 天），防误操作造成事实上的永久封口。
 const maxMuteHours = 720
 
+// memberSearchMaxUsers 成员搜索关键词最多解析的用户数。
+// circle_member 对 (circle_id, user_id) 唯一 → 过滤后结果集 ≤ 此值，
+// 游标翻页在该集合内精确进行；超过则提示细化关键词。
+const memberSearchMaxUsers = 100
+
 // ===== 管理端 DTO =====
 
 // CircleMemberItem 管理端成员列表项（含用户精简信息，由 UserFacade 组装）。
@@ -40,10 +45,15 @@ type CircleMemberItem struct {
 }
 
 // CircleMemberListResult 成员列表分页结果（keyset 游标，空串 = 没有更多）。
+//
+// Truncated：keyword 模式解析到的候选用户数超过 memberSearchMaxUsers（100）时
+// 为 true，表示结果可能不完整（超出部分按相关性丢弃）。前端应提示「细化关键词」。
+// 仅 keyword 非空时可能为 true。
 type CircleMemberListResult struct {
-	Members []CircleMemberItem `json:"members"`
-	Size    int                `json:"size"`
-	Cursor  string             `json:"cursor"`
+	Members   []CircleMemberItem `json:"members"`
+	Size      int                `json:"size"`
+	Cursor    string             `json:"cursor"`
+	Truncated bool               `json:"truncated"`
 }
 
 // UpdateCircleProfileInput 编辑圈子资料入参（nil 字段 = 不更新）。
@@ -119,7 +129,11 @@ func validMemberFilter(role, status int16) bool {
 
 // ListCircleMembers 管理端成员列表（admin+，可见全部状态含待审/拉黑）。
 // 按角色（高→低）、加入时间（新→旧）keyset 分页；用户信息经 UserFacade 组装。
-func (s *circleServiceImpl) ListCircleMembers(ctx context.Context, operatorID, circleID uuid.UUID, role, status int16, cursor string, size int) (*CircleMemberListResult, error) {
+// keyword 非空时按用户名搜索（拼写容错，email 分词匹配亦参与召回）：先经 user 域
+// 解析为候选用户集（≤memberSearchMaxUsers 个，username 权重 3 倍于 email，按相关性
+// 排序；命中超上限时 Truncated=true，提示细化关键词），再以 user_id IN 过滤成员表——
+// 成员表 (circle_id, user_id) 唯一，故结果集有限，游标翻页精确；翻页须带同一 keyword。
+func (s *circleServiceImpl) ListCircleMembers(ctx context.Context, operatorID, circleID uuid.UUID, role, status int16, keyword, cursor string, size int) (*CircleMemberListResult, error) {
 	if !validMemberFilter(role, status) {
 		return nil, errInvalidMemberFilter
 	}
@@ -130,7 +144,34 @@ func (s *circleServiceImpl) ListCircleMembers(ctx context.Context, operatorID, c
 		return nil, err
 	}
 
-	members, next, err := s.memberRepo.ListMembers(ctx, circleID, role, status, cursor, size)
+	// 关键词 → 候选用户集（跨域搜索在权限校验之后，避免未授权消耗 ES 查询）。
+	keyword = strings.TrimSpace(keyword)
+	var userIDs []uuid.UUID
+	truncated := false
+	if keyword != "" {
+		if s.userFacade == nil {
+			return nil, errUserSearchUnavailable
+		}
+		briefs, total, err := s.userFacade.SearchBriefs(ctx, keyword, memberSearchMaxUsers)
+		if err != nil {
+			logger.Log.Error("Failed to search users for member list: " + err.Error())
+			return nil, errUserSearchUnavailable
+		}
+		// 命中总数超过解析上限：结果不完整，标记截断供前端提示。
+		truncated = total > memberSearchMaxUsers
+		if len(briefs) == 0 {
+			// 关键词无命中用户：直接空页（不必查成员表）。
+			return &CircleMemberListResult{Members: []CircleMemberItem{}, Size: size, Cursor: "", Truncated: false}, nil
+		}
+		userIDs = make([]uuid.UUID, 0, len(briefs))
+		for _, b := range briefs {
+			if id, err := uuid.Parse(b.ID); err == nil {
+				userIDs = append(userIDs, id)
+			}
+		}
+	}
+
+	members, next, err := s.memberRepo.ListMembers(ctx, circleID, role, status, userIDs, cursor, size)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +204,7 @@ func (s *circleServiceImpl) ListCircleMembers(ctx context.Context, operatorID, c
 		}
 		items = append(items, item)
 	}
-	return &CircleMemberListResult{Members: items, Size: size, Cursor: next}, nil
+	return &CircleMemberListResult{Members: items, Size: size, Cursor: next, Truncated: truncated}, nil
 }
 
 // ===== 角色管理 =====

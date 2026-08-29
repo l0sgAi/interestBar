@@ -41,82 +41,7 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserList
 		size = 20
 	}
 
-	// 构建搜索查询
-	var searchQuery map[string]interface{}
-
-	// 定义排序规则：按id倒序(UUIDv7 字典序 == 时间序)，避免日期精度和范围问题
-	sortRules := []map[string]interface{}{
-		{
-			"id": map[string]interface{}{
-				"order": "desc",
-			},
-		},
-	}
-
-	// 构建基础查询条件（过滤已删除、状态正常）
-	mustConditions := []map[string]interface{}{
-		{
-			"term": map[string]interface{}{
-				"deleted": 0, // 过滤掉已删除的用户
-			},
-		},
-		{
-			"term": map[string]interface{}{
-				"status": 1, // 只返回启用的用户
-			},
-		},
-	}
-
-	if keyword == "" {
-		// 无关键字时，返回所有符合条件的用户，按id倒序
-		searchQuery = map[string]interface{}{
-			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"must": mustConditions,
-				},
-			},
-			"size": size,
-			"sort": sortRules,
-		}
-	} else {
-		// 有关键字时，使用 multi_match 进行加权搜索
-		// username 权重是 email 的 3 倍，按_score排序
-		sortWithScore := []map[string]interface{}{
-			{
-				"_score": map[string]interface{}{
-					"order": "desc",
-				},
-			},
-			{
-				"id": map[string]interface{}{
-					"order": "desc",
-				},
-			},
-		}
-
-		// 添加关键字搜索条件
-		searchConditions := []map[string]interface{}{
-			{
-				"multi_match": map[string]interface{}{
-					"query":    keyword,
-					"fields":   []string{"username^3", "email^1"},
-					"type":     "best_fields",
-					"operator": "or",
-				},
-			},
-		}
-		searchConditions = append(searchConditions, mustConditions...)
-
-		searchQuery = map[string]interface{}{
-			"query": map[string]interface{}{
-				"bool": map[string]interface{}{
-					"must": searchConditions,
-				},
-			},
-			"size": size,
-			"sort": sortWithScore,
-		}
-	}
+	searchQuery := buildUserSearchQuery(keyword, size)
 
 	// 添加 search_after 参数（如果提供）
 	if len(searchAfter) > 0 {
@@ -147,6 +72,100 @@ func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserList
 	}
 
 	return parseUserSearchResponse(res, size)
+}
+
+// userBaseFilterConditions 基础过滤条件：过滤已删除、仅启用状态用户。
+func userBaseFilterConditions() []map[string]interface{} {
+	return []map[string]interface{}{
+		{
+			"term": map[string]interface{}{
+				"deleted": 0, // 过滤掉已删除的用户
+			},
+		},
+		{
+			"term": map[string]interface{}{
+				"status": 1, // 只返回启用的用户
+			},
+		},
+	}
+}
+
+// buildUserSearchQuery 构建用户搜索 DSL。keyword 为空时按 id 倒序全量翻页；
+// 非空时按 _score 相关性排序。
+func buildUserSearchQuery(keyword string, size int) map[string]interface{} {
+	mustConditions := userBaseFilterConditions()
+
+	if keyword == "" {
+		// 无关键字时，返回所有符合条件的用户，按id倒序(UUIDv7 字典序 == 时间序)
+		return map[string]interface{}{
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": mustConditions,
+				},
+			},
+			"size": size,
+			"sort": []map[string]interface{}{
+				{
+					"id": map[string]interface{}{
+						"order": "desc",
+					},
+				},
+			},
+		}
+	}
+
+	// 关键字搜索：bool should 两路召回（minimum_should_match=1）——
+	//  1. username multi_match + fuzziness AUTO：拼写容错（编辑距离自适应：
+	//     1-2 字符词 0、3-5 字符词 1、更长 2），权重 3；
+	//  2. email match：保留邮箱分词匹配（不做容错）。
+	// 按 _score 排序，id 倒序作同分 tiebreaker。
+	searchConditions := []map[string]interface{}{
+		{
+			"bool": map[string]interface{}{
+				"should": []map[string]interface{}{
+					{
+						"multi_match": map[string]interface{}{
+							"query":     keyword,
+							"fields":    []string{"username^3"},
+							"type":      "best_fields",
+							"operator":  "or",
+							"fuzziness": "AUTO",
+						},
+					},
+					{
+						"match": map[string]interface{}{
+							"email": map[string]interface{}{
+								"query": keyword,
+							},
+						},
+					},
+				},
+				"minimum_should_match": 1,
+			},
+		},
+	}
+	searchConditions = append(searchConditions, mustConditions...)
+
+	return map[string]interface{}{
+		"query": map[string]interface{}{
+			"bool": map[string]interface{}{
+				"must": searchConditions,
+			},
+		},
+		"size": size,
+		"sort": []map[string]interface{}{
+			{
+				"_score": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			{
+				"id": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+		},
+	}
 }
 
 // parseUserSearchResponse 解析用户搜索响应

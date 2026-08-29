@@ -50,6 +50,10 @@ type UserBrief struct {
 // UserFacade 是 circle 领域需要的 user 查询接口（由 composition 注入 user 领域实现）。
 type UserFacade interface {
 	GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error)
+	// SearchBriefs 按关键字搜索用户（username 拼写容错 + email 分词匹配），
+	// 返回按相关性排序的有序列表（最多 limit 个）与命中总数 total；
+	// total > len(列表) 表示按 limit 截断。供成员管理搜索"关键词 → 候选用户集"用。
+	SearchBriefs(ctx context.Context, keyword string, limit int) ([]UserBrief, int64, error)
 }
 
 // PostMediaFetcher 帖子媒体批量查询接口（由 composition 注入 post 领域实现）。
@@ -278,8 +282,9 @@ type CircleService interface {
 	// ===== 圈子管理（owner/admin，权限矩阵见 manage.go）=====
 
 	// ListCircleMembers 管理端成员列表（admin+，可见全部状态含待审/拉黑，keyset 分页）。
-	// role/status 传 -1 表示不过滤。
-	ListCircleMembers(ctx context.Context, operatorID, circleID uuid.UUID, role, status int16, cursor string, size int) (*CircleMemberListResult, error)
+	// role/status 传 -1 表示不过滤；keyword 非空时按用户名搜索（拼写容错，
+	// 最多解析 100 个候选用户，超出时结果 Truncated=true），游标翻页须带同一 keyword。
+	ListCircleMembers(ctx context.Context, operatorID, circleID uuid.UUID, role, status int16, keyword, cursor string, size int) (*CircleMemberListResult, error)
 	// SetMemberRole 设为/取消管理员（仅圈主；role ∈ {10,20}，转让走 TransferOwner）。
 	SetMemberRole(ctx context.Context, operatorID, circleID, targetUserID uuid.UUID, role int16) error
 	// TransferOwner 转让圈主（仅圈主；目标须为正常状态的非圈主成员）。

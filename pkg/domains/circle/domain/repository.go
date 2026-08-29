@@ -72,9 +72,12 @@ type MemberRepository interface {
 	LeaveCircle(ctx context.Context, circleID, userID uuid.UUID) error
 	// ListMembers 管理端成员列表（keyset 分页，排序对齐 idx_member_circle_role：
 	// role DESC, create_time DESC, id DESC）。role/status 传 -1 表示不过滤。
+	// userIDs 非空时按成员用户集合过滤（成员搜索场景：关键词先经 user 域搜索
+	// 解析为至多百余个用户 ID；circle_member 对 (circle_id, user_id) 唯一，
+	// 故过滤后至多 |userIDs| 行，游标翻页仍精确）。
 	// 返回 (成员, 下一页游标)，游标空串表示没有更多；游标非法返回 ErrInvalidCursor 包装错误。
 	// 查询前惰性解除已过期的禁言（与 GetMember 自愈一致，保证管理列表状态准确）。
-	ListMembers(ctx context.Context, circleID uuid.UUID, role, status int16, cursor string, size int) ([]CircleMember, string, error)
+	ListMembers(ctx context.Context, circleID uuid.UUID, role, status int16, userIDs []uuid.UUID, cursor string, size int) ([]CircleMember, string, error)
 	// UpdateMemberRole 角色变更（CAS：WHERE role=fromRole AND status=normal）。
 	// 目标状态不符或并发变更（0 行受影响）返回 ErrMemberStateConflict。
 	UpdateMemberRole(ctx context.Context, circleID, userID uuid.UUID, fromRole, toRole int16) error
