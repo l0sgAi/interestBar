@@ -4,9 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
 )
+
+// escapeWildcard 转义 ES wildcard 查询的元字符（* ? \），防用户输入注入通配符
+// 造成词表全扫的慢查询。
+func escapeWildcard(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `*`, `\*`, `?`, `\?`)
+	return r.Replace(s)
+}
 
 // UserDocument 用户文档结构
 type UserDocument struct {
@@ -114,10 +122,12 @@ func buildUserSearchQuery(keyword string, size int) map[string]interface{} {
 		}
 	}
 
-	// 关键字搜索：bool should 两路召回（minimum_should_match=1）——
+	// 关键字搜索：bool should 三路召回（minimum_should_match=1）——
 	//  1. username multi_match + fuzziness AUTO：拼写容错（编辑距离自适应：
 	//     1-2 字符词 0、3-5 字符词 1、更长 2），权重 3；
-	//  2. email match：保留邮箱分词匹配（不做容错）。
+	//  2. username.keyword wildcard 子串包含：真·模糊匹配（"mie" 命中 "miemie"、
+	//     "君几" 命中 "盼君几多愁"），大小写不敏感；用户输入的 * ? \ 已转义防注入；
+	//  3. email match：保留邮箱分词匹配（不做容错、不做子串，隐私面不扩大）。
 	// 按 _score 排序，id 倒序作同分 tiebreaker。
 	searchConditions := []map[string]interface{}{
 		{
@@ -130,6 +140,14 @@ func buildUserSearchQuery(keyword string, size int) map[string]interface{} {
 							"type":      "best_fields",
 							"operator":  "or",
 							"fuzziness": "AUTO",
+						},
+					},
+					{
+						"wildcard": map[string]interface{}{
+							"username.keyword": map[string]interface{}{
+								"value":            "*" + escapeWildcard(keyword) + "*",
+								"case_insensitive": true,
+							},
 						},
 					},
 					{

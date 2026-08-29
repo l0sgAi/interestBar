@@ -175,12 +175,19 @@ GET /circle/members?keyword=x
 
 ### 9.1 方案:ES 查询增强 + total 透传(不加第二套链路)
 
-ES `SearchUsers` 关键词分支从单 `multi_match` 改为 `bool should` 两路召回
+ES `SearchUsers` 关键词分支从单 `multi_match` 改为 `bool should` 三路召回
 (`minimum_should_match=1`,`elasticsearch/user.go` buildUserSearchQuery):
 
 1. `username multi_match + fuzziness:"AUTO"`(权重 3)——拼写容错,编辑距离自适应
    (1-2 字符词 0、3-5 字符词 1、更长 2);
-2. `email match`(不做容错)——保留邮箱分词匹配能力。
+2. `username.keyword wildcard` 子串包含——真·模糊匹配("mie" 中 "miemie"、"君几" 中
+   "盼君几多愁"),`case_insensitive:true` 大小写不敏感;用户输入 `* ? \` 经
+   `escapeWildcard` 转义防通配注入(全词表扫描慢查询);
+3. `email match`(不做容错、不做子串)——仅整串分词匹配,隐私面不扩大。
+
+> 教训:fuzziness(拼写容错)≠ 子串模糊。中文场景 fuzziness 近乎无效
+> (≤2 字符词编辑距离为 0),子串召回只能靠 wildcard/ngram。初版只加了 fuzziness,
+> 实测 "mie"→"miemie" 零召回后补 wildcard 一路。
 
 **公开用户搜索与成员搜索共用此函数,模糊化同步生效**(用户域 `Search` API 行为随之改变)。
 排序 `_score DESC, id DESC` 不变,search_after 语义不受影响(无关键词分支完全不动)。
@@ -200,7 +207,7 @@ keyset。要正确翻页必须先拿到**完整候选用户集**再交集排序;
 
 | 位置 | 改动 |
 |---|---|
-| `server/storage/elasticsearch/user.go` | 关键词分支改 bool should(username fuzziness AUTO + email match);查询构建抽为 `buildUserSearchQuery` |
+| `server/storage/elasticsearch/user.go` | 关键词分支改 bool should 三路(username fuzziness AUTO + username.keyword wildcard 子串 + email match);查询构建抽为 `buildUserSearchQuery`;`escapeWildcard` 防通配注入 |
 | `user/application/service.go` | `SearchBriefs` 签名加 `total int64` 返回值 |
 | `circle/application/service.go` | circle 域 UserFacade.SearchBriefs 签名同步 |
 | `composition/facade_bridges.go` | circleUserFacade.SearchBriefs 透传 total |
