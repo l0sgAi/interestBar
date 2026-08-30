@@ -14,6 +14,18 @@ var ErrCircleNotFound = errors.New("circle not found")
 // ErrMemberNotFound 成员记录未找到。
 var ErrMemberNotFound = errors.New("member not found")
 
+// ErrMemberStateConflict 成员状态/角色与预期不符（状态机非法迁移或并发变更，0 行受影响）。
+var ErrMemberStateConflict = errors.New("member state conflict")
+
+// ErrInvalidCursor 成员列表 keyset 游标非法（用户可控参数，防御性解析失败）。
+var ErrInvalidCursor = errors.New("invalid cursor")
+
+// ErrCircleNameExists 圈子名冲突（service 预检或 DB 唯一索引兜底）。
+var ErrCircleNameExists = errors.New("circle name already exists")
+
+// ErrCircleSlugExists 圈子 slug 冲突（service 预检或 DB 唯一索引兜底）。
+var ErrCircleSlugExists = errors.New("circle slug already exists")
+
 // CircleRepository 是 circle 领域的持久化接口（由 infrastructure 实现）。
 type CircleRepository interface {
 	// GetByID 根据 ID 获取圈子（仅未删除）。未找到返回 ErrCircleNotFound。
@@ -26,6 +38,24 @@ type CircleRepository interface {
 	ExistsBySlug(ctx context.Context, slug string) (bool, error)
 	// Create 创建圈子并自动将创建者设为圈主（事务）。
 	Create(ctx context.Context, circle *Circle) error
+	// Update 更新圈子资料的可编辑字段（CircleUpdateFields 中 nil 字段跳过）。
+	// 圈子不存在返回 ErrCircleNotFound；唯一索引冲突返回 ErrCircleNameExists/ErrCircleSlugExists。
+	Update(ctx context.Context, circleID uuid.UUID, fields CircleUpdateFields) error
+}
+
+// CircleUpdateFields 圈子资料的可编辑字段（值对象，nil = 不更新该字段）。
+//
+// Slug 传空串表示清除（repo 落 NULL，避开 slug 唯一索引对空串的碰撞）；
+// CategoryID 指向 uuid.Nil 表示清除分类。
+type CircleUpdateFields struct {
+	Name        *string
+	Slug        *string
+	AvatarURL   *string
+	CoverURL    *string
+	Description *string
+	Rule        *string
+	CategoryID  *uuid.UUID
+	JoinType    *int16
 }
 
 // MemberRepository 是圈子成员关系的持久化接口。
@@ -40,6 +70,23 @@ type MemberRepository interface {
 	JoinCircle(ctx context.Context, circleID, userID uuid.UUID, joinType int16) (*CircleMember, error)
 	// LeaveCircle 用户退出圈子（圈主不能退）。
 	LeaveCircle(ctx context.Context, circleID, userID uuid.UUID) error
+	// ListMembers 管理端成员列表（keyset 分页，排序对齐 idx_member_circle_role：
+	// role DESC, create_time DESC, id DESC）。role/status 传 -1 表示不过滤。
+	// userIDs 非空时按成员用户集合过滤（成员搜索场景：关键词先经 user 域搜索
+	// 解析为至多百余个用户 ID；circle_member 对 (circle_id, user_id) 唯一，
+	// 故过滤后至多 |userIDs| 行，游标翻页仍精确）。
+	// 返回 (成员, 下一页游标)，游标空串表示没有更多；游标非法返回 ErrInvalidCursor 包装错误。
+	// 查询前惰性解除已过期的禁言（与 GetMember 自愈一致，保证管理列表状态准确）。
+	ListMembers(ctx context.Context, circleID uuid.UUID, role, status int16, userIDs []uuid.UUID, cursor string, size int) ([]CircleMember, string, error)
+	// UpdateMemberRole 角色变更（CAS：WHERE role=fromRole AND status=normal）。
+	// 目标状态不符或并发变更（0 行受影响）返回 ErrMemberStateConflict。
+	UpdateMemberRole(ctx context.Context, circleID, userID uuid.UUID, fromRole, toRole int16) error
+	// UpdateMemberStatus 状态迁移（CAS：WHERE status=fromStatus，0 行受影响返回 ErrMemberStateConflict）。
+	// toStatus=禁言时写 muteEndTime；其余迁移统一清空 mute_end_time。
+	UpdateMemberStatus(ctx context.Context, circleID, userID uuid.UUID, fromStatus, toStatus int16, muteEndTime time.Time) error
+	// TransferOwner 转让圈主（单事务：from 降为普通成员、to 升为圈主）。
+	// 任一条前置状态不满足则整体回滚并返回 ErrMemberStateConflict。
+	TransferOwner(ctx context.Context, circleID, fromUser, toUser uuid.UUID) error
 }
 
 // CircleBaseCache 圈子基础信息缓存（不含统计）。
@@ -48,6 +95,8 @@ type CircleBaseCache interface {
 	GetBase(ctx context.Context, circleID uuid.UUID) (*CircleBaseInfo, error)
 	// SetBase 写入圈子基础信息缓存。
 	SetBase(ctx context.Context, circleID uuid.UUID, info *CircleBaseInfo) error
+	// DeleteBase 删除圈子基础信息缓存（编辑圈子资料后失效）。
+	DeleteBase(ctx context.Context, circleID uuid.UUID) error
 }
 
 // CircleStatsCache 圈子统计信息缓存（member_count/post_count/hot）。

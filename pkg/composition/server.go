@@ -134,6 +134,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	replySvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
 	// comment -> aiagent：评论创建后触发关键词机器人（同步回调、内部异步执行）。
 	commentSvc.SetAgentTrigger(&commentAgentTrigger{delegate: replySvc})
+	// post -> aiagent：发帖 @机器人 触发回复（同步回调、内部异步执行）。
+	postSvc.SetAgentTrigger(&postAgentTrigger{delegate: replySvc})
 
 	// 注册路由
 	registerCategory(root, deps, authCheck, OptionalLoginFn)

@@ -155,3 +155,23 @@ func (b *commentAgentTrigger) OnCommentCreated(postID, commentID, userID uuid.UU
 
 // 编译期保证：触发桥接器满足 comment 领域端口。
 var _ commentapp.AgentReplyTrigger = (*commentAgentTrigger)(nil)
+
+// postAgentTrigger 桥接 post.AgentPostTrigger -> aiagent.ReplyService.OnPostMentioned。
+//
+// 同步回调、立即返回（ReplyService 内部 goroutine 异步执行 + recover），
+// 不向发帖链路传播任何错误。
+type postAgentTrigger struct {
+	delegate agentapp.ReplyService
+}
+
+// OnPostMentioned 发帖 @提及 后的机器人触发入口。
+func (b *postAgentTrigger) OnPostMentioned(postID, authorID uuid.UUID, mentionUserIDs []uuid.UUID) {
+	b.delegate.OnPostMentioned(agentapp.PostMentionEvent{
+		PostID:         postID,
+		UserID:         authorID,
+		MentionUserIDs: mentionUserIDs,
+	})
+}
+
+// 编译期保证：触发桥接器满足 post 领域端口。
+var _ postapp.AgentPostTrigger = (*postAgentTrigger)(nil)
