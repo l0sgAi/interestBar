@@ -117,14 +117,13 @@ func SearchPosts(keyword string, circleID uuid.UUID, size int, searchAfter []int
 			},
 		}
 
-		// 添加关键字搜索条件
+		// 添加关键字搜索条件：bool should 召回（分词容错 + title.keyword 子串包含，
+		// 见 fuzzyShouldClauses），title 权重是 summary 的 3 倍
 		searchConditions := []map[string]interface{}{
 			{
-				"multi_match": map[string]interface{}{
-					"query":    keyword,
-					"fields":   []string{"title^3", "summary^1"},
-					"type":     "best_fields",
-					"operator": "or",
+				"bool": map[string]interface{}{
+					"should":               fuzzyShouldClauses(keyword, "title", "summary"),
+					"minimum_should_match": 1,
 				},
 			},
 		}
@@ -225,9 +224,10 @@ func SearchPostsByIDs(postIDs []string, size int) (*PostListResponse, error) {
 
 // SearchPostsByIDsAndKeyword 在给定 ID 集合内按关键字搜索帖子(供 history「最近浏览」关键字搜索用)。
 //
-// 与 SearchPostsByIDs 的差异:多一层 multi_match(title^3 / summary) 关键字过滤,
-// 结果按 _score desc, id desc 排序(关键字相关性优先),用 from/size offset 分页
-// (ID 集合 ≤500,offset 分页廉价)。失效帖(deleted/status)静默过滤。
+// 与 SearchPostsByIDs 的差异:多一层关键字过滤(bool should:分词容错 + title.keyword
+// 子串包含,见 fuzzyShouldClauses;title 权重 3 于 summary),结果按 _score desc, id desc
+// 排序(关键字相关性优先),用 from/size offset 分页(ID 集合 ≤500,offset 分页廉价)。
+// 失效帖(deleted/status)静默过滤。
 //
 // postIDs/keyword 任一为空 → 空结果(调用方已保证非空,此处防御)。
 func SearchPostsByIDsAndKeyword(postIDs []string, keyword string, size, offset int) (*PostListResponse, error) {
@@ -246,11 +246,9 @@ func SearchPostsByIDsAndKeyword(postIDs []string, keyword string, size, offset i
 			"bool": map[string]interface{}{
 				"must": []map[string]interface{}{
 					{"terms": map[string]interface{}{"id": postIDs}},
-					{"multi_match": map[string]interface{}{
-						"query":    keyword,
-						"fields":   []string{"title^3", "summary^1"},
-						"type":     "best_fields",
-						"operator": "or",
+					{"bool": map[string]interface{}{
+						"should":               fuzzyShouldClauses(keyword, "title", "summary"),
+						"minimum_should_match": 1,
 					}},
 					{"term": map[string]interface{}{"deleted": 0}},
 					{"term": map[string]interface{}{"status": 1}},
@@ -357,8 +355,8 @@ func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly boo
 			"sort": sortRules,
 		}
 	} else {
-		// 有关键字时，使用 multi_match 进行加权搜索
-		// title 权重是 summary 的 3 倍，fuzziness=AUTO 容忍拼写错误，按_score排序
+		// 有关键字时：bool should 召回（分词容错 + title.keyword 子串包含，
+		// 见 fuzzyShouldClauses），title 权重是 summary 的 3 倍，按 _score 排序
 		sortWithScore := []map[string]interface{}{
 			{
 				"_score": map[string]interface{}{
@@ -375,12 +373,9 @@ func searchUserPostsInternal(userID uuid.UUID, keyword string, publishedOnly boo
 		// 添加关键字搜索条件
 		searchConditions := []map[string]interface{}{
 			{
-				"multi_match": map[string]interface{}{
-					"query":     keyword,
-					"fields":    []string{"title^3", "summary^1"},
-					"type":      "best_fields",
-					"operator":  "or",
-					"fuzziness": "AUTO",
+				"bool": map[string]interface{}{
+					"should":               fuzzyShouldClauses(keyword, "title", "summary"),
+					"minimum_should_match": 1,
 				},
 			},
 		}

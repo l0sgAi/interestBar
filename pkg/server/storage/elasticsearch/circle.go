@@ -89,8 +89,9 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 			"sort": sortRules,
 		}
 	} else {
-		// 有关键字时，使用 multi_match 进行加权搜索
-		// name 权重是 description 的 3 倍，按_score排序
+		// 有关键字时：bool should 召回（分词容错 + name.keyword 子串包含，
+		// 见 fuzzyShouldClauses），name 权重是 description 的 3 倍，按 _score 排序。
+		// should 内 match_phrase/name.keyword 精确命中仅作加分（minimum_should_match=0）。
 		sortWithScore := []map[string]interface{}{
 			{
 				"_score": map[string]interface{}{
@@ -109,11 +110,9 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 				"bool": map[string]interface{}{
 					"must": []map[string]interface{}{
 						{
-							"multi_match": map[string]interface{}{
-								"query":    keyword,
-								"fields":   []string{"name^3", "description^1"},
-								"type":     "best_fields",
-								"operator": "or",
+							"bool": map[string]interface{}{
+								"should":               fuzzyShouldClauses(keyword, "name", "description"),
+								"minimum_should_match": 1,
 							},
 						},
 						{
@@ -255,8 +254,8 @@ func SearchMyCircles(circleIDs []uuid.UUID, keyword string, size int, searchAfte
 			"sort": sortRules,
 		}
 	} else {
-		// 有关键字时，使用 multi_match 进行加权搜索
-		// name 权重是 description 的 3 倍，按_score排序
+		// 有关键字时：bool should 召回（分词容错 + name.keyword 子串包含，
+		// 见 fuzzyShouldClauses），与公开圈子搜索同一匹配语义。
 		sortWithScore := []map[string]interface{}{
 			{
 				"_score": map[string]interface{}{
@@ -280,11 +279,9 @@ func SearchMyCircles(circleIDs []uuid.UUID, keyword string, size int, searchAfte
 							},
 						},
 						{
-							"multi_match": map[string]interface{}{
-								"query":    keyword,
-								"fields":   []string{"name^3", "description^1"},
-								"type":     "best_fields",
-								"operator": "or",
+							"bool": map[string]interface{}{
+								"should":               fuzzyShouldClauses(keyword, "name", "description"),
+								"minimum_should_match": 1,
 							},
 						},
 						{

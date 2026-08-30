@@ -208,6 +208,9 @@ keyset。要正确翻页必须先拿到**完整候选用户集**再交集排序;
 | 位置 | 改动 |
 |---|---|
 | `server/storage/elasticsearch/user.go` | 关键词分支改 bool should 三路(username fuzziness AUTO + username.keyword wildcard 子串 + email match);查询构建抽为 `buildUserSearchQuery`;`escapeWildcard` 防通配注入 |
+| `server/storage/elasticsearch/fuzzy_query.go` | 新增共享 helper `fuzzyShouldClauses`(分词容错 + 主字段 .keyword wildcard 子串);`escapeWildcard` 收敛于此 |
+| `server/storage/elasticsearch/circle.go` | SearchCircles / SearchMyCircles 关键词分支改 `fuzzyShouldClauses(keyword,"name","description")`,精确命中 boost(should match_phrase/name.keyword)保留 |
+| `server/storage/elasticsearch/post.go` | SearchPosts / SearchPostsByIDsAndKeyword / searchUserPostsInternal 关键词分支改 `fuzzyShouldClauses(keyword,"title","summary")` |
 | `user/application/service.go` | `SearchBriefs` 签名加 `total int64` 返回值 |
 | `circle/application/service.go` | circle 域 UserFacade.SearchBriefs 签名同步 |
 | `composition/facade_bridges.go` | circleUserFacade.SearchBriefs 透传 total |
