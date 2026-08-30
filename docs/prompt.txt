@@ -1,3 +1,9 @@
 以下是coderabbitai提出的代码审查意见，首先检查审查意见是否合理，是否有必要修复，如果有必要修复，设计最佳修复方案并实施优化，caveman mode：
 
 编译报错原因分析，分析完成后规划最佳修复方案供我审查，先不要生成代码，caveman mode：
+
+帮我实现接口
+
+先使用最佳方式规划实施计划，整理并输出需要权衡的关键确认项，待我在下一轮对话统一回复，使用backend-constraints-skill执行实施规划，caveman mode
+
+如果确认完毕，使用backend-constraints-skill执行实施规划，caveman mode，以最佳方式执行实施

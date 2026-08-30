@@ -23,6 +23,12 @@ type CommentRepository interface {
 	IsLiked(ctx context.Context, userID, commentID uuid.UUID) (bool, error)
 	// BatchCheckLiked 批量检查用户是否点赞了多条评论（DB 回源用）。
 	BatchCheckLiked(ctx context.Context, userID uuid.UUID, commentIDs []uuid.UUID) (map[uuid.UUID]bool, error)
+	// CreateMentions 批量写入评论 @提及 名单（发评论时的最终落库名单）。
+	// 名单须先经 application 层校验（存在/去自/截断）；重复行幂等忽略。
+	CreateMentions(ctx context.Context, commentID uuid.UUID, userIDs []uuid.UUID) error
+	// GetMentionUserIDsByCommentIDs 批量获取评论的提及用户ID（按提及写入顺序）。
+	// 返回以 commentID 为 key 的映射；无提及的评论不出现在 map 中。
+	GetMentionUserIDsByCommentIDs(ctx context.Context, commentIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
 }
 
 // CommentStatsCache 评论统计信息缓存（like_count）。
@@ -51,4 +57,11 @@ type CommentEventPublisher interface {
 	// PublishCommentInteraction 发布评论者对帖子的 CF 互动（weight=comment）。
 	// 由 CreateComment 调用（有 userID + postID；PublishCommentHot 不带 userID 故单独方法）。
 	PublishCommentInteraction(ctx context.Context, userID, postID uuid.UUID) error
+	// PublishCommentNotice 发布评论通知事件（消息中心）。
+	// isReply=false → comment_post（接收人=帖子作者）；isReply=true → reply_comment
+	// （接收人=被回复评论作者）。接收人均由 consumer 反查解析。
+	PublishCommentNotice(ctx context.Context, userID, postID, commentID uuid.UUID, isReply bool, snippet string) error
+	// PublishMentionNotice 发布 @提及 通知事件（消息中心）。
+	// mentionUserIDs 由调用方校验（存在性/去自/截断）后传入；commentID 可空（帖子提及）。
+	PublishMentionNotice(ctx context.Context, actorID uuid.UUID, postID, commentID *uuid.UUID, mentionUserIDs []uuid.UUID, snippet string) error
 }

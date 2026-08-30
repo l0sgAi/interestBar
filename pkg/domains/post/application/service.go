@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"interestBar/pkg/conf"
 	"interestBar/pkg/domains/post/domain"
 	"interestBar/pkg/logger"
 	"interestBar/pkg/server/utils"
@@ -26,6 +27,16 @@ type UserBrief struct {
 	ID        string
 	Username  string
 	AvatarURL string
+}
+
+// MentionVO 帖子 @提及 用户视图（详情接口 mentions 数组元素）。
+//
+// username 为当前用户名（发帖时可能不同）：前端与正文 token 做大小写不敏感
+// 整名比对，改名后旧内容可能匹配不上（不建链、不会错链），为契约内边界。
+type MentionVO struct {
+	ID        string `json:"id"`
+	Username  string `json:"username"`
+	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
 // UserFacade post 领域需要的 user 查询接口。
@@ -68,6 +79,16 @@ type CircleStatusChecker interface {
 // CirclePostCountPort 圈子帖子计数端口（发帖后递增圈子帖子计数）。
 type CirclePostCountPort interface {
 	IncrPostCount(ctx context.Context, circleID uuid.UUID) error
+}
+
+// AgentPostTrigger AI 机器人回复触发端口（composition 桥接 aiagent.ReplyService）。
+//
+// 已发布帖子的 @提及 落库后同步回调；实现方必须立即返回（内部异步执行），
+// 不向发帖链路传播任何错误。
+type AgentPostTrigger interface {
+	// OnPostMentioned 发帖 @提及 触发入口。
+	// mentionUserIDs 为已校验落库的最终名单；authorID 为发帖人。
+	OnPostMentioned(postID, authorID uuid.UUID, mentionUserIDs []uuid.UUID)
 }
 
 // ===== 搜索结果 DTO =====
@@ -176,17 +197,22 @@ type PostDetailVO struct {
 	AuthorAvatar  string                `json:"author_avatar"`
 	IsLiked       bool                  `json:"is_liked"`
 	IsCollected   bool                  `json:"is_collected"`
+
+	// @提及 用户列表（发帖时落库的最终名单，仅含未注销用户）。
+	// 缺失/为空时前端回退文本反查建链，不报错。
+	Mentions []MentionVO `json:"mentions"`
 }
 
 // CreatePostInput 发帖入参。
 type CreatePostInput struct {
-	CircleID   uuid.UUID
-	Title      string
-	Content    string
-	Summary    string
-	Type       int16
-	MediaExtra []string
-	Status     int16
+	CircleID       uuid.UUID
+	Title          string
+	Content        string
+	Summary        string
+	Type           int16
+	MediaExtra     []string
+	Status         int16
+	MentionUserIDs []uuid.UUID // @提及用户（前端选人传入；后端校验存在性/去自/截断）
 }
 
 // PostService 是 post 领域的应用服务接口。
@@ -219,6 +245,9 @@ type PostService interface {
 	// GetPostMeta 获取帖子元信息（供 comment/like 领域校验用）。
 	// 未找到返回 nil, nil。
 	GetPostMeta(ctx context.Context, postID uuid.UUID) (*PostMeta, error)
+	// GetPostBrief 获取帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
+	// 未找到返回 nil, nil。
+	GetPostBrief(ctx context.Context, postID uuid.UUID) (*PostBrief, error)
 	// RestoreStatsAndIncrCommentCount 恢复帖子统计缓存（如果不存在），
 	// 然后递增帖子评论计数（Redis Hash + Redpanda 异步持久化）。
 	// 供 comment 领域发评论后调用。
@@ -241,6 +270,8 @@ type PostService interface {
 	SetCollectCache(c domain.PostCollectCache)
 	// SetHistoryRecorder 注入浏览历史记录器（详情页浏览 async 回调用）。
 	SetHistoryRecorder(r domain.HistoryRecorder)
+	// SetAgentTrigger 注入 AI 机器人回复触发端口（未注入则发帖 @机器人 不触发回复）。
+	SetAgentTrigger(t AgentPostTrigger)
 }
 
 // PostMeta 帖子元信息（供 comment/like 领域校验用）。
@@ -250,6 +281,16 @@ type PostMeta struct {
 	ID     uuid.UUID
 	Status int16 // 帖子状态
 	IsLock int16 // 是否锁定
+}
+
+// PostBrief 帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
+type PostBrief struct {
+	ID       uuid.UUID
+	Title    string
+	Summary  string
+	Status   int16 // 帖子状态
+	IsLock   int16 // 是否锁定
+	AuthorID uuid.UUID
 }
 
 type postServiceImpl struct {
@@ -265,6 +306,7 @@ type postServiceImpl struct {
 	statusCheck   CircleStatusChecker
 	postCountPort CirclePostCountPort
 	historyRec    domain.HistoryRecorder
+	agentTrigger  AgentPostTrigger
 }
 
 // NewPostService 构造 PostService。
@@ -297,11 +339,12 @@ func (s *postServiceImpl) SetStatusChecker(c CircleStatusChecker)      { s.statu
 func (s *postServiceImpl) SetPostCountPort(p CirclePostCountPort)      { s.postCountPort = p }
 func (s *postServiceImpl) SetCollectCache(c domain.PostCollectCache)   { s.collectCache = c }
 func (s *postServiceImpl) SetHistoryRecorder(r domain.HistoryRecorder) { s.historyRec = r }
+func (s *postServiceImpl) SetAgentTrigger(t AgentPostTrigger)          { s.agentTrigger = t }
 
 // CreatePost 创建帖子。
 //
-// 与旧 controller.CreatePost 行为一致：
-//  1. 默认 type=1(图文)，默认 status=2(审核中)；
+// 与旧 controller.CreatePost 行为一致（除默认状态外）：
+//  1. 默认 type=1(图文)；默认 status=1(已发布)，原为 2(审核中)——见下方 TODO；
 //  2. 非草稿校验 circle_id/title 非空；
 //  3. 校验成员身份与状态（pending/muted/banned）；
 //  4. 校验圈子可用性；
@@ -315,7 +358,9 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	}
 	postStatus := input.Status
 	if postStatus == 0 {
-		postStatus = domain.PostStatusReviewing
+		// TODO(review-flow): 审核流未上线，新帖暂直接置为已发布；
+		// 审核能力就绪后恢复为 domain.PostStatusReviewing。
+		postStatus = domain.PostStatusPublished
 	}
 
 	// 非草稿校验
@@ -394,7 +439,70 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 		}
 	}
 
+	// @提及：校验一次得到最终名单 → 落库（不区分状态，草稿正文同样含提及）→
+	// 仅已发布按同一名单发通知（草稿/审核中帖子不应对外产生通知）。
+	// 落库/通知均为 best-effort，不阻断发帖；通知名单 == 落库名单。
+	if mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs); len(mentionIDs) > 0 {
+		if err := s.repo.CreateMentions(ctx, post.ID, mentionIDs); err != nil {
+			logger.Log.Error("Failed to save post mentions: " + err.Error())
+		}
+		if postStatus == domain.PostStatusPublished && s.publisher != nil {
+			if err := s.publisher.PublishMentionNotice(ctx, userID, post.ID, mentionIDs, title); err != nil {
+				logger.Log.Error("Failed to publish post mention notice: " + err.Error())
+			}
+		}
+		// AI 机器人触发：与通知同一门槛（仅已发布）、同一名单；
+		// 同步回调立即返回，内部异步执行，不向发帖链路传播错误。
+		if postStatus == domain.PostStatusPublished && s.agentTrigger != nil {
+			s.agentTrigger.OnPostMentioned(post.ID, userID, mentionIDs)
+		}
+	}
+
 	return post.ID, nil
+}
+
+// filterMentionUserIDs 校验 @提及 列表：去重 → 去掉自己/Nil → 校验用户存在 → 按上限截断。
+// 用户查询失败时降级为 nil（不发通知），不阻断主流程。
+func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid.UUID, raw []uuid.UUID) []uuid.UUID {
+	seen := make(map[uuid.UUID]struct{}, len(raw))
+	ids := make([]uuid.UUID, 0, len(raw))
+	for _, id := range raw {
+		if id == uuid.Nil || id == actorID {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	if s.userFacade == nil {
+		return nil
+	}
+	briefs, err := s.userFacade.GetBriefs(ctx, toStrings(ids))
+	if err != nil {
+		logger.Log.Error("Failed to validate mention users: " + err.Error())
+		return nil
+	}
+	valid := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := briefs[id.String()]; ok {
+			valid = append(valid, id)
+		}
+	}
+
+	max := conf.Config.Notice.MentionMax
+	if max <= 0 {
+		max = 10
+	}
+	if len(valid) > max {
+		valid = valid[:max]
+	}
+	return valid
 }
 
 // checkMemberStatus 检查成员状态是否允许发帖。
@@ -433,25 +541,34 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	}
 
 	// 权限：作者可看所有状态；其他人只能看已发布
+	// 匿名（userID==uuid.Nil）天然走"非作者"分支，只能看已发布帖——符合预期。
 	if userID != post.UserID && post.Status != domain.PostStatusPublished {
 		return nil, domain.ErrPostNotFound
 	}
 
-	// 点赞状态（缓存优先，miss 回源 DB）
-	isLiked := s.checkLiked(ctx, userID, postID)
+	// 访客降级：匿名（userID==uuid.Nil）跳过交互态查询与浏览计数，避免：
+	//   1. checkLiked/checkCollected 对 uuid.Nil 做无意义 DB/Redis 查询；
+	//   2. asyncIncrementView 把 uuid.Nil 写入 user:view:posts:{00000000-...} 污染历史池
+	//      + 以 uuid.Nil 作为 IncrViewCount 的去重 key。
+	// 登录用户走完整路径。
+	var isLiked, isCollected bool
+	if userID != uuid.Nil {
+		// 点赞状态（缓存优先，miss 回源 DB）
+		isLiked = s.checkLiked(ctx, userID, postID)
 
-	// 收藏状态（缓存优先，miss 回源 DB）
-	isCollected := s.checkCollected(ctx, userID, postID)
+		// 收藏状态（缓存优先，miss 回源 DB）
+		isCollected = s.checkCollected(ctx, userID, postID)
 
-	// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Log.Error(fmt.Sprintf("Panic in asyncIncrementView: %v", r))
-			}
+		// 异步增加浏览量（独立 goroutine，需自带 panic 恢复，避免拖垮服务）
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Log.Error(fmt.Sprintf("Panic in asyncIncrementView: %v", r))
+				}
+			}()
+			s.asyncIncrementView(postID, userID)
 		}()
-		s.asyncIncrementView(postID, userID)
-	}()
+	}
 
 	// 查发帖人信息
 	var authorName, authorAvatar string
@@ -477,6 +594,9 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 		IsCollected: isCollected,
 	}
 
+	// @提及 用户列表（落库名单 → GetBriefs 过滤未注销；失败置空数组，前端回退文本反查）
+	vo.Mentions = s.assembleMentions(ctx, postID)
+
 	// 用 Redis 实时统计覆盖 DB 值（全 4 字段）；缓存缺失则用 DB 兜底（值已在 vo）并回种 Redis。
 	// 回种用 HSetNX：async 浏览量 goroutine 会 HINCRBY view_count，普通 HSet 会 clobber 它的 +1。
 	if stats, _ := s.statsCache.Get(ctx, postID); stats != nil {
@@ -492,6 +612,34 @@ func (s *postServiceImpl) GetPostDetail(ctx context.Context, userID, postID uuid
 	}
 
 	return vo, nil
+}
+
+// assembleMentions 组装帖子 @提及 用户列表（详情接口回传）。
+//
+// 落库名单 → UserFacade 批量取精简视图（内部过滤已注销/已删除用户）→ VO。
+// 任一环节失败返回空切片（非 nil，前端按"缺失/空数组回退文本反查"处理，不报错）。
+func (s *postServiceImpl) assembleMentions(ctx context.Context, postID uuid.UUID) []MentionVO {
+	mentionIDs, err := s.repo.GetMentionUserIDsByPostIDs(ctx, []uuid.UUID{postID})
+	if err != nil {
+		logger.Log.Error("Failed to get post mentions: " + err.Error())
+		return []MentionVO{}
+	}
+	ids := mentionIDs[postID]
+	if len(ids) == 0 || s.userFacade == nil {
+		return []MentionVO{}
+	}
+	briefs, err := s.userFacade.GetBriefs(ctx, toStrings(ids))
+	if err != nil {
+		logger.Log.Error("Failed to get mention user briefs: " + err.Error())
+		return []MentionVO{}
+	}
+	mentions := make([]MentionVO, 0, len(ids))
+	for _, id := range ids {
+		if b, ok := briefs[id.String()]; ok {
+			mentions = append(mentions, MentionVO{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL})
+		}
+	}
+	return mentions
 }
 
 // checkLiked 检查点赞状态（缓存优先，miss 回源 DB + 回填）。
@@ -955,6 +1103,25 @@ func (s *postServiceImpl) GetPostMeta(ctx context.Context, postID uuid.UUID) (*P
 		ID:     post.ID,
 		Status: post.Status,
 		IsLock: post.IsLock,
+	}, nil
+}
+
+// GetPostBrief 获取帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
+func (s *postServiceImpl) GetPostBrief(ctx context.Context, postID uuid.UUID) (*PostBrief, error) {
+	post, err := s.repo.GetByID(ctx, postID)
+	if err != nil {
+		if err == domain.ErrPostNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &PostBrief{
+		ID:       post.ID,
+		Title:    post.Title,
+		Summary:  post.Summary,
+		Status:   post.Status,
+		IsLock:   post.IsLock,
+		AuthorID: post.UserID,
 	}, nil
 }
 

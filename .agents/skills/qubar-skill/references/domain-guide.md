@@ -65,7 +65,7 @@
 - 缓存：`user:info:{id}`（zstd, 30min）。
 
 ### category（`Category`，`domains.category`）
-- 层级（parent_id），种子 ID 固定（`db.md:117`）。Service：`GetCategories`（status=shown）。无跨域依赖。
+- 层级（parent_id），种子 ID 固定（`docs/pgsql-ddl/circle.md`）。Service：`GetCategories`（status=shown）。无跨域依赖。
 
 ### circle ⭐（`Circle`+`CircleMember`）
 - Service（`application/service.go:261`）：`CreateCircle/GetCircleDetail(cache+stats+member)/JoinCircle/LeaveCircle/

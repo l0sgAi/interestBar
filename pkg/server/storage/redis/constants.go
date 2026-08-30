@@ -198,6 +198,21 @@ func GetUserInterestCirclesKey(userID uuid.UUID) string {
 	return UserInterestCirclesPrefix + userID.String()
 }
 
+// NoticeUnreadPrefix 用户未读通知计数器 key 前缀。
+// 完整 key 格式: notice:unread:{user_id}
+// String 计数器: NotificationEventConsumer upsert 通知后 INCRBY；
+// /notice/read 按实际已读行数 DECRBY(floor 0)；/notice/read-all SET 0；
+// 读 miss 时回源 DB COUNT 回填。TTL 24h 滚动——到期 recount 校正 INCRBY/DECRBY 漂移(软信号)。
+const NoticeUnreadPrefix = "notice:unread:"
+
+// NoticeUnreadTTL 未读计数器 TTL（INCRBY/SET 时滚动续期）。
+const NoticeUnreadTTL = 24 * time.Hour
+
+// GetNoticeUnreadKey 获取用户未读通知计数器的完整 key。
+func GetNoticeUnreadKey(userID uuid.UUID) string {
+	return NoticeUnreadPrefix + userID.String()
+}
+
 // GetPostViewDedupeKey 获取帖子浏览去重 key
 func GetPostViewDedupeKey(postID, userID uuid.UUID) string {
 	return fmt.Sprintf("%s%s:%s", PostViewDedupePrefix, postID.String(), userID.String())
@@ -291,8 +306,10 @@ func GetPwdResetRateKey(email string) string {
 
 // TrendingPrefix 热点榜单 ZSET key 前缀。
 // 完整 key 格式: trending:{dimension}:{window}
-//   dimension = post | circle | user
-//   window    = 24h | 7d
+//
+//	dimension = post | circle | user
+//	window    = 24h | 7d
+//
 // ZSET: member=实体 ID(uuid 字符串), score=热度（post 自身 hot / 圈子&用户为窗口内 Σhot）。
 // 由 TrendingRankSyncer 周期性 ZADD 覆盖重写；不设 TTL（job 覆盖刷新），
 // 不走 GETDEL（与 circle:hot Δ 累加器语义不同——那是增量累加待落库，本榜是全量重算快照）。

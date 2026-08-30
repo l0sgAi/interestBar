@@ -43,3 +43,41 @@ func (p *commentEventPublisherRedpanda) PublishCommentInteraction(ctx context.Co
 	}
 	return nil
 }
+
+// PublishCommentNotice 发布评论通知事件（消息中心，best-effort 不阻断主流程）。
+func (p *commentEventPublisherRedpanda) PublishCommentNotice(ctx context.Context, userID, postID, commentID uuid.UUID, isReply bool, snippet string) error {
+	_ = ctx
+	noticeType := redpanda.NoticeTypeCommentPost
+	if isReply {
+		noticeType = redpanda.NoticeTypeReplyComment
+	}
+	if err := redpanda.PublishNotificationEvent(redpanda.NotificationEventMessage{
+		Type:      noticeType,
+		ActorID:   userID,
+		PostID:    &postID,
+		CommentID: &commentID,
+		Snippet:   snippet,
+	}); err != nil {
+		logger.Log.Error("Failed to publish comment notification: " + err.Error())
+	}
+	return nil
+}
+
+// PublishMentionNotice 发布 @提及 通知事件（消息中心，best-effort 不阻断主流程）。
+func (p *commentEventPublisherRedpanda) PublishMentionNotice(ctx context.Context, actorID uuid.UUID, postID, commentID *uuid.UUID, mentionUserIDs []uuid.UUID, snippet string) error {
+	_ = ctx
+	if len(mentionUserIDs) == 0 {
+		return nil
+	}
+	if err := redpanda.PublishNotificationEvent(redpanda.NotificationEventMessage{
+		Type:           redpanda.NoticeTypeMention,
+		ActorID:        actorID,
+		PostID:         postID,
+		CommentID:      commentID,
+		MentionUserIDs: mentionUserIDs,
+		Snippet:        snippet,
+	}); err != nil {
+		logger.Log.Error("Failed to publish mention notification: " + err.Error())
+	}
+	return nil
+}

@@ -98,8 +98,8 @@ var Config *AppConfig
 ### 4.1 初始化（`pkg/server/storage/db/pgsql/connect.go`）
 - 全局 `var DB *gorm.DB`（`:14`）；`DBHolder`（`:20`）过渡期 DI 包装，`Get()` 返回全局 DB。
 - DSN 拼接；GORM 日志级别按 `log_mode`；`SetMaxIdleConns`/`SetMaxOpenConns`。
-- **无 AutoMigrate**（`:55` 注释）：schema 由 `docs/db.md` SQL 脚本管理，运行时角色（`qubar_web_app`）无 ALTER 权限。
-  **改表先改 `docs/db.md`，由 DB-owner 执行。**
+- **无 AutoMigrate**（`:55` 注释）：schema 由 `docs/pgsql-ddl/` SQL 脚本管理，运行时角色（`qubar_web_app`）无 ALTER 权限。
+  **改表先改 `docs/pgsql-ddl/` 对应领域文档，由 DB-owner 执行。**
 
 ### 4.2 表名（schema 限定）
 所有 `TableName()` 返回 `domains.*`：`domains.circle`/`domains.circle_member`/`domains.post`/`domains.post_like`/

@@ -24,6 +24,12 @@ type PostRepository interface {
 	// IncrCommentCount 同步递增帖子评论计数（DB UPDATE comment_count + 1）。
 	// 供 comment 领域发评论后调用，替代旧的 Redpanda 异步聚合。
 	IncrCommentCount(ctx context.Context, postID uuid.UUID) error
+	// CreateMentions 批量写入帖子 @提及 名单（发帖时的最终落库名单）。
+	// 名单须先经 application 层校验（存在/去自/截断）；重复行幂等忽略。
+	CreateMentions(ctx context.Context, postID uuid.UUID, userIDs []uuid.UUID) error
+	// GetMentionUserIDsByPostIDs 批量获取帖子的提及用户ID（按提及写入顺序）。
+	// 返回以 postID 为 key 的映射；无提及的帖子不出现在 map 中。
+	GetMentionUserIDsByPostIDs(ctx context.Context, postIDs []uuid.UUID) (map[uuid.UUID][]uuid.UUID, error)
 }
 
 // PostStatsCache 帖子统计信息缓存（view_count/comment_count/like_count 等）。
@@ -71,6 +77,9 @@ type PostCollectCache interface {
 type PostEventPublisher interface {
 	// PublishViewCount 发布浏览量变化事件。
 	PublishViewCount(ctx context.Context, postID uuid.UUID) error
+	// PublishMentionNotice 发布 @提及 通知事件（消息中心）。
+	// mentionUserIDs 由调用方校验（存在性/去自/截断）后传入；snippet 为帖子标题。
+	PublishMentionNotice(ctx context.Context, actorID, postID uuid.UUID, mentionUserIDs []uuid.UUID, snippet string) error
 }
 
 // PostStatistics 帖子统计信息。

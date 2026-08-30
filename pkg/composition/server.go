@@ -2,6 +2,9 @@
 package composition
 
 import (
+	agentapp "interestBar/pkg/domains/aiagent/application"
+	agentinfra "interestBar/pkg/domains/aiagent/infrastructure"
+	agenthttp "interestBar/pkg/domains/aiagent/interfaces/http"
 	authapp "interestBar/pkg/domains/auth/application"
 	authinfra "interestBar/pkg/domains/auth/infrastructure"
 	authhttp "interestBar/pkg/domains/auth/interfaces/http"
@@ -27,6 +30,9 @@ import (
 	likeapp "interestBar/pkg/domains/like/application"
 	likeinfra "interestBar/pkg/domains/like/infrastructure"
 	likehttp "interestBar/pkg/domains/like/interfaces/http"
+	noticeapp "interestBar/pkg/domains/notice/application"
+	noticeinfra "interestBar/pkg/domains/notice/infrastructure"
+	noticehttp "interestBar/pkg/domains/notice/interfaces/http"
 	postapp "interestBar/pkg/domains/post/application"
 	postinfra "interestBar/pkg/domains/post/infrastructure"
 	posthttp "interestBar/pkg/domains/post/interfaces/http"
@@ -34,11 +40,11 @@ import (
 	recommendinfra "interestBar/pkg/domains/recommend/infrastructure"
 	recommendhttp "interestBar/pkg/domains/recommend/interfaces/http"
 	storageapp "interestBar/pkg/domains/storage/application"
+	storageinfra "interestBar/pkg/domains/storage/infrastructure"
+	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
 	trendingapp "interestBar/pkg/domains/trending/application"
 	trendinginfra "interestBar/pkg/domains/trending/infrastructure"
 	trendinghttp "interestBar/pkg/domains/trending/interfaces/http"
-	storageinfra "interestBar/pkg/domains/storage/infrastructure"
-	storagehttp "interestBar/pkg/domains/storage/interfaces/http"
 	userapp "interestBar/pkg/domains/user/application"
 	userinfra "interestBar/pkg/domains/user/infrastructure"
 	userhttp "interestBar/pkg/domains/user/interfaces/http"
@@ -68,6 +74,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	likeSvc := newLikeService(deps)
 	collectSvc := newCollectService(deps)
 	historySvc := newHistoryService(deps)
+	noticeSvc := newNoticeService(deps)
 
 	// 互注跨领域 Facade
 	// circle 需要 user Facade + post 媒体查询器
@@ -97,6 +104,9 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	historySvc.SetPostFetcher(&historyPostFetcher{delegate: postSvc})
 	postSvc.SetHistoryRecorder(&postHistoryRecorder{delegate: historySvc})
 
+	// notice 需要 user Facade（通知列表 actor 批量组装）
+	noticeSvc.SetUserFacade(&noticeUserFacade{delegate: userFacade})
+
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
 	if logger.Log != nil {
@@ -113,31 +123,47 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	// 均为只读消费者。syncer 复用其 RebuildPool（反气泡重建逻辑）。
 	discoverSvc := newDiscoverService(postSvc, circleRepo, circleSvc)
 
+	// aiagent 跨域依赖：role 读取（user 缓存）+ 机器人账号创建（role=2）。
+	agentSvc := newAgentService(deps)
+	agentSvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
+	agentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
+	agentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
+
+	// aiagent 回复执行链路：LLM(eino) + 帖子摘要(post) + 评论创建(comment)。
+	replySvc := newAgentReplyService(deps, postSvc, commentSvc)
+	replySvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
+	// comment -> aiagent：评论创建后触发关键词机器人（同步回调、内部异步执行）。
+	commentSvc.SetAgentTrigger(&commentAgentTrigger{delegate: replySvc})
+	// post -> aiagent：发帖 @机器人 触发回复（同步回调、内部异步执行）。
+	postSvc.SetAgentTrigger(&postAgentTrigger{delegate: replySvc})
+
 	// 注册路由
-	registerCategory(root, deps, authCheck)
+	registerCategory(root, deps, authCheck, OptionalLoginFn)
 	registerStorage(root, deps, authCheck)
-	registerUser(root, userSvc, authCheck)
+	registerUser(root, userSvc, authCheck, OptionalLoginFn)
 	registerAuth(root, deps, authCheck)
-	registerCircle(root, circleSvc, authCheck)
-	registerPost(root, postSvc, authCheck)
-	registerComment(root, commentSvc, authCheck)
+	registerCircle(root, circleSvc, authCheck, OptionalLoginFn)
+	registerPost(root, postSvc, authCheck, OptionalLoginFn)
+	registerComment(root, commentSvc, authCheck, OptionalLoginFn)
 	registerLike(root, likeSvc, authCheck)
 	registerCollect(root, collectSvc, authCheck)
 	registerHistory(root, historySvc, authCheck)
-	registerRecommend(root, recommendSvc, authCheck)
-	registerTrending(root, trendingSvc, authCheck)
+	registerNotice(root, noticeSvc, authCheck)
+	registerRecommend(root, recommendSvc, authCheck, OptionalLoginFn)
+	registerTrending(root, trendingSvc, authCheck, OptionalLoginFn)
 	registerDiscover(root, discoverSvc, authCheck)
+	registerAgent(root, agentSvc, replySvc, authCheck)
 
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
 }
 
 // registerCategory 装配 category 领域。
-func registerCategory(root routing.RouterGroup, deps *Deps, authCheck routing.HandlerFunc) {
+func registerCategory(root routing.RouterGroup, deps *Deps, authCheck, optionalCheck routing.HandlerFunc) {
 	repo := categoryinfra.NewCategoryRepository(deps.DB.Get())
 	cache := categoryinfra.NewCategoryCache()
 	svc := categoryapp.NewCategoryService(repo, cache)
-	categoryhttp.RegisterRoutes(root, svc, authCheck)
+	categoryhttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerStorage 装配 storage 领域。
@@ -148,8 +174,8 @@ func registerStorage(root routing.RouterGroup, deps *Deps, authCheck routing.Han
 }
 
 // registerUser 装配 user 领域。
-func registerUser(root routing.RouterGroup, svc userapp.UserService, authCheck routing.HandlerFunc) {
-	userhttp.RegisterRoutes(root, svc, authCheck)
+func registerUser(root routing.RouterGroup, svc userapp.UserService, authCheck, optionalCheck routing.HandlerFunc) {
+	userhttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerAuth 装配 auth 领域。
@@ -165,18 +191,18 @@ func registerAuth(root routing.RouterGroup, deps *Deps, authCheck routing.Handle
 }
 
 // registerCircle 装配 circle 领域。
-func registerCircle(root routing.RouterGroup, svc circleapp.CircleService, authCheck routing.HandlerFunc) {
-	circlehttp.RegisterRoutes(root, svc, authCheck)
+func registerCircle(root routing.RouterGroup, svc circleapp.CircleService, authCheck, optionalCheck routing.HandlerFunc) {
+	circlehttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerPost 装配 post 领域。
-func registerPost(root routing.RouterGroup, svc postapp.PostService, authCheck routing.HandlerFunc) {
-	posthttp.RegisterRoutes(root, svc, authCheck)
+func registerPost(root routing.RouterGroup, svc postapp.PostService, authCheck, optionalCheck routing.HandlerFunc) {
+	posthttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerComment 装配 comment 领域。
-func registerComment(root routing.RouterGroup, svc commentapp.CommentService, authCheck routing.HandlerFunc) {
-	commenthttp.RegisterRoutes(root, svc, authCheck)
+func registerComment(root routing.RouterGroup, svc commentapp.CommentService, authCheck, optionalCheck routing.HandlerFunc) {
+	commenthttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // registerLike 装配 like 领域。
@@ -192,6 +218,20 @@ func registerCollect(root routing.RouterGroup, svc collectapp.CollectService, au
 // registerHistory 装配 history 领域。
 func registerHistory(root routing.RouterGroup, svc historyapp.HistoryService, authCheck routing.HandlerFunc) {
 	historyhttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// registerNotice 装配 notice 领域。
+func registerNotice(root routing.RouterGroup, svc noticeapp.NoticeService, authCheck routing.HandlerFunc) {
+	noticehttp.RegisterRoutes(root, svc, authCheck)
+}
+
+// newNoticeService 构造 NoticeService。
+//
+// user 跨领域依赖（actor 批量组装）通过 setter 注入（见 RegisterDomainRoutes）。
+func newNoticeService(deps *Deps) noticeapp.NoticeService {
+	repo := noticeinfra.NewNotificationRepository(deps.DB.Get())
+	cache := noticeinfra.NewNoticeUnreadCache()
+	return noticeapp.NewNoticeService(repo, cache)
 }
 
 // newRecommendService 构造 RecommendService。
@@ -212,8 +252,8 @@ func newRecommendService(postSvc postapp.PostService, circleSvc circleapp.Circle
 }
 
 // registerRecommend 装配 recommend 领域。
-func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendService, authCheck routing.HandlerFunc) {
-	recommendhttp.RegisterRoutes(root, svc, authCheck)
+func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendService, authCheck, optionalCheck routing.HandlerFunc) {
+	recommendhttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // newTrendingService 构造 TrendingService。
@@ -222,17 +262,17 @@ func registerRecommend(root routing.RouterGroup, svc recommendapp.RecommendServi
 // hydrator/checker/circle/user 为跨域桥接器（包 post/circle/user service + redispkg）。
 func newTrendingService(postSvc postapp.PostService, circleRepo circledomain.CircleRepository, userFacade userapp.UserFacade) trendingapp.TrendingService {
 	return trendingapp.NewTrendingService(
-		trendinginfra.NewBoardStore(),              // BoardStore
-		&trendingPostHydrator{delegate: postSvc},   // PostHydrator
-		&trendingInteractionChecker{},              // InteractionChecker
-		&trendingCircleLookup{repo: circleRepo},    // CircleLookup
-		&trendingUserLookup{delegate: userFacade},  // UserLookup
+		trendinginfra.NewBoardStore(),             // BoardStore
+		&trendingPostHydrator{delegate: postSvc},  // PostHydrator
+		&trendingInteractionChecker{},             // InteractionChecker
+		&trendingCircleLookup{repo: circleRepo},   // CircleLookup
+		&trendingUserLookup{delegate: userFacade}, // UserLookup
 	)
 }
 
 // registerTrending 装配 trending 领域。
-func registerTrending(root routing.RouterGroup, svc trendingapp.TrendingService, authCheck routing.HandlerFunc) {
-	trendinghttp.RegisterRoutes(root, svc, authCheck)
+func registerTrending(root routing.RouterGroup, svc trendingapp.TrendingService, authCheck, optionalCheck routing.HandlerFunc) {
+	trendinghttp.RegisterRoutes(root, svc, authCheck, optionalCheck)
 }
 
 // newDiscoverService 构造 DiscoverService。
@@ -241,11 +281,11 @@ func registerTrending(root routing.RouterGroup, svc trendingapp.TrendingService,
 // hydrator/checker/circle/seed/joinedCircles 为跨域桥接器（包 post/circle service + redispkg）。
 func newDiscoverService(postSvc postapp.PostService, circleRepo circledomain.CircleRepository, circleSvc circleapp.CircleService) discoverapp.DiscoverService {
 	return discoverapp.NewDiscoverService(
-		discoverinfra.NewDiscoverPoolStore(),        // DiscoverPoolStore
-		&discoverPostHydrator{delegate: postSvc},    // PostHydrator（复用 trending/recommend 同款桥接）
-		&discoverInteractionChecker{},              // InteractionChecker（stateless，直接调 redispkg）
-		&discoverCircleLookup{repo: circleRepo},    // CircleLookup（复用 trending 同款桥接）
-		&discoverSeedReader{},                      // SeedReader（直接调 redispkg，同 recommend infra）
+		discoverinfra.NewDiscoverPoolStore(),             // DiscoverPoolStore
+		&discoverPostHydrator{delegate: postSvc},         // PostHydrator（复用 trending/recommend 同款桥接）
+		&discoverInteractionChecker{},                    // InteractionChecker（stateless，直接调 redispkg）
+		&discoverCircleLookup{repo: circleRepo},          // CircleLookup（复用 trending 同款桥接）
+		&discoverSeedReader{},                            // SeedReader（直接调 redispkg，同 recommend infra）
 		&discoverJoinedCircleLookup{delegate: circleSvc}, // JoinedCircleLookup（复用 recommend 同款桥接）
 	)
 }
@@ -256,6 +296,12 @@ func newDiscoverService(postSvc postapp.PostService, circleRepo circledomain.Cir
 // 故 authCheck 用 OptionalLogin（有 token 解析、无/坏 token 放行），而非全局 RequireLogin。
 func registerDiscover(root routing.RouterGroup, svc discoverapp.DiscoverService, _ /*authCheck*/ routing.HandlerFunc) {
 	discoverhttp.RegisterRoutes(root, svc, OptionalLoginFn)
+}
+
+// registerAgent 装配 aiagent 领域（管理端机器人 CRUD + 手动触发回复，
+// role 校验在 service 层）。
+func registerAgent(root routing.RouterGroup, svc agentapp.AgentService, replySvc agentapp.ReplyService, authCheck routing.HandlerFunc) {
+	agenthttp.RegisterRoutes(root, svc, replySvc, authCheck)
 }
 
 // ===== Service 构造函数 =====
@@ -281,6 +327,26 @@ func newCircleService(deps *Deps) (circleapp.CircleService, circledomain.CircleR
 		circleRepo, memberRepo, baseCache, statsCache, joinedCache, searcher, publisher,
 	)
 	return svc, circleRepo, memberRepo
+}
+
+// newAgentService 构造 AgentService。
+//
+// user 跨领域依赖（role 读取 + 机器人账号创建）通过 setter 注入（见 RegisterDomainRoutes）。
+func newAgentService(deps *Deps) agentapp.AgentService {
+	repo := agentinfra.NewAgentRepository(deps.DB.Get())
+	return agentapp.NewAgentService(repo)
+}
+
+// newAgentReplyService 构造机器人回复执行服务（eino LLM + post/comment 跨域桥接，
+// 桥接器见 facade_bridges.go；role 读取 setter 注入见 RegisterDomainRoutes）。
+func newAgentReplyService(deps *Deps, postSvc postapp.PostService, commentSvc commentapp.CommentService) agentapp.ReplyService {
+	agentRepo := agentinfra.NewAgentRepository(deps.DB.Get())
+	replyLogRepo := agentinfra.NewReplyLogRepository(deps.DB.Get())
+	llm := agentinfra.NewLLMCaller()
+	svc := agentapp.NewReplyService(agentRepo, replyLogRepo, llm)
+	svc.SetPostReader(&agentPostReader{delegate: postSvc})
+	svc.SetCommentCreator(&agentCommentCreator{delegate: commentSvc})
+	return svc
 }
 
 func newPostService(deps *Deps) postapp.PostService {

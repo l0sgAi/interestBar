@@ -43,6 +43,13 @@ type UserFacade interface {
 	GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error)
 	// GetBrief 获取单个用户精简视图。未找到返回 nil, nil。
 	GetBrief(ctx context.Context, userID string) (*UserBrief, error)
+	// SearchBriefs 按关键字搜索用户精简视图（username 拼写容错 + email 分词匹配，
+	// 复用 ES 用户搜索链路）。返回按相关性排序的有序列表（最多 limit 个，
+	// limit<=0 或 >100 按 100 处理，与 ES SearchUsers 的 size 语义一致）
+	// 与命中总数 total（track_total_hits）；total > len(列表) 表示截断。
+	// keyword 为空返回空列表。
+	// 供跨领域"按用户名/邮箱过滤成员"类场景使用（如圈子成员管理搜索）。
+	SearchBriefs(ctx context.Context, keyword string, limit int) ([]UserBrief, int64, error)
 }
 
 // UserListItemVO 用户列表项（搜索结果用）。
@@ -58,9 +65,9 @@ type UserListItemVO struct {
 
 // UserSearchResult 用户搜索结果。
 type UserSearchResult struct {
-	Total       int64           `json:"total"`
-	Size        int             `json:"size"`
-	SearchAfter string          `json:"search_after"`
+	Total       int64            `json:"total"`
+	Size        int              `json:"size"`
+	SearchAfter string           `json:"search_after"`
 	Users       []UserListItemVO `json:"data"`
 }
 
@@ -79,13 +86,13 @@ type UpdateProfileInput struct {
 
 // UpdateProfileResult 修改资料的返回值。
 type UpdateProfileResult struct {
-	ID         uuid.UUID `json:"id"`
-	Username   string    `json:"username"`
-	Email      string    `json:"email"`
-	AvatarURL  string    `json:"avatar_url"`
-	Phone      string    `json:"phone"`
-	Gender     int       `json:"gender"`
-	Birthdate  *time.Time `json:"birthdate"`
+	ID        uuid.UUID  `json:"id"`
+	Username  string     `json:"username"`
+	Email     string     `json:"email"`
+	AvatarURL string     `json:"avatar_url"`
+	Phone     string     `json:"phone"`
+	Gender    int        `json:"gender"`
+	Birthdate *time.Time `json:"birthdate"`
 }
 
 // UserSearcher 是用户搜索的抽象（由 infrastructure 提供 ES 实现）。
@@ -111,8 +118,8 @@ type UserService interface {
 }
 
 type userServiceImpl struct {
-	repo    domain.UserRepository
-	cache   domain.UserCache
+	repo     domain.UserRepository
+	cache    domain.UserCache
 	searcher UserSearcher
 }
 
@@ -191,13 +198,39 @@ func (f *userFacadeAdapter) GetBrief(ctx context.Context, userID string) (*UserB
 	}, nil
 }
 
+// SearchBriefs 按关键字搜索用户精简视图（username 拼写容错 + email 分词匹配，
+// 复用 ES 用户搜索链路）。
+//
+// 直接映射 ES 结果（ID/Username/AvatarURL），不再回源刷新——调用方列表组装
+// 通常会再走 GetBriefs 拿新鲜展示信息，此处只承担"关键词 → 候选 ID 集"职责。
+// 返回命中总数 total（track_total_hits）：total > len(列表) 表示按 limit 截断，
+// 供调用方提示"细化关键词"。email 仅用于匹配，不落入 UserBrief（不向调用方暴露邮箱）。
+func (f *userFacadeAdapter) SearchBriefs(ctx context.Context, keyword string, limit int) ([]UserBrief, int64, error) {
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		return nil, 0, nil
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	res, err := f.svc.Search(ctx, keyword, limit, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	out := make([]UserBrief, 0, len(res.Users))
+	for _, u := range res.Users {
+		out = append(out, UserBrief{ID: u.ID, Username: u.Username, AvatarURL: u.AvatarURL})
+	}
+	return out, res.Total, nil
+}
+
 // GetByID 获取用户详情，先查缓存再回源 DB。
 //
 // 行为与旧 controller.GetUserDetail 一致：
-//   1. 先查缓存（命中且 status=1, deleted=0 直接返回）；
-//   2. 缓存未命中查 DB；
-//   3. 校验 status/deleted；
-//   4. 回写缓存（失败不影响主流程）。
+//  1. 先查缓存（命中且 status=1, deleted=0 直接返回）；
+//  2. 缓存未命中查 DB；
+//  3. 校验 status/deleted；
+//  4. 回写缓存（失败不影响主流程）。
 func (s *userServiceImpl) GetByID(ctx context.Context, userID uuid.UUID) (*domain.SysUser, error) {
 	// 1. 缓存
 	if cached, _ := s.cache.GetUser(ctx, userID); cached != nil {

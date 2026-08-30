@@ -45,6 +45,14 @@ func (p *likeEventPublisherRedpanda) PublishPostLike(ctx context.Context, userID
 		if err := redpanda.PublishPostInteraction(userID, postID, redpanda.InteractionLike, redpanda.InteractionWeightLike); err != nil {
 			logger.Log.Error("Failed to publish post_like interaction: " + err.Error())
 		}
+		// 通知：帖子被赞 → 帖子作者（接收人由 consumer 反查）。负向不通知不回收。
+		if err := redpanda.PublishNotificationEvent(redpanda.NotificationEventMessage{
+			Type:    redpanda.NoticeTypeLikePost,
+			ActorID: userID,
+			PostID:  &postID,
+		}); err != nil {
+			logger.Log.Error("Failed to publish post_like notification: " + err.Error())
+		}
 	}
 	return nil
 }
@@ -66,6 +74,15 @@ func (p *likeEventPublisherRedpanda) PublishCommentLike(ctx context.Context, use
 	if amount > 0 {
 		if err := redpanda.PublishPostInteraction(userID, postID, redpanda.InteractionCommentLike, redpanda.InteractionWeightCommentLike); err != nil {
 			logger.Log.Error("Failed to publish comment_like interaction: " + err.Error())
+		}
+		// 通知：评论被赞 → 评论作者（接收人由 consumer 反查）。负向不通知不回收。
+		if err := redpanda.PublishNotificationEvent(redpanda.NotificationEventMessage{
+			Type:      redpanda.NoticeTypeLikeComment,
+			ActorID:   userID,
+			PostID:    &postID,
+			CommentID: &commentID,
+		}); err != nil {
+			logger.Log.Error("Failed to publish comment_like notification: " + err.Error())
 		}
 	}
 	return nil

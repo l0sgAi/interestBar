@@ -42,6 +42,11 @@ func (c *circleBaseCacheRedis) SetBase(ctx context.Context, circleID uuid.UUID, 
 	return redispkg.SetJSONCompressed(key, info, circleBaseCacheTTL)
 }
 
+// DeleteBase 删除圈子基础信息缓存（编辑圈子资料后失效；TTL 24h 兜底残余）。
+func (c *circleBaseCacheRedis) DeleteBase(ctx context.Context, circleID uuid.UUID) error {
+	return redispkg.Client.Del(ctx, redispkg.GetCircleInfoKey(circleID)).Err()
+}
+
 // circleStatsCacheRedis 基于 Redis Hash 的 CircleStatsCache 实现。
 //
 // 复用 redispkg 的 CircleStatistics 类型与原子操作函数，保持与旧 controller

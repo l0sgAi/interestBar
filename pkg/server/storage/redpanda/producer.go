@@ -13,14 +13,15 @@ import (
 )
 
 var (
-	dialer                *kafka.Dialer
-	writer                *kafka.Writer
-	postWriter            *kafka.Writer
-	likeEventWriter       *kafka.Writer
-	collectEventWriter    *kafka.Writer
-	historyEventWriter    *kafka.Writer
-	postHotWriter         *kafka.Writer
-	postInteractionWriter *kafka.Writer
+	dialer                  *kafka.Dialer
+	writer                  *kafka.Writer
+	postWriter              *kafka.Writer
+	likeEventWriter         *kafka.Writer
+	collectEventWriter      *kafka.Writer
+	historyEventWriter      *kafka.Writer
+	postHotWriter           *kafka.Writer
+	postInteractionWriter   *kafka.Writer
+	notificationEventWriter *kafka.Writer
 )
 
 // InitRedpandaProducer 初始化Redpanda Producer
@@ -568,6 +569,73 @@ func ClosePostInteractionProducer() error {
 			return err
 		}
 		logger.Log.Info("Post interaction producer closed")
+	}
+	return nil
+}
+
+// ==================== 通知事件消息（消息中心） ====================
+
+// InitNotificationEventProducer 初始化通知事件 Producer。
+func InitNotificationEventProducer() error {
+	notificationEventWriter = &kafka.Writer{
+		Addr:                   kafka.TCP(conf.Config.Redpanda.Brokers...),
+		Topic:                  conf.Config.Redpanda.NoticeEventTopic,
+		AllowAutoTopicCreation: true,
+		Balancer:               &kafka.LeastBytes{},
+		BatchTimeout:           10 * time.Millisecond,
+		RequiredAcks:           kafka.RequireOne,
+		Compression:            kafka.Snappy,
+		Async:                  true,
+		MaxAttempts:            5,
+		ReadTimeout:            10 * time.Second,
+		WriteTimeout:           10 * time.Second,
+	}
+
+	logger.Log.Info(fmt.Sprintf("Notification event producer initialized: brokers=%v, topic=%s",
+		conf.Config.Redpanda.Brokers, conf.Config.Redpanda.NoticeEventTopic))
+	return nil
+}
+
+// PublishNotificationEvent 发布通知事件（消息中心）。
+// key = 目标 ID（post_id 或 comment_id），同目标事件保序。
+func PublishNotificationEvent(msg NotificationEventMessage) error {
+	if notificationEventWriter == nil {
+		return fmt.Errorf("notification event writer is not initialized")
+	}
+	if msg.Ts == 0 {
+		msg.Ts = time.Now().UnixMilli()
+	}
+
+	value, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal notification event message: %w", err)
+	}
+
+	var key []byte
+	if msg.CommentID != nil {
+		key = []byte(msg.CommentID.String())
+	} else if msg.PostID != nil {
+		key = []byte(msg.PostID.String())
+	} else {
+		key = []byte(msg.ActorID.String())
+	}
+
+	if err := notificationEventWriter.WriteMessages(context.Background(), kafka.Message{Key: key, Value: value}); err != nil {
+		return fmt.Errorf("failed to write notification event message: %w", err)
+	}
+
+	logger.Log.Debug(fmt.Sprintf("Published notification event: type=%s, actor=%s", msg.Type, msg.ActorID.String()))
+	return nil
+}
+
+// CloseNotificationEventProducer 关闭通知事件 Producer。
+func CloseNotificationEventProducer() error {
+	if notificationEventWriter != nil {
+		if err := notificationEventWriter.Close(); err != nil {
+			logger.Log.Error("Failed to close notification event writer: " + err.Error())
+			return err
+		}
+		logger.Log.Info("Notification event producer closed")
 	}
 	return nil
 }

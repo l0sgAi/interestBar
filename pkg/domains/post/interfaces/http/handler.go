@@ -25,13 +25,14 @@ func NewHandler(svc application.PostService) *Handler {
 
 // CreatePostRequest 创建帖子请求。
 type CreatePostRequest struct {
-	CircleID   uuid.UUID `json:"circle_id" binding:"required"`
-	Title      string    `json:"title" binding:"required,min=1,max=200"`
-	Content    string    `json:"content" binding:"omitempty,max=50000"`
-	Summary    string    `json:"summary" binding:"omitempty,max=500"`
-	Type       int16     `json:"type" binding:"omitempty,min=1,max=3"`
-	MediaExtra []string  `json:"media_extra" binding:"omitempty"`
-	Status     int16     `json:"status" binding:"omitempty,min=0,max=4"`
+	CircleID       uuid.UUID `json:"circle_id" binding:"required"`
+	Title          string    `json:"title" binding:"required,min=1,max=200"`
+	Content        string    `json:"content" binding:"omitempty,max=50000"`
+	Summary        string    `json:"summary" binding:"omitempty,max=500"`
+	Type           int16     `json:"type" binding:"omitempty,min=1,max=3"`
+	MediaExtra     []string  `json:"media_extra" binding:"omitempty"`
+	Status         int16     `json:"status" binding:"omitempty,min=0,max=4"`
+	MentionUserIDs []string  `json:"mention_user_ids" binding:"omitempty,max=50"` // @提及用户ID(uuid 字符串)
 }
 
 // CreatePost POST /post/create
@@ -47,9 +48,15 @@ func (h *Handler) CreatePost(c appctx.AppContext) {
 		return
 	}
 
+	mentionIDs, ok := parseMentionUserIDs(c, req.MentionUserIDs)
+	if !ok {
+		return
+	}
+
 	postID, err := h.svc.CreatePost(c, userID, application.CreatePostInput{
 		CircleID: req.CircleID, Title: req.Title, Content: req.Content,
 		Summary: req.Summary, Type: req.Type, MediaExtra: req.MediaExtra, Status: req.Status,
+		MentionUserIDs: mentionIDs,
 	})
 	if err != nil {
 		writePostError(c, err)
@@ -58,12 +65,29 @@ func (h *Handler) CreatePost(c appctx.AppContext) {
 	httputil.SuccessWithMessage(c, "发帖成功", postID)
 }
 
-// GetPostDetail GET /post/detail/:id
-func (h *Handler) GetPostDetail(c appctx.AppContext) {
-	userID, ok := requireUserID(c)
-	if !ok {
-		return
+// parseMentionUserIDs 解析 @提及 用户 ID 列表；任一非法写 400 并返回 ok=false。
+func parseMentionUserIDs(c appctx.AppContext, raw []string) ([]uuid.UUID, bool) {
+	if len(raw) == 0 {
+		return nil, true
 	}
+	ids := make([]uuid.UUID, 0, len(raw))
+	for _, s := range raw {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			httputil.BadRequest(c, "Invalid mention user id: "+s)
+			return nil, false
+		}
+		ids = append(ids, id)
+	}
+	return ids, true
+}
+
+// GetPostDetail GET /post/detail/:id
+//
+// 访客可读：登录时回填 is_liked/is_collected + 记录浏览历史；匿名（userID==uuid.Nil）时
+// service 跳过交互态查询与浏览计数（service.go GetPostDetail 的 nil 守卫），is_liked/is_collected=false。
+func (h *Handler) GetPostDetail(c appctx.AppContext) {
+	userID, _ := requireUserIDAllowAnon(c)
 
 	postID, err := uuid.Parse(c.Param("id"))
 	if err != nil {
@@ -216,6 +240,23 @@ func requireUserID(c appctx.AppContext) (uuid.UUID, bool) {
 	if err != nil {
 		httputil.BadRequest(c, "Invalid user ID")
 		return uuid.Nil, false
+	}
+	return userID, true
+}
+
+// requireUserIDAllowAnon 尝试返回 userID，但允许匿名（未登录返回 uuid.Nil, true）。
+//
+// 用于"帖子详情"这类访客可读接口：登录时回填 is_liked/is_collected + 记录浏览历史；
+// 匿名时 service 跳过这些副作用（service.go GetPostDetail 的 nil 守卫）。
+// 不写 401——访客访问是合法路径。
+func requireUserIDAllowAnon(c appctx.AppContext) (uuid.UUID, bool) {
+	loginID, ok := c.LoginID()
+	if !ok || loginID == "" {
+		return uuid.Nil, true
+	}
+	userID, err := uuid.Parse(loginID)
+	if err != nil {
+		return uuid.Nil, true
 	}
 	return userID, true
 }
