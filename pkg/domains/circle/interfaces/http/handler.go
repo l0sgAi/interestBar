@@ -336,6 +336,36 @@ func (h *Handler) GetRandomCircles(c appctx.AppContext) {
 
 // ===== 圈子管理（owner/admin，权限矩阵在 service 层校验）=====
 
+// listManagedCirclesReq 可管理圈子列表查询参数（hertz BindQuery 只认 query tag）。
+type listManagedCirclesReq struct {
+	Page    int    `query:"page"`
+	Size    int    `query:"size"`
+	Keyword string `query:"keyword"`
+}
+
+// ListManagedCircles GET /circle/manage/list —— 我可管理的圈子列表（owner/admin）。
+// 登录即可调用：查询本身即权限过滤，service 层不做角色门槛；page/size 规整在 service。
+func (h *Handler) ListManagedCircles(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+
+	var req listManagedCirclesReq
+	if err := c.BindQuery(&req); err != nil {
+		httputil.BadRequest(c, "Invalid query parameters")
+		return
+	}
+
+	result, err := h.svc.ListManagedCircles(c, userID, req.Keyword, req.Page, req.Size)
+	if err != nil {
+		logger.Log.Error("Failed to list managed circles: " + err.Error())
+		httputil.InternalError(c, "Failed to list managed circles")
+		return
+	}
+	httputil.Pagination(c, result.Data, result.Total, result.Page, result.Size)
+}
+
 // GetCircleMembersRequest 成员列表请求（管理端）。
 // role/status 为字符串参数：空或 "-1" 表示不过滤（status=0 待审是合法过滤值，不能用零值默认）。
 // keyword 非空时按用户名/邮箱搜索过滤（翻页须带同一 keyword）。

@@ -423,6 +423,50 @@ func (r *memberRepoPG) TransferOwner(ctx context.Context, circleID, fromUser, to
 	})
 }
 
+// ===== 可管理圈子列表（AI 代理管理控制台）=====
+
+// ListManagedCircles 列出用户作为圈主/管理员（role IN (20,30), status=normal）
+// 的圈子，JOIN 未删除圈子；keyword 非空时按 name/description 子串过滤（ILIKE，
+// 通配符已转义）。排序：圈主在前（role DESC），同角色按建圈时间新→旧，
+// id（UUIDv7，字典序==时间序）作同毫秒确定性 tiebreaker。
+// 直查 PG 不走 ES/缓存：管理控制台要求 SetMemberRole/TransferOwner 后立即可见。
+// 含非正常状态圈子（banned/pending，其代理仍需管理/停用），由上层用 status 置灰。
+func (r *memberRepoPG) ListManagedCircles(ctx context.Context, userID uuid.UUID, keyword string, offset, size int) ([]domain.ManagedCircle, int64, error) {
+	filtered := func() *gorm.DB {
+		q := r.db.WithContext(ctx).
+			Table("domains.circle_member AS m").
+			Joins("JOIN domains.circle AS c ON c.id = m.circle_id AND c.deleted = 0").
+			Where("m.user_id = ? AND m.role IN ? AND m.status = ?", userID,
+				[]int16{domain.MemberRoleAdmin, domain.MemberRoleOwner}, domain.MemberStatusNormal)
+		if keyword != "" {
+			like := "%" + escapeLike(keyword) + "%"
+			q = q.Where("(c.name ILIKE ? ESCAPE '\\' OR c.description ILIKE ? ESCAPE '\\')", like, like)
+		}
+		return q
+	}
+
+	var total int64
+	if err := filtered().Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var circles []domain.ManagedCircle
+	if err := filtered().
+		Select("c.*, m.role AS my_role").
+		Order("m.role DESC, c.create_time DESC, c.id DESC").
+		Limit(size).Offset(offset).
+		Find(&circles).Error; err != nil {
+		return nil, 0, err
+	}
+	return circles, total, nil
+}
+
+// escapeLike 转义 LIKE/ILIKE 通配符（\ % _），配合 ESCAPE '\' 使用：
+// 用户关键词中的通配符不得扩大匹配范围（如 "%%" 全匹配）或破坏子串语义。
+func escapeLike(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
 // ===== 成员列表游标工具 =====
 
 // memberCursor 成员列表 keyset 游标（对齐排序键 role DESC, create_time DESC, id DESC）。

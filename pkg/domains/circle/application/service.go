@@ -294,6 +294,10 @@ type CircleService interface {
 
 	// ===== 圈子管理（owner/admin，权限矩阵见 manage.go）=====
 
+	// ListManagedCircles 列出"我可管理 AI 代理的圈子"（owner/admin，offset 分页）。
+	// 登录即可调用：查询本身即权限过滤（WHERE role IN (20,30)），无 ensureAdmin 式门槛；
+	// keyword 非空时按圈子 name/description 子串过滤；含非正常状态圈子（UI 按 status 置灰）。
+	ListManagedCircles(ctx context.Context, operatorID uuid.UUID, keyword string, page, size int) (*ManagedCircleListResult, error)
 	// ListCircleMembers 管理端成员列表（admin+，可见全部状态含待审/拉黑，keyset 分页）。
 	// role/status 传 -1 表示不过滤；keyword 非空时按用户名搜索（拼写容错，
 	// 最多解析 100 个候选用户，超出时结果 Truncated=true），游标翻页须带同一 keyword。

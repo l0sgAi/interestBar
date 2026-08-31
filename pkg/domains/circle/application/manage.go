@@ -31,6 +31,91 @@ const maxMuteHours = 720
 // 游标翻页在该集合内精确进行；超过则提示细化关键词。
 const memberSearchMaxUsers = 100
 
+// manageKeywordMaxRunes 可管理圈子列表关键词长度上限（rune 计），控制台过滤框防超长输入。
+const manageKeywordMaxRunes = 50
+
+// ===== 可管理圈子列表（AI 代理管理控制台）=====
+
+// ManagedCircleItem 我可管理的圈子列表项。
+//
+// AgentCount 为该圈已绑定 AI 代理数（Phase 2 落地前恒 0，UI 预留 ≤5 限额展示）。
+type ManagedCircleItem struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Slug        string    `json:"slug,omitempty"`
+	AvatarURL   string    `json:"avatar_url,omitempty"`
+	Description string    `json:"description"`
+	MemberCount int       `json:"member_count"`
+	PostCount   int       `json:"post_count"`
+	JoinType    int16     `json:"join_type"`
+	Status      int16     `json:"status"`
+	// MyRole 调用者在该圈的角色（20=admin / 30=owner），驱动 UI 能力差异
+	//（如仅圈主可删圈/转让）；Phase 3 复用此值做代理管理权限判断。
+	MyRole     int16     `json:"my_role"`
+	AgentCount int       `json:"agent_count"`
+	CreateTime time.Time `json:"create_time"`
+}
+
+// ManagedCircleListResult 可管理圈子列表（offset 分页，形状对齐 aiagent.AgentListResult）。
+type ManagedCircleListResult struct {
+	Total int64               `json:"total"`
+	Page  int                 `json:"page"`
+	Size  int                 `json:"size"`
+	Data  []ManagedCircleItem `json:"data"`
+}
+
+// ListManagedCircles 列出"我可管理 AI 代理的圈子"（owner/admin，offset 分页）。
+//
+// 权限模型：登录即可调用，查询本身即权限过滤（WHERE role IN (20,30) AND status=normal），
+// 无 ensureAdmin 式门槛；平台管理员（users.role=1）不特殊处理——其全局控制台是 /agent/list。
+// keyword 非空时按圈子 name/description 子串过滤（trim + SanitizeForPg + 50 rune 截断）；
+// 含非正常状态圈子（banned/pending），UI 依据 status 置灰。不缓存：角色变更须立即可见。
+func (s *circleServiceImpl) ListManagedCircles(ctx context.Context, operatorID uuid.UUID, keyword string, page, size int) (*ManagedCircleListResult, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+	keyword = sanitizeManageKeyword(keyword)
+
+	circles, total, err := s.memberRepo.ListManagedCircles(ctx, operatorID, keyword, (page-1)*size, size)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]ManagedCircleItem, 0, len(circles))
+	for i := range circles {
+		c := &circles[i]
+		items = append(items, ManagedCircleItem{
+			ID:          c.ID,
+			Name:        c.Name,
+			Slug:        c.Slug,
+			AvatarURL:   c.AvatarURL,
+			Description: c.Description,
+			MemberCount: c.MemberCount,
+			PostCount:   c.PostCount,
+			JoinType:    c.JoinType,
+			Status:      c.Status,
+			MyRole:      c.MyRole,
+			AgentCount:  0, // Phase 2：circle 代理绑定计数
+			CreateTime:  c.CreateTime,
+		})
+	}
+	return &ManagedCircleListResult{Total: total, Page: page, Size: size, Data: items}, nil
+}
+
+// sanitizeManageKeyword 规整管理列表关键词：trim → SanitizeForPg（防 PG UTF8 错误）
+// → 超 50 rune 截断（控制台过滤场景截断优于报错）。
+func sanitizeManageKeyword(kw string) string {
+	kw = utils.SanitizeForPg(strings.TrimSpace(kw))
+	if utf8.RuneCountInString(kw) > manageKeywordMaxRunes {
+		runes := []rune(kw)
+		kw = string(runes[:manageKeywordMaxRunes])
+	}
+	return kw
+}
+
 // ===== 管理端 DTO =====
 
 // CircleMemberItem 管理端成员列表项（含用户精简信息，由 UserFacade 组装）。

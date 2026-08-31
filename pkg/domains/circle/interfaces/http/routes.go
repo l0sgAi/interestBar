@@ -20,6 +20,7 @@ import (
 //	POST /circle/leave        退出圈子（需登录）
 //	GET  /circle/posts        圈内帖子列表（访客可读）
 //	GET  /circle/members      管理端成员列表（需登录；admin+，service 校验）
+//	GET  /circle/manage/list  我可管理的圈子列表（需登录；查询即权限过滤 owner/admin）
 //	POST /circle/manage/role     任免管理员（需登录；owner）
 //	POST /circle/manage/transfer 转让圈主（需登录；owner）
 //	POST /circle/manage/mute     禁言（需登录；admin+）
@@ -59,6 +60,7 @@ func RegisterRoutes(
 		priv.POST("/leave", h.LeaveCircle)
 
 		priv.GET("/members", h.GetCircleMembers)
+		priv.GET("/manage/list", h.ListManagedCircles)
 		priv.POST("/manage/role", h.ManageRole)
 		priv.POST("/manage/transfer", h.ManageTransfer)
 		priv.POST("/manage/mute", h.ManageMute)
