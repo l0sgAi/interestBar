@@ -210,6 +210,14 @@ type ActiveCircleResult struct {
 	Truncated bool              `json:"truncated,omitempty"` // 触达 maxScan 上限
 }
 
+// ===== 随机圈子 DTO =====
+
+// RawRandomCircleResult searcher 返回的原始随机圈子结果（仅 ID 列表 + 总数，未组装明细）。
+type RawRandomCircleResult struct {
+	CircleIDs []uuid.UUID
+	Total     int64 // 符合条件的圈子总数
+}
+
 // ===== 用例输入/输出 DTO =====
 
 // CreateCircleInput 创建圈子入参。
@@ -259,6 +267,8 @@ type CircleSearcher interface {
 	SearchCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*RawCirclePostResult, error)
 	// SearchActive 近期活跃圈子聚合（按窗口内发帖数排序，offset 分页）。
 	SearchActive(ctx context.Context, size, offset int) (*RawActiveCircleResult, error)
+	// SearchRandom 随机圈子查询（random_score 无 seed，每次结果不同；不分页）。
+	SearchRandom(ctx context.Context, size int) (*RawRandomCircleResult, error)
 }
 
 // CircleService 是 circle 领域的应用服务接口。
@@ -275,6 +285,9 @@ type CircleService interface {
 	GetCirclePosts(ctx context.Context, circleID uuid.UUID, sortType, size int, searchAfter []interface{}) (*CirclePostResult, error)
 	// ListActiveCircles 近期活跃圈子分页列表（按近 N 天发帖数排序）。
 	ListActiveCircles(ctx context.Context, size, offset int) (*ActiveCircleResult, error)
+	// ListRandomCircles 随机圈子列表（侧栏推荐；返回格式同 ActiveCircleResult，
+	// offset 恒 0、recent_post_count 恒 0）。
+	ListRandomCircles(ctx context.Context, size int) (*ActiveCircleResult, error)
 	// ListJoinedCircleIDs 用户已加入的圈子 ID 列表（按加入时间倒序，limit 条）。
 	// 供 recommend 域 C1 兴趣圈子召回用。ZSET miss 时从 DB 全量重建。
 	ListJoinedCircleIDs(ctx context.Context, userID uuid.UUID, limit int) ([]uuid.UUID, error)
@@ -630,6 +643,61 @@ func (s *circleServiceImpl) ListActiveCircles(ctx context.Context, size, offset 
 		Size:      size,
 		Offset:    offset,
 		Truncated: raw.Truncated,
+	}, nil
+}
+
+// ListRandomCircles 随机圈子列表（侧栏推荐）。
+//
+// 1. searcher.SearchRandom 在 circle 索引 random_score 随机取 size 个 circleID；
+// 2. repo.GetByIDs 批量取明细（name/counts/hot 以 DB 为准），保留随机顺序；
+// 3. 跳过已删除（GetByIDs 已过滤 deleted=0）与非正常状态圈子。
+// 返回格式同 ActiveCircleResult；recent_post_count 无随机语义，恒 0。
+func (s *circleServiceImpl) ListRandomCircles(ctx context.Context, size int) (*ActiveCircleResult, error) {
+	raw, err := s.searcher.SearchRandom(ctx, size)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(raw.CircleIDs) == 0 {
+		return &ActiveCircleResult{Total: raw.Total, Size: size}, nil
+	}
+
+	circles, err := s.repo.GetByIDs(ctx, raw.CircleIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	docs := make([]ActiveCircleDoc, 0, len(raw.CircleIDs))
+	for _, id := range raw.CircleIDs {
+		c, ok := circles[id]
+		if !ok {
+			continue // 已删除（GetByIDs 已过滤 deleted=0）
+		}
+		if c.Status != domain.CircleStatusNormal {
+			continue // 非正常状态圈子不上随机推荐
+		}
+		categoryID := ""
+		if c.CategoryID != nil {
+			categoryID = c.CategoryID.String()
+		}
+		docs = append(docs, ActiveCircleDoc{
+			ID:          c.ID.String(),
+			Name:        c.Name,
+			AvatarURL:   c.AvatarURL,
+			Description: c.Description,
+			CategoryID:  categoryID,
+			MemberCount: c.MemberCount,
+			PostCount:   c.PostCount,
+			Hot:         c.Hot,
+			JoinType:    c.JoinType,
+			CreateTime:  c.CreateTime,
+		})
+	}
+
+	return &ActiveCircleResult{
+		Circles: docs,
+		Total:   raw.Total,
+		Size:    size,
 	}, nil
 }
 

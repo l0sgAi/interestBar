@@ -309,6 +309,31 @@ func (h *Handler) GetActiveCircles(c appctx.AppContext) {
 	httputil.Success(c, result)
 }
 
+// GetRandomCirclesRequest 随机圈子列表请求。
+type GetRandomCirclesRequest struct {
+	Size int `query:"size"`
+}
+
+// GetRandomCircles GET /circle/random —— 随机圈子列表（侧栏推荐，每次结果不同，不分页）。
+func (h *Handler) GetRandomCircles(c appctx.AppContext) {
+	var req GetRandomCirclesRequest
+	if err := c.BindQuery(&req); err != nil {
+		logger.Log.Error("Invalid request parameters: " + err.Error())
+		httputil.BadRequest(c, "Invalid request parameters")
+		return
+	}
+
+	size := normalizeSize(req.Size)
+
+	result, err := h.svc.ListRandomCircles(c, size)
+	if err != nil {
+		logger.Log.Error("Failed to list random circles: " + err.Error())
+		httputil.InternalError(c, "Failed to list random circles")
+		return
+	}
+	httputil.Success(c, result)
+}
+
 // ===== 圈子管理（owner/admin，权限矩阵在 service 层校验）=====
 
 // GetCircleMembersRequest 成员列表请求（管理端）。
