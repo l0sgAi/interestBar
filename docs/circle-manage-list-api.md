@@ -2,8 +2,9 @@
 
 > **用途**：AI 代理管理控制台的「圈子选择器」数据源——列出**当前登录用户作为圈主/管理员**的圈子，
 > 供其进入某个圈子的代理管理页（查看/绑定 ≤5 个 AI 代理）。
-> 这是「圈子级 AI 代理管理」特性的 Phase 1；Phase 2（代理-圈子绑定）落地后，列表项的 `agent_count`
-> 将开始返回真实值，本接口契约不变，前端可先行接入。
+> 这是「圈子级 AI 代理管理」特性的 Phase 1；Phase 2（圈内代理 CRUD，见
+> [circle-agent-manage-api.md](circle-agent-manage-api.md)）已交付，列表项的 `agent_count`
+> 返回真实值（统计失败降级为 0），本接口契约不变。
 
 ---
 
@@ -127,7 +128,7 @@ curl -H "satoken: <your-token>" \
 | `join_type` | number | 加入方式：`0` 直接加入 / `1` 需审核 / `2` 私密邀请制 |
 | `status` | number | **圈子状态**：`0` 审核中 / `1` 正常 / `2` 被封禁。见 §4.2 |
 | `my_role` | number | **调用者在此圈的角色**：`20` 管理员 / `30` 圈主。见 §4.1 |
-| `agent_count` | number | 该圈已绑定 AI 代理数。**Phase 1 恒为 0**，Phase 2 起返回真实值（上限 5，用于「3/5」这类配额 UI） |
+| `agent_count` | number | 该圈已绑定 AI 代理数（实时统计，上限 5，用于「3/5」这类配额 UI；统计失败降级为 0）。圈内代理管理接口见 [circle-agent-manage-api.md](circle-agent-manage-api.md) |
 | `create_time` | string | 建圈时间，RFC3339 带时区（如 `2026-08-01T10:30:00.123456+08:00`），`new Date()` 可直接解析 |
 
 ### 3.4 排序规则（固定的，前端无需排序）
@@ -161,10 +162,11 @@ Phase 3 的代理管理接口会以服务端校验为准，前端按 `my_role` �
 - 用户**作为成员**的状态不在本接口体现：只有成员状态为「正常」的圈主/管理员才会出现在查询结果里
   （被禁言/被拉黑期间管理者暂时从列表消失，与「管理权暂停」语义一致，解禁后自动恢复）。
 
-### 4.3 `agent_count`（预留）
+### 4.3 `agent_count`
 
-当前恒为 `0`。Phase 2（代理绑定圈子）上线后表示该圈已绑定的代理数，上限 5。
-选择器/列表可直接渲染 `已绑定 {agent_count}/5`，无需等后端另行通知——字段已就位。
+该圈已绑定的 AI 代理数（实时 COUNT，上限 5）。选择器/列表可直接渲染 `已绑定 {agent_count}/5`。
+点击进入代理管理页后，用 `GET /circle/agent/list?circle_id=` 拉取机器人列表
+（接口契约见 [circle-agent-manage-api.md](circle-agent-manage-api.md)）。
 
 ### 4.4 何时调用
 
@@ -238,7 +240,7 @@ export interface ManagedCircleItem {
   join_type: 0 | 1 | 2;
   status: CircleStatus;
   my_role: MyManageRole;
-  /** Phase 1 恒为 0，Phase 2 起为已绑定代理数（上限 5） */
+  /** 该圈已绑定代理数（实时统计，上限 5；统计失败降级 0） */
   agent_count: number;
   create_time: string; // RFC3339
 }
@@ -306,7 +308,7 @@ useEffect(() => {
 
 - `status !== 1` → 整项置灰、禁用点击；
 - 右上角角色徽标：`my_role === 30 ? '圈主' : '管理员'`；
-- 代理配额位：`已绑定 {agent_count}/5`（Phase 1 显示 0/5 亦可，或暂不展示该位）；
+- 代理配额位：`已绑定 {agent_count}/5`；
 - `avatar_url` 为空用默认占位图。
 
 ---
@@ -325,8 +327,8 @@ useEffect(() => {
 **Q4：`member_count` 和圈子详情页对不上？**
 列表用的是 DB 快照计数，详情页走 Redis 实时计数，可能有短暂偏差。控制台展示可接受；需要精确值时用 `GET /circle/detail/:id`。
 
-**Q5：后续 Phase 2/3 会改这个接口吗？**
-字段契约保持兼容：`agent_count` 从恒 0 变为真实值；其余字段不变。前端现在接入即为最终形态。
+**Q5：圈子级代理管理（Phase 2）上线后这个接口变了吗？**
+字段契约保持兼容：`agent_count` 从恒 0 变为真实值；其余字段不变。前端现有接入无需改动。
 
 ---
 

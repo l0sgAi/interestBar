@@ -7,14 +7,23 @@ package application
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"interestBar/pkg/domains/circle/domain"
+	"interestBar/pkg/logger"
 
 	"github.com/google/uuid"
 )
+
+// TestMain 测试装配：agent_count 回填的降级路径会记 Error 日志，注入 nop logger
+//（生产由启动流程初始化，单测环境 logger.Log 为 nil）。
+func TestMain(m *testing.M) {
+	logger.InitLogger()
+	m.Run()
+}
 
 // fakeManagedMemberRepo 记录入参并返回预置结果的最小 MemberRepository fake。
 type fakeManagedMemberRepo struct {
@@ -116,7 +125,79 @@ func TestListManagedCircles_KeywordSanitize(t *testing.T) {
 	}
 }
 
-// TestListManagedCircles_MapsEntityToItem 实体→DTO 映射：my_role 透传、agent_count 恒 0（Phase 2）。
+// fakeCircleAgentCounter 预设统计结果的 CircleAgentCounter fake（agent_count 回填用）。
+type fakeCircleAgentCounter struct {
+	counts map[uuid.UUID]int
+	err    error
+	gotIDs []uuid.UUID
+}
+
+func (f *fakeCircleAgentCounter) CountByCircleIDs(ctx context.Context, circleIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	f.gotIDs = circleIDs
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.counts, nil
+}
+
+// TestListManagedCircles_AgentCountBackfill agent_count 经端口实时回填；
+// 未注入端口（nil）降级为 0；端口报错降级为 0，不阻断列表。
+func TestListManagedCircles_AgentCountBackfill(t *testing.T) {
+	ownerID := uuid.MustParse("0192a0d0-0000-7000-8000-000000000001")
+	circleA := uuid.MustParse("0192a0d0-0000-7000-8000-0000000000aa")
+	circleB := uuid.MustParse("0192a0d0-0000-7000-8000-0000000000bb")
+	now := time.Now().Truncate(time.Second)
+
+	mkRepo := func() *fakeManagedMemberRepo {
+		return &fakeManagedMemberRepo{
+			circles: []domain.ManagedCircle{
+				{Circle: domain.Circle{ID: circleA, Name: "圈A", CreateTime: now}, MyRole: domain.MemberRoleOwner},
+				{Circle: domain.Circle{ID: circleB, Name: "圈B", CreateTime: now}, MyRole: domain.MemberRoleAdmin},
+			},
+			total: 2,
+		}
+	}
+
+	t.Run("counter injected backfills counts", func(t *testing.T) {
+		repo := mkRepo()
+		svc := newManagedListSvc(repo)
+		counter := &fakeCircleAgentCounter{counts: map[uuid.UUID]int{circleA: 3}}
+		svc.SetAgentCounter(counter)
+
+		res, err := svc.ListManagedCircles(context.Background(), ownerID, "", 1, 20)
+		if err != nil {
+			t.Fatalf("ListManagedCircles failed: %v", err)
+		}
+		if len(counter.gotIDs) != 2 {
+			t.Fatalf("counter got %d circle ids, want 2", len(counter.gotIDs))
+		}
+		if res.Data[0].AgentCount != 3 {
+			t.Fatalf("circleA AgentCount = %d, want 3", res.Data[0].AgentCount)
+		}
+		if res.Data[1].AgentCount != 0 {
+			t.Fatalf("circleB AgentCount = %d, want 0（不在统计结果中的圈按 0）", res.Data[1].AgentCount)
+		}
+	})
+
+	t.Run("counter error degrades to zero", func(t *testing.T) {
+		repo := mkRepo()
+		svc := newManagedListSvc(repo)
+		svc.SetAgentCounter(&fakeCircleAgentCounter{err: errors.New("db down")})
+
+		res, err := svc.ListManagedCircles(context.Background(), ownerID, "", 1, 20)
+		if err != nil {
+			t.Fatalf("ListManagedCircles must not fail on counter error: %v", err)
+		}
+		for _, item := range res.Data {
+			if item.AgentCount != 0 {
+				t.Fatalf("AgentCount = %d, want 0（降级）", item.AgentCount)
+			}
+		}
+	})
+}
+
+// TestListManagedCircles_MapsEntityToItem 实体→DTO 映射：my_role 透传；
+// 未注入 agentCounter 端口时 agent_count 降级为 0。
 func TestListManagedCircles_MapsEntityToItem(t *testing.T) {
 	ownerID := uuid.MustParse("0192a0d0-0000-7000-8000-000000000001")
 	circleID := uuid.MustParse("0192a0d0-0000-7000-8000-0000000000aa")
@@ -158,7 +239,7 @@ func TestListManagedCircles_MapsEntityToItem(t *testing.T) {
 		t.Fatalf("unexpected first item: %+v", first)
 	}
 	if first.AgentCount != 0 {
-		t.Fatalf("AgentCount = %d, want 0 (Phase 2 前恒 0)", first.AgentCount)
+		t.Fatalf("AgentCount = %d, want 0（未注入 agentCounter 端口时降级为 0）", first.AgentCount)
 	}
 	if res.Data[1].Status != domain.CircleStatusBanned || res.Data[1].MyRole != domain.MemberRoleAdmin {
 		t.Fatalf("banned circle item should carry status+my_role: %+v", res.Data[1])

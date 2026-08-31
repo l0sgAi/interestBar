@@ -10,6 +10,8 @@ import (
 	"context"
 
 	agentapp "interestBar/pkg/domains/aiagent/application"
+	agentdomain "interestBar/pkg/domains/aiagent/domain"
+	circleapp "interestBar/pkg/domains/circle/application"
 	commentapp "interestBar/pkg/domains/comment/application"
 	postapp "interestBar/pkg/domains/post/application"
 	userapp "interestBar/pkg/domains/user/application"
@@ -92,7 +94,35 @@ var (
 	_ agentapp.BotUserProfileUpdater = (*agentBotUserUpdater)(nil)
 	_ agentapp.PostReader            = (*agentPostReader)(nil)
 	_ agentapp.CommentCreator        = (*agentCommentCreator)(nil)
+	_ agentapp.CircleRoleReader      = (*circleRoleReaderForAgent)(nil)
+	_ circleapp.CircleAgentCounter   = (*circleAgentCounterForCircle)(nil)
 )
+
+// circleRoleReaderForAgent 桥接 aiagent.CircleRoleReader -> circle 域成员角色 Facade。
+//
+// 薄转发：delegate 直查 member 记录（无缓存，含惰性解禁自愈），
+// 圈内机器人管理权随角色变更即时生效。
+type circleRoleReaderForAgent struct {
+	delegate circleapp.CircleMemberRoleReader
+}
+
+// GetCircleMembership 返回操作者在圈内的 (role, status)；非成员/圈子不存在 ok=false。
+func (b *circleRoleReaderForAgent) GetCircleMembership(ctx context.Context, circleID, userID uuid.UUID) (int16, int16, bool, error) {
+	return b.delegate.GetMemberRole(ctx, circleID, userID)
+}
+
+// circleAgentCounterForCircle 桥接 circle.CircleAgentCounter -> aiagent.AgentRepository.CountByCircleIDs。
+//
+// 方向反转的桥接：circle 域声明端口（可管理圈子列表 agent_count 回填），
+// 由 aiagent 同域仓储实现（代理数据属 ai_agent 表）。
+type circleAgentCounterForCircle struct {
+	repo agentdomain.AgentRepository
+}
+
+// CountByCircleIDs 批量统计各圈未删除机器人数。
+func (b *circleAgentCounterForCircle) CountByCircleIDs(ctx context.Context, circleIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	return b.repo.CountByCircleIDs(ctx, circleIDs)
+}
 
 // agentPostReader 桥接 aiagent.PostReader -> post.PostService.GetPostBrief。
 type agentPostReader struct {

@@ -124,10 +124,24 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	discoverSvc := newDiscoverService(postSvc, circleRepo, circleSvc)
 
 	// aiagent 跨域依赖：role 读取（user 缓存）+ 机器人账号创建（role=2）。
-	agentSvc := newAgentService(deps)
+	// 全局/圈内两个 Service 共享同一仓储实例（无状态薄封装）。
+	agentRepo := agentinfra.NewAgentRepository(deps.DB.Get())
+	agentSvc := agentapp.NewAgentService(agentRepo)
 	agentSvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
 	agentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
 	agentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
+
+	// aiagent 圈内机器人管理：圈内角色读取（circle Facade 直查 member，权限即时生效）
+	// + 机器人账号创建/资料同步（复用全局端口桥接器）。
+	circleAgentSvc := agentapp.NewCircleAgentService(agentRepo)
+	circleAgentSvc.SetCircleRoleReader(&circleRoleReaderForAgent{
+		delegate: circleapp.NewCircleMemberRoleReader(memberRepo),
+	})
+	circleAgentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
+	circleAgentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
+
+	// circle -> aiagent：可管理圈子列表的 agent_count 回填（方向反转桥接，失败降级 0）。
+	circleSvc.SetAgentCounter(&circleAgentCounterForCircle{repo: agentRepo})
 
 	// aiagent 回复执行链路：LLM(eino) + 帖子摘要(post) + 评论创建(comment)。
 	replySvc := newAgentReplyService(deps, postSvc, commentSvc)
@@ -152,7 +166,7 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerRecommend(root, recommendSvc, authCheck, OptionalLoginFn)
 	registerTrending(root, trendingSvc, authCheck, OptionalLoginFn)
 	registerDiscover(root, discoverSvc, authCheck)
-	registerAgent(root, agentSvc, replySvc, authCheck)
+	registerAgent(root, agentSvc, circleAgentSvc, replySvc, authCheck)
 
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
@@ -298,10 +312,16 @@ func registerDiscover(root routing.RouterGroup, svc discoverapp.DiscoverService,
 	discoverhttp.RegisterRoutes(root, svc, OptionalLoginFn)
 }
 
-// registerAgent 装配 aiagent 领域（管理端机器人 CRUD + 手动触发回复，
-// role 校验在 service 层）。
-func registerAgent(root routing.RouterGroup, svc agentapp.AgentService, replySvc agentapp.ReplyService, authCheck routing.HandlerFunc) {
-	agenthttp.RegisterRoutes(root, svc, replySvc, authCheck)
+// registerAgent 装配 aiagent 领域（全局机器人 CRUD + 圈子级机器人 CRUD + 手动触发回复；
+// role=1 / 圈内 admin+ 校验都在 service 层）。
+func registerAgent(
+	root routing.RouterGroup,
+	svc agentapp.AgentService,
+	circleAgentSvc agentapp.CircleAgentService,
+	replySvc agentapp.ReplyService,
+	authCheck routing.HandlerFunc,
+) {
+	agenthttp.RegisterRoutes(root, svc, circleAgentSvc, replySvc, authCheck)
 }
 
 // ===== Service 构造函数 =====
@@ -327,14 +347,6 @@ func newCircleService(deps *Deps) (circleapp.CircleService, circledomain.CircleR
 		circleRepo, memberRepo, baseCache, statsCache, joinedCache, searcher, publisher,
 	)
 	return svc, circleRepo, memberRepo
-}
-
-// newAgentService 构造 AgentService。
-//
-// user 跨领域依赖（role 读取 + 机器人账号创建）通过 setter 注入（见 RegisterDomainRoutes）。
-func newAgentService(deps *Deps) agentapp.AgentService {
-	repo := agentinfra.NewAgentRepository(deps.DB.Get())
-	return agentapp.NewAgentService(repo)
 }
 
 // newAgentReplyService 构造机器人回复执行服务（eino LLM + post/comment 跨域桥接，

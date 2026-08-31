@@ -53,14 +53,63 @@ func (r *agentRepoPG) ExistsByName(ctx context.Context, name string, excludeID u
 	return true, nil
 }
 
+// ExistsByNameInScope 检查 (作用域, name) 是否被占用。circleID=uuid.Nil 查全局桶
+//（circle_id IS NULL），否则查该圈桶，与唯一索引 idx_ai_agent_name 的分桶口径一致。
+func (r *agentRepoPG) ExistsByNameInScope(ctx context.Context, circleID uuid.UUID, name string, excludeID uuid.UUID) (bool, error) {
+	var a domain.AiAgent
+	query := r.db.WithContext(ctx).Where("name = ? AND deleted = ?", name, 0)
+	if circleID == uuid.Nil {
+		query = query.Where("circle_id IS NULL")
+	} else {
+		query = query.Where("circle_id = ?", circleID)
+	}
+	if excludeID != uuid.Nil {
+		query = query.Where("id <> ?", excludeID)
+	}
+	err := query.First(&a).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// CountByCircleIDs 批量统计各圈未删除机器人数（走 idx_ai_agent_circle 部分索引）。
+// 无机器人的圈不在返回 map 中（调用方按 0 处理）。
+func (r *agentRepoPG) CountByCircleIDs(ctx context.Context, circleIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	if len(circleIDs) == 0 {
+		return map[uuid.UUID]int{}, nil
+	}
+	var rows []struct {
+		CircleID uuid.UUID `gorm:"column:circle_id"`
+		Cnt      int       `gorm:"column:cnt"`
+	}
+	err := r.db.WithContext(ctx).Model(&domain.AiAgent{}).
+		Select("circle_id, COUNT(*) AS cnt").
+		Where("circle_id IN ? AND deleted = ?", circleIDs, 0).
+		Group("circle_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[uuid.UUID]int, len(rows))
+	for _, row := range rows {
+		result[row.CircleID] = row.Cnt
+	}
+	return result, nil
+}
+
 // ListByOffset keyword 非空时按 name 模糊过滤（ILIKE %kw%，大小写不敏感）。
+// 仅返回全局机器人（circle_id IS NULL）：平台超管控制台不展示圈内机器人。
 func (r *agentRepoPG) ListByOffset(ctx context.Context, keyword string, offset, limit int) ([]domain.AiAgent, int64, error) {
 	var (
 		agents []domain.AiAgent
 		total  int64
 	)
 	query := r.db.WithContext(ctx).Model(&domain.AiAgent{}).
-		Where("deleted = ?", 0)
+		Where("circle_id IS NULL AND deleted = ?", 0)
 	if keyword != "" {
 		query = query.Where("name ILIKE ?", "%"+keyword+"%")
 	}
@@ -75,6 +124,57 @@ func (r *agentRepoPG) ListByOffset(ctx context.Context, keyword string, offset, 
 		return nil, 0, err
 	}
 	return agents, total, nil
+}
+
+// ListByCircle 圈内机器人 offset 分页。keyword 非空时按 name 模糊过滤（ILIKE %kw%）。
+func (r *agentRepoPG) ListByCircle(ctx context.Context, circleID uuid.UUID, keyword string, offset, limit int) ([]domain.AiAgent, int64, error) {
+	var (
+		agents []domain.AiAgent
+		total  int64
+	)
+	query := r.db.WithContext(ctx).Model(&domain.AiAgent{}).
+		Where("circle_id = ? AND deleted = ?", circleID, 0)
+	if keyword != "" {
+		query = query.Where("name ILIKE ?", "%"+keyword+"%")
+	}
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	err := query.
+		Order("create_time DESC").
+		Offset(offset).Limit(limit).
+		Find(&agents).Error
+	if err != nil {
+		return nil, 0, err
+	}
+	return agents, total, nil
+}
+
+// CreateInCircle 单事务创建圈内机器人：先锁圈子行（SELECT ... FOR UPDATE）把同圈
+// 并发创建串行化，再计数校验每圈上限（行锁前任何预检都防不了并发双过），最后插入。
+// 圈行缺失（并发圈子被物理清除等极端场景）返回 ErrAgentNotFound，不落孤儿数据。
+func (r *agentRepoPG) CreateInCircle(ctx context.Context, agent *domain.AiAgent, maxPerCircle int) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 锁圈子行：同圈创建在此排队。圈行软删不物理删，锁目标稳定。
+		var circleID string
+		if err := tx.Raw("SELECT id FROM domains.circle WHERE id = ? FOR UPDATE", agent.CircleID).
+			Scan(&circleID).Error; err != nil {
+			return err
+		}
+		if circleID == "" {
+			return domain.ErrAgentNotFound
+		}
+		var count int64
+		if err := tx.Model(&domain.AiAgent{}).
+			Where("circle_id = ? AND deleted = ?", agent.CircleID, 0).
+			Count(&count).Error; err != nil {
+			return err
+		}
+		if int(count) >= maxPerCircle {
+			return domain.ErrCircleAgentLimit
+		}
+		return tx.Create(agent).Error
+	})
 }
 
 func (r *agentRepoPG) UpdateFields(ctx context.Context, agentID uuid.UUID, fields map[string]interface{}) error {
@@ -92,10 +192,12 @@ func (r *agentRepoPG) SoftDelete(ctx context.Context, agentID uuid.UUID) error {
 		}).Error
 }
 
+// ListEnabled 获取全部启用中的全局机器人（circle_id IS NULL 防泄漏护栏：
+// 圈内机器人一创建就可能在全站触发回复，必须在这里挡住）。
 func (r *agentRepoPG) ListEnabled(ctx context.Context) ([]domain.AiAgent, error) {
 	var agents []domain.AiAgent
 	err := r.db.WithContext(ctx).
-		Where("deleted = ? AND status = ?", 0, domain.AgentStatusEnabled).
+		Where("circle_id IS NULL AND deleted = ? AND status = ?", 0, domain.AgentStatusEnabled).
 		Order("create_time ASC").
 		Find(&agents).Error
 	return agents, err

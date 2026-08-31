@@ -323,20 +323,24 @@ type CircleService interface {
 	SetUserFacade(f UserFacade)
 	// SetPostFetcher 注入 post 媒体查询器（GetCirclePosts 组装图片用）。
 	SetPostFetcher(f PostMediaFetcher)
+	// SetAgentCounter 注入圈内 AI 代理计数端口（可管理圈子列表 agent_count 回填用；
+	// composition 桥接 aiagent 领域，未注入时降级为 0）。端口见 manage.go。
+	SetAgentCounter(c CircleAgentCounter)
 	// IncrPostCount 发帖后递增圈子帖子计数（供 post 领域通过端口调用）。
 	IncrPostCount(ctx context.Context, circleID uuid.UUID) error
 }
 
 type circleServiceImpl struct {
-	repo        domain.CircleRepository
-	memberRepo  domain.MemberRepository
-	baseCache   domain.CircleBaseCache
-	statsCache  domain.CircleStatsCache
-	joinedCache domain.JoinedCirclesCache
-	searcher    CircleSearcher
-	publisher   domain.CircleEventPublisher
-	userFacade  UserFacade       // 可为 nil（GetCirclePosts 用）
-	postFetcher PostMediaFetcher // 可为 nil（GetCirclePosts 用）
+	repo         domain.CircleRepository
+	memberRepo   domain.MemberRepository
+	baseCache    domain.CircleBaseCache
+	statsCache   domain.CircleStatsCache
+	joinedCache  domain.JoinedCirclesCache
+	searcher     CircleSearcher
+	publisher    domain.CircleEventPublisher
+	userFacade   UserFacade         // 可为 nil（GetCirclePosts 用）
+	postFetcher  PostMediaFetcher   // 可为 nil（GetCirclePosts 用）
+	agentCounter CircleAgentCounter // 可为 nil（ListManagedCircles agent_count 降级 0）
 }
 
 // NewCircleService 构造 CircleService。
@@ -407,6 +411,9 @@ func (s *circleServiceImpl) SetUserFacade(f UserFacade) { s.userFacade = f }
 
 // SetPostFetcher 注入 post 媒体查询器。
 func (s *circleServiceImpl) SetPostFetcher(f PostMediaFetcher) { s.postFetcher = f }
+
+// SetAgentCounter 注入圈内 AI 代理计数端口（composition 层在装配后调用）。
+func (s *circleServiceImpl) SetAgentCounter(c CircleAgentCounter) { s.agentCounter = c }
 
 // CreateCircle 创建圈子。
 func (s *circleServiceImpl) CreateCircle(ctx context.Context, userID uuid.UUID, input CreateCircleInput) error {

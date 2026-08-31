@@ -102,7 +102,8 @@ type ReplyService interface {
 	// 绝不向发帖链路返回错误。被 @ 的启用机器人即触发：显式 @ 视为直接点名，
 	// 不校验 trigger_mode/关键词（mode 仅约束关键词/手动入口的被动触发）。
 	OnPostMentioned(evt PostMentionEvent)
-	// ManualReply 管理员手动触发回复（同步，仅 trigger_mode=3 的启用机器人）。
+	// ManualReply 管理员手动触发回复（同步，仅 trigger_mode=3 的启用全局机器人；
+	// 圈内机器人返回 errCircleReplyUnsupported——不参与回复触发）。
 	// 返回生成的评论 ID；失败返回错误（同时已写失败日志行）。
 	ManualReply(ctx context.Context, adminID, agentID, postID uuid.UUID) (uuid.UUID, error)
 
@@ -350,6 +351,11 @@ func (s *replyServiceImpl) ManualReply(ctx context.Context, adminID, agentID, po
 	agent, err := s.agentRepo.GetByID(ctx, agentID)
 	if err != nil {
 		return uuid.Nil, err
+	}
+	if agent.CircleID != nil {
+		// 防泄漏护栏：圈内机器人不参与回复触发（P1 圈内触发链落地前），
+		// 防超管手动入口误触发圈内机器人全站回复。
+		return uuid.Nil, errCircleReplyUnsupported
 	}
 	if agent.Status != domain.AgentStatusEnabled {
 		return uuid.Nil, errAgentDisabled
