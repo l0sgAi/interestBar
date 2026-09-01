@@ -76,12 +76,16 @@ type NoticeService interface {
 
 	// SetUserFacade 注入 user Facade（actor 展示信息回填用）。
 	SetUserFacade(f UserFacade)
+	// SetStreamHub 注入未读数推送 hub（MarkRead/MarkAllRead 成功后触发 SSE 推送）。
+	// 为 nil 时跳过推送（保测试兼容）。
+	SetStreamHub(h StreamHub)
 }
 
 type noticeServiceImpl struct {
 	repo       domain.NotificationRepository
 	cache      domain.NoticeUnreadCache
 	userFacade UserFacade
+	hub        StreamHub
 }
 
 // NewNoticeService 构造 NoticeService。
@@ -93,6 +97,9 @@ func NewNoticeService(repo domain.NotificationRepository, cache domain.NoticeUnr
 
 // SetUserFacade 注入 user Facade。
 func (s *noticeServiceImpl) SetUserFacade(f UserFacade) { s.userFacade = f }
+
+// SetStreamHub 注入未读数推送 hub。
+func (s *noticeServiceImpl) SetStreamHub(h StreamHub) { s.hub = h }
 
 // ListNotifications 获取当前用户通知列表。
 func (s *noticeServiceImpl) ListNotifications(ctx context.Context, userID uuid.UUID, noticeTypes []int16, size int, cursor string) (*NoticeListResult, error) {
@@ -191,6 +198,8 @@ func (s *noticeServiceImpl) MarkRead(ctx context.Context, userID uuid.UUID, ids 
 	if affected > 0 {
 		if err := s.cache.DecrBy(ctx, userID, affected); err != nil {
 			logger.Log.Error("Failed to decr notice unread count: " + err.Error())
+		} else if s.hub != nil {
+			s.hub.Publish(userID)
 		}
 	}
 	return nil
@@ -203,6 +212,8 @@ func (s *noticeServiceImpl) MarkAllRead(ctx context.Context, userID uuid.UUID) e
 	}
 	if err := s.cache.Set(ctx, userID, 0); err != nil {
 		logger.Log.Error("Failed to reset notice unread count: " + err.Error())
+	} else if s.hub != nil {
+		s.hub.Publish(userID)
 	}
 	return nil
 }
