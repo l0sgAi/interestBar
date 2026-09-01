@@ -30,7 +30,14 @@ func InitRouter() *server.Hertz {
 
 	// Register Domain Routes（所有领域已搬迁到 pkg/domains/）
 	// 入口层做 engine→RouterGroup 的框架无关包装。
-	composition.RegisterDomainRoutes(hertzadapter.ForEngine(h))
+	streamHub := composition.RegisterDomainRoutes(hertzadapter.ForEngine(h))
+
+	// SSE 未读数推流（设计 docs/design/sse-notification-design.md §四#6）：
+	// 裸 hertz 路由（SSE 需 hijack writer，不走 AppContext 抽象）；
+	// 挂全局 CORS 之后；鉴权在 handler 内自做（header→query 兜底），不走 RequireLogin。
+	if conf.Config.NoticeStream.Enabled {
+		h.GET("/notice/stream", composition.ServeNoticeStream(streamHub))
+	}
 
 	if logger.Log != nil {
 		logger.Log.Info("router register success")

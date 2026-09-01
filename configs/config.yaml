@@ -127,6 +127,14 @@ redpanda:
 notice:
   mention_max: 10 # 单条内容 @ 提及用户上限(<=0 兜底 10)
 
+# 未读通知数 SSE 实时推送（设计见 docs/design/sse-notification-design.md）
+notice_stream:
+  enabled: true            # false 时不注册路由（灰度开关）
+  heartbeat_sec: 25        # 心跳+token复检周期(秒)，<=0 兜底 25
+  max_conns_per_user: 5    # 每用户连接上限，<=0 兜底 5
+  coalesce_ms: 1000        # 合并推送窗口(毫秒)，<=0 兜底 1000
+  retry_ms: 5000           # 写给客户端的重连建议(毫秒)，<=0 兜底 5000
+
 # 热度计算配置（权重 + 上限）
 hot:
   weight:

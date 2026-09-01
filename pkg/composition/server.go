@@ -2,6 +2,7 @@
 package composition
 
 import (
+	"interestBar/pkg/conf"
 	agentapp "interestBar/pkg/domains/aiagent/application"
 	agentinfra "interestBar/pkg/domains/aiagent/infrastructure"
 	agenthttp "interestBar/pkg/domains/aiagent/interfaces/http"
@@ -53,11 +54,24 @@ import (
 	"interestBar/pkg/shared/routing"
 )
 
+// noticeStreamHub 包级句柄：RegisterDomainRoutes 装配时设置，供 StopNoticeStreamHub 关停。
+var noticeStreamHub noticeapp.StreamHub
+
+// StopNoticeStreamHub 停止 SSE 推流 hub 的 sweeper（server 关停序列调用，幂等安全）。
+func StopNoticeStreamHub() {
+	if noticeStreamHub != nil {
+		noticeStreamHub.Stop()
+	}
+}
+
 // RegisterDomainRoutes 把所有"已搬迁到 domains/"的领域路由挂到 Web server 上。
 //
 // root 是框架无关的 RouterGroup（由入口层用 composition/hertzadapter.ForEngine
 // 从 *server.Hertz 包装而来）。这样本函数彻底不感知底层框架。
-func RegisterDomainRoutes(root routing.RouterGroup) {
+//
+// 返回 SSE 未读推流 hub（nil 不可用），供路由层注册裸 hertz 的 /notice/stream
+// （SSE 需 hijack writer，不走 AppContext 抽象）。
+func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	deps := NewDeps()
 	authCheck := RequireLogin
 
@@ -106,6 +120,16 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 
 	// notice 需要 user Facade（通知列表 actor 批量组装）
 	noticeSvc.SetUserFacade(&noticeUserFacade{delegate: userFacade})
+
+	// SSE 未读数推流 hub（设计 docs/design/sse-notification-design.md §四#5）：
+	// 构造 → 注入 service（MarkRead/MarkAllRead 触发）→ CountReader（推送值与
+	// GET /notice/unread-count 同源）→ consumer hook（Redpanda flush 触发，包级函数注入）。
+	streamCfg := conf.Config.NoticeStream
+	streamHub := noticeapp.NewStreamHub(streamCfg.MaxConnsPerUser, streamCfg.CoalesceMs)
+	noticeSvc.SetStreamHub(streamHub)
+	streamHub.SetCountReader(noticeSvc.GetUnreadCount)
+	redpanda.SetNoticeUnreadHook(streamHub.PublishBatch)
+	noticeStreamHub = streamHub
 
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
@@ -177,6 +201,8 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
+
+	return streamHub
 }
 
 // registerCategory 装配 category 领域。
