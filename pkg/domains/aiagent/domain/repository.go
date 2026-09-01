@@ -47,10 +47,12 @@ type AgentRepository interface {
 	UpdateFields(ctx context.Context, agentID uuid.UUID, fields map[string]interface{}) error
 	// SoftDelete 软删（deleted=1 且 status=0，一并停用）。
 	SoftDelete(ctx context.Context, agentID uuid.UUID) error
-	// ListEnabled 获取全部启用中的**全局**机器人（未删除且 status=1 且 circle_id IS NULL）。
-	// 供回复执行链路加载触发候选（表小，走 idx_ai_agent_active 部分索引）。
-	// circle_id IS NULL 是防泄漏护栏：圈子级机器人创建后不得进入全站触发链。
-	ListEnabled(ctx context.Context) ([]AiAgent, error)
+	// ListEnabledForCircle 获取某圈子作用域内启用中的机器人（未删除且 status=1）：
+	// 全局机器人（circle_id IS NULL，全站触发语义不变）+ 该圈机器人（circle_id = circleID）。
+	// circleID=uuid.Nil 时仅返回全局机器人（全站场景退化为旧 ListEnabled 口径）。
+	// 供回复执行链路按帖子所在圈加载触发候选（设计见 docs/circle-agent-reply-design.md），
+	// 不加载他圈机器人——原"circle_id IS NULL 防泄漏护栏"由本方法的 OR 语义接棒。
+	ListEnabledForCircle(ctx context.Context, circleID uuid.UUID) ([]AiAgent, error)
 	// ExistsByLinkedUserID 检查某系统用户是否为机器人的关联账号（未删除）。
 	// 供评论触发钩子反查，机器人自己的评论不再触发关键词回复（防回环）。
 	// 不加 circle 过滤：防回环口径应覆盖全部机器人（含圈子级，语义前瞻正确）。

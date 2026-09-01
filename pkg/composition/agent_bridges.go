@@ -158,6 +158,7 @@ func (b *agentPostReader) GetPostBrief(ctx context.Context, postID uuid.UUID) (*
 		Status:   brief.Status,
 		IsLock:   brief.IsLock,
 		AuthorID: brief.AuthorID,
+		CircleID: brief.CircleID,
 	}, nil
 }
 
@@ -189,13 +190,15 @@ type commentAgentTrigger struct {
 }
 
 // OnCommentCreated 评论创建完成后的机器人触发入口。
-func (b *commentAgentTrigger) OnCommentCreated(postID, commentID, userID uuid.UUID, rootID *uuid.UUID, content string) {
+// postCircleID 随事件透传（圈子级机器人只在同圈帖触发）。
+func (b *commentAgentTrigger) OnCommentCreated(postID, postCircleID, commentID, userID uuid.UUID, rootID *uuid.UUID, content string) {
 	b.delegate.OnCommentCreated(agentapp.CommentEvent{
-		CommentID: commentID,
-		PostID:    postID,
-		UserID:    userID,
-		RootID:    rootID,
-		Content:   content,
+		CommentID:    commentID,
+		PostID:       postID,
+		PostCircleID: postCircleID,
+		UserID:       userID,
+		RootID:       rootID,
+		Content:      content,
 	})
 }
 
@@ -211,9 +214,11 @@ type postAgentTrigger struct {
 }
 
 // OnPostMentioned 发帖 @提及 后的机器人触发入口。
-func (b *postAgentTrigger) OnPostMentioned(postID, authorID uuid.UUID, mentionUserIDs []uuid.UUID) {
+// circleID 随事件透传（圈子级机器人只在同圈帖触发）。
+func (b *postAgentTrigger) OnPostMentioned(postID, circleID, authorID uuid.UUID, mentionUserIDs []uuid.UUID) {
 	b.delegate.OnPostMentioned(agentapp.PostMentionEvent{
 		PostID:         postID,
+		PostCircleID:   circleID,
 		UserID:         authorID,
 		MentionUserIDs: mentionUserIDs,
 	})

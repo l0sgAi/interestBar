@@ -29,6 +29,9 @@ type PostBrief struct {
 	Status   int16 // 1=已发布（post.PostStatusPublished，避免跨域 import 用裸值）
 	IsLock   int16
 	AuthorID uuid.UUID
+	// CircleID 帖子所属圈子（圈子级机器人回复触发的作用域匹配依据；
+	// 设计见 docs/circle-agent-reply-design.md）。
+	CircleID uuid.UUID
 }
 
 // PostReader 帖子读取端口（桥接 post 域）。未找到返回 nil, nil。
@@ -76,39 +79,55 @@ type LLMCaller interface {
 type CommentEvent struct {
 	CommentID uuid.UUID
 	PostID    uuid.UUID
-	UserID    uuid.UUID
-	RootID    *uuid.UUID
-	Content   string
+	// PostCircleID 帖子所属圈子（circle-agent-reply 作用域匹配：
+	// Nil=未知/全局场景，仅全局机器人触发，fail-closed）。
+	PostCircleID uuid.UUID
+	UserID       uuid.UUID
+	RootID       *uuid.UUID
+	Content      string
 }
 
 // PostMentionEvent 发帖 @提及 事件（post 域触发钩子回调载荷）。
 type PostMentionEvent struct {
 	PostID uuid.UUID
-	UserID uuid.UUID // 发帖人
-	// MentionUserIDs 为 post 域已校验落库的最终 @ 名单（存在性/去自/截断已过）。
+	// PostCircleID 帖子所属圈子（圈子级机器人只在同圈帖触发，Nil 仅全局机器人）。
+	PostCircleID uuid.UUID
+	UserID       uuid.UUID // 发帖人
+	// MentionUserIDs 为 post 域已校验落库的最终 @ 名单（存在性/去自/越圈剔除已过）。
 	MentionUserIDs []uuid.UUID
 }
 
 // ===== Service 接口 =====
 
-// ReplyService 机器人回复执行服务（设计见 docs/agent-reply-design.md）。
+// ReplyService 机器人回复执行服务（设计见 docs/agent-reply-design.md、
+// docs/circle-agent-reply-design.md）。
 type ReplyService interface {
 	// OnCommentCreated 评论创建后的关键词触发入口。
 	// 同步调用、立即返回（内部异步执行）；任何失败静默（仅日志表 + zap），
 	// 绝不向评论创建链路返回错误。机器人自己的评论不触发（防回环）。
+	// 候选集按 evt.PostCircleID 圈子作用域收口：全局机器人 + 该圈机器人，
+	// 他圈机器人不触发（Nil 仅全局，fail-closed）。
 	OnCommentCreated(evt CommentEvent)
 	// OnPostMentioned 发帖 @机器人 触发入口。
 	// 同步调用、立即返回（内部异步执行）；任何失败静默（仅日志表 + zap），
 	// 绝不向发帖链路返回错误。被 @ 的启用机器人即触发：显式 @ 视为直接点名，
 	// 不校验 trigger_mode/关键词（mode 仅约束关键词/手动入口的被动触发）。
+	// 圈子作用域同 OnCommentCreated（scope 匹配与 mention 兜底剔除构成双层防线）。
 	OnPostMentioned(evt PostMentionEvent)
-	// ManualReply 管理员手动触发回复（同步，仅 trigger_mode=3 的启用全局机器人；
-	// 圈内机器人返回 errCircleReplyUnsupported——不参与回复触发）。
+	// ManualReply 管理员手动触发回复（同步，仅 trigger_mode=3 的启用**全局**机器人；
+	// 圈内机器人返回 errAgentNotFound——跨作用域不可见，404 不泄露存在性）。
 	// 返回生成的评论 ID；失败返回错误（同时已写失败日志行）。
 	ManualReply(ctx context.Context, adminID, agentID, postID uuid.UUID) (uuid.UUID, error)
+	// CircleManualReply 圈内手动触发回复（同步，仅该圈圈主；trigger_mode=3 的
+	// 启用圈内机器人，且帖子必须属于机器人所在圈，跨圈 404）。
+	// 返回生成的评论 ID；失败返回错误（同时已写失败日志行）。
+	CircleManualReply(ctx context.Context, operatorID, agentID, postID uuid.UUID) (uuid.UUID, error)
 
 	// SetRoleReader 注入 user Facade（管理员校验用）。
 	SetRoleReader(r RoleReader)
+	// SetCircleRoleReader 注入圈内角色读取端口（圈内手动触发鉴权用，composition 桥接；
+	// 未注入 fail-closed 一律拒绝）。
+	SetCircleRoleReader(r CircleRoleReader)
 	// SetPostReader 注入帖子读取端口。
 	SetPostReader(r PostReader)
 	// SetCommentCreator 注入评论创建端口。
@@ -148,6 +167,7 @@ type replyServiceImpl struct {
 	replyLogRepo   domain.ReplyLogRepository
 	llm            LLMCaller
 	roleReader     RoleReader
+	circleRoles    CircleRoleReader // 注入前 nil，圈内手动触发鉴权 fail-closed
 	postReader     PostReader
 	commentCreator CommentCreator
 	sem            chan struct{} // 关键词触发异步执行并发上限
@@ -175,8 +195,23 @@ func NewReplyService(
 }
 
 func (s *replyServiceImpl) SetRoleReader(r RoleReader)         { s.roleReader = r }
+func (s *replyServiceImpl) SetCircleRoleReader(r CircleRoleReader) { s.circleRoles = r }
 func (s *replyServiceImpl) SetPostReader(r PostReader)         { s.postReader = r }
 func (s *replyServiceImpl) SetCommentCreator(c CommentCreator) { s.commentCreator = c }
+
+// agentInScope 机器人回复的作用域匹配（三条入口共用，唯一核心规则）：
+//   - 全局机器人（CircleID=nil）全站回复（现状语义，含圈内帖）；
+//   - 圈内机器人仅在帖子属于同一圈时触发；
+//   - postCircleID=Nil（理论不可达，防御性）时仅全局机器人触发——fail-closed。
+//
+// 候选集已由 repo ListEnabledForCircle 按圈收口，此函数是触发链内的第二道防线
+//（防候选集语义漂移；手动触发路径无候选集，直接用它做归属校验）。
+func agentInScope(agent *domain.AiAgent, postCircleID uuid.UUID) bool {
+	if agent.CircleID == nil {
+		return true
+	}
+	return postCircleID != uuid.Nil && *agent.CircleID == postCircleID
+}
 
 // replyTimeoutSec 单阶段 LLM 调用超时（配置兜底）。分类器与生成各自持有一份
 // 该额度的子预算，互不挤占；关键词触发的整链兜底上限为 2*replyTimeout。
@@ -218,13 +253,18 @@ func (s *replyServiceImpl) OnCommentCreated(evt CommentEvent) {
 			return
 		}
 
-		agents, err := s.agentRepo.ListEnabled(ctx)
+		agents, err := s.agentRepo.ListEnabledForCircle(ctx, evt.PostCircleID)
 		if err != nil {
 			logger.Log.Error("agent reply: list enabled agents failed: " + err.Error())
 			return
 		}
 		for i := range agents {
 			agent := &agents[i]
+			// 第二道防线：候选集已按圈收口，这里再挡一次（防候选集语义漂移）。
+			if !agentInScope(agent, evt.PostCircleID) {
+				logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=out_of_scope", agent.ID, evt.PostID))
+				continue
+			}
 			if domain.TriggerMode(agent.TriggerMode) != domain.TriggerModeKeyword {
 				logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=mode_not_keyword", agent.ID, evt.PostID))
 				continue
@@ -293,7 +333,7 @@ func (s *replyServiceImpl) OnPostMentioned(evt PostMentionEvent) {
 		ctx, cancel := context.WithTimeout(context.Background(), replyTimeout())
 		defer cancel()
 
-		agents, err := s.agentRepo.ListEnabled(ctx)
+		agents, err := s.agentRepo.ListEnabledForCircle(ctx, evt.PostCircleID)
 		if err != nil {
 			logger.Log.Error("agent reply: list enabled agents failed: " + err.Error())
 			return
@@ -304,6 +344,12 @@ func (s *replyServiceImpl) OnPostMentioned(evt PostMentionEvent) {
 		}
 		for i := range agents {
 			agent := &agents[i]
+			// 第二道防线：上期 mention 兜底已在名单层剔除越圈机器人，这里在
+			// 触发层再挡一次（防构造请求、防投影列漂移）。
+			if !agentInScope(agent, evt.PostCircleID) {
+				logger.Log.Info(fmt.Sprintf("agent reply skip: agent=%s post=%s reason=out_of_scope", agent.ID, evt.PostID))
+				continue
+			}
 			if _, ok := mentioned[agent.LinkedUserID]; !ok {
 				continue
 			}
@@ -343,7 +389,7 @@ func (s *replyServiceImpl) OnPostMentioned(evt PostMentionEvent) {
 	}()
 }
 
-// ManualReply 管理员手动触发（同步）。
+// ManualReply 管理员手动触发（同步，仅全局机器人）。
 func (s *replyServiceImpl) ManualReply(ctx context.Context, adminID, agentID, postID uuid.UUID) (uuid.UUID, error) {
 	if err := s.ensureReplyAdmin(ctx, adminID); err != nil {
 		return uuid.Nil, err
@@ -353,9 +399,9 @@ func (s *replyServiceImpl) ManualReply(ctx context.Context, adminID, agentID, po
 		return uuid.Nil, err
 	}
 	if agent.CircleID != nil {
-		// 防泄漏护栏：圈内机器人不参与回复触发（P1 圈内触发链落地前），
-		// 防超管手动入口误触发圈内机器人全站回复。
-		return uuid.Nil, errCircleReplyUnsupported
+		// 跨作用域不可见：全局控制台不展示圈内机器人，404 不泄露存在性
+		//（原 errCircleReplyUnsupported 403 风格与全局链其余方法惯例不一致，已废）。
+		return uuid.Nil, errAgentNotFound
 	}
 	if agent.Status != domain.AgentStatusEnabled {
 		return uuid.Nil, errAgentDisabled
@@ -368,6 +414,69 @@ func (s *replyServiceImpl) ManualReply(ctx context.Context, adminID, agentID, po
 		return uuid.Nil, err
 	}
 	return *commentID, nil
+}
+
+// CircleManualReply 圈内手动触发（同步，仅该圈圈主，仅本圈帖）。
+//
+// 校验链：先 404 后 403（loadCircleAgent 同款惯例，不泄露归属）→ 圈主（手动触发
+// 直烧圈主持有的计费凭据，owner-only 对齐凭据字段/删除分级）→ 启用 + mode=3 →
+// 帖子门槛（已发布未锁定 + 归属机器人所在圈，跨圈 404 防拿本圈机器人刷它圈帖）。
+// 限流/两阶段分类器与全局链共用 executeReply，per-agent 配置原样生效。
+func (s *replyServiceImpl) CircleManualReply(ctx context.Context, operatorID, agentID, postID uuid.UUID) (uuid.UUID, error) {
+	if s.postReader == nil || s.commentCreator == nil || s.llm == nil {
+		return uuid.Nil, errors.New("agent reply dependencies not configured")
+	}
+	agent, err := s.agentRepo.GetByID(ctx, agentID)
+	if err != nil {
+		if errors.Is(err, domain.ErrAgentNotFound) {
+			return uuid.Nil, errAgentNotFound
+		}
+		return uuid.Nil, err
+	}
+	if agent.CircleID == nil {
+		// 全局机器人不归圈内链管：圈内链不暴露全局机器人的存在性（404）。
+		return uuid.Nil, errAgentNotFound
+	}
+	if err := s.requireCircleOwnerForReply(ctx, *agent.CircleID, operatorID); err != nil {
+		return uuid.Nil, err
+	}
+	if agent.Status != domain.AgentStatusEnabled {
+		return uuid.Nil, errAgentDisabled
+	}
+	if domain.TriggerMode(agent.TriggerMode) != domain.TriggerModeManual {
+		return uuid.Nil, errNotManualMode
+	}
+	// 帖子门槛：已发布未锁定，且必须属于机器人所在圈（手动触发无候选集收口，
+	// 此处即作用域主防线，agentInScope 语义与触发链一致）。
+	post, err := s.postReader.GetPostBrief(ctx, postID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if post == nil || post.Status != 1 || post.IsLock == 1 {
+		return uuid.Nil, errPostNotReplyable
+	}
+	if !agentInScope(agent, post.CircleID) {
+		return uuid.Nil, errPostNotInAgentCircle
+	}
+	commentID, err := s.executeReply(ctx, agent, postID, nil)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return *commentID, nil
+}
+
+// requireCircleOwnerForReply 圈内手动触发的圈主校验（fail-closed：端口未注入/
+// 非成员/角色不足/状态非 normal 一律拒绝）。与 CircleAgentService.requireCircleOwner
+// 同语义（独立实现：ReplyService 的注入点与失败语义不同，不强行共用结构）。
+func (s *replyServiceImpl) requireCircleOwnerForReply(ctx context.Context, circleID, operatorID uuid.UUID) error {
+	if s.circleRoles == nil {
+		return errNotCircleOwner
+	}
+	role, status, ok, err := s.circleRoles.GetCircleMembership(ctx, circleID, operatorID)
+	if err != nil || !ok || role != circleRoleOwner || status != memberStatusNormal {
+		return errNotCircleOwner
+	}
+	return nil
 }
 
 // ensureReplyAdmin 手动触发的管理员校验（fail-closed，同 AgentService.ensureAdmin）。

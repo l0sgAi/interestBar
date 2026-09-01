@@ -61,13 +61,19 @@ type fakeAgentRepo struct {
 	gotMax    int   // CreateInCircle 收到的 maxPerCircle
 	updated   map[uuid.UUID]map[string]interface{}
 	deleted   []uuid.UUID
+
+	// scopeFilterEnabled 模拟 ListEnabledForCircle 的 SQL 圈子收口语义；
+	// 置 false 模拟候选集语义漂移（返回全部启用机器人），用于验证触发链
+	// agentInScope 第二道防线（circle-agent-reply 双保险）。
+	scopeFilterEnabled bool
 }
 
 func newFakeAgentRepo() *fakeAgentRepo {
 	return &fakeAgentRepo{
-		byID:      map[uuid.UUID]*domain.AiAgent{},
-		nameTaken: map[uuid.UUID]map[string]bool{},
-		updated:   map[uuid.UUID]map[string]interface{}{},
+		byID:               map[uuid.UUID]*domain.AiAgent{},
+		nameTaken:          map[uuid.UUID]map[string]bool{},
+		updated:            map[uuid.UUID]map[string]interface{}{},
+		scopeFilterEnabled: true,
 	}
 }
 
@@ -157,6 +163,32 @@ func (f *fakeAgentRepo) UpdateFields(ctx context.Context, id uuid.UUID, fields m
 func (f *fakeAgentRepo) SoftDelete(ctx context.Context, id uuid.UUID) error {
 	f.deleted = append(f.deleted, id)
 	return nil
+}
+
+// ListEnabledForCircle 模拟 PG 的圈子收口语义：全局机器人 + circleID 圈内机器人
+//（circleID=Nil 仅全局）；scopeFilterEnabled=false 时返回全部启用机器人（漂移模拟）。
+func (f *fakeAgentRepo) ListEnabledForCircle(ctx context.Context, circleID uuid.UUID) ([]domain.AiAgent, error) {
+	var out []domain.AiAgent
+	for _, a := range f.byID {
+		if a.Status != domain.AgentStatusEnabled {
+			continue
+		}
+		inScope := a.CircleID == nil || (circleID != uuid.Nil && *a.CircleID == circleID)
+		if !f.scopeFilterEnabled || inScope {
+			out = append(out, *a)
+		}
+	}
+	return out, nil
+}
+
+// ExistsByLinkedUserID 防回环口径：linked_user_id 命中任意未删除机器人即 true。
+func (f *fakeAgentRepo) ExistsByLinkedUserID(ctx context.Context, userID uuid.UUID) (bool, error) {
+	for _, a := range f.byID {
+		if a.LinkedUserID == userID {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (f *fakeAgentRepo) ListByCircle(ctx context.Context, circleID uuid.UUID, keyword string, offset, limit int) ([]domain.AiAgent, int64, error) {
@@ -559,11 +591,12 @@ func TestCircleAgent_FailClosed_CircleRoleReaderNotInjected(t *testing.T) {
 	}
 }
 
-// ---- ManualReply 圈内守卫 ----
+// ---- ManualReply 404 对齐 ----
 
-// TestManualReply_CircleAgentUnsupported 圈内机器人手动触发 → errCircleReplyUnsupported
-//（防超管手动入口误触发圈内机器人全站回复）；全局机器人不受影响。
-func TestManualReply_CircleAgentUnsupported(t *testing.T) {
+// TestManualReply_CircleAgentNotFound 圈内机器人走全局手动入口 → errAgentNotFound
+//（跨作用域不可见，404 不泄露存在性；原 errCircleReplyUnsupported 403 已废）；
+// 全局机器人不受影响（走到后续校验：非手动模式 → errNotManualMode）。
+func TestManualReply_CircleAgentNotFound(t *testing.T) {
 	repo := newFakeAgentRepo()
 	seedCircleAgent(repo)
 	seedGlobalAgent(repo)
@@ -575,8 +608,8 @@ func TestManualReply_CircleAgentUnsupported(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := replySvc.ManualReply(ctx, ownerID, circleAgentID, uuid.New())
-	if !errors.Is(err, errCircleReplyUnsupported) {
-		t.Fatalf("ManualReply(circle agent) err = %v, want errCircleReplyUnsupported", err)
+	if !errors.Is(err, errAgentNotFound) {
+		t.Fatalf("ManualReply(circle agent) err = %v, want errAgentNotFound", err)
 	}
 	// 全局机器人走到后续校验（非手动模式 → errNotManualMode），说明守卫未误伤全局链。
 	_, err = replySvc.ManualReply(ctx, ownerID, globalAgentID, uuid.New())

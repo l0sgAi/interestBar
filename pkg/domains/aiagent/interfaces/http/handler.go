@@ -248,12 +248,16 @@ func requireAgentID(c appctx.AppContext) (uuid.UUID, bool) {
 	return id, true
 }
 
-// writeReplyError 把手动触发回复的错误映射为 HTTP 响应。
+// writeReplyError 把手动触发回复的错误映射为 HTTP 响应（全局/圈内两条端点共用）。
 func writeReplyError(c appctx.AppContext, err error) {
 	switch {
 	case application.IsNotAdminErr(err):
 		httputil.Forbidden(c, "Admin role required")
-	case application.IsAgentNotFoundErr(err), errors.Is(err, domain.ErrAgentNotFound):
+	case application.IsNotCircleOwnerErr(err):
+		httputil.Forbidden(c, "Circle owner privileges required")
+	case application.IsAgentNotFoundErr(err), errors.Is(err, domain.ErrAgentNotFound),
+		application.IsPostNotInAgentCircleErr(err):
+		// 帖子不属于机器人所在圈同样 404：不暴露它圈帖子与机器人的存在性。
 		httputil.NotFound(c, "Agent not found")
 	case application.IsAgentDisabledErr(err),
 		application.IsNotManualModeErr(err),

@@ -68,8 +68,9 @@ type PostLookup interface {
 // 不向评论创建链路传播任何错误。
 type AgentReplyTrigger interface {
 	// OnCommentCreated 评论创建完成后的触发入口。
-	// rootID 为 nil 表示顶层评论。
-	OnCommentCreated(postID, commentID, userID uuid.UUID, rootID *uuid.UUID, content string)
+	// postCircleID 为帖子所属圈子（机器人回复的作用域匹配依据：
+	// 圈子级机器人只在同圈帖触发）；rootID 为 nil 表示顶层评论。
+	OnCommentCreated(postID, postCircleID, commentID, userID uuid.UUID, rootID *uuid.UUID, content string)
 }
 
 // ===== DTO =====
@@ -323,8 +324,9 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 	}
 
 	// 7. AI 机器人回复触发（同步回调、实现方立即返回；机器人自身评论由实现方防回环）。
+	// post.CircleID 随事件透传：圈子级机器人只在同圈帖触发（circle-agent-reply）。
 	if s.agentTrigger != nil {
-		s.agentTrigger.OnCommentCreated(input.PostID, comment.ID, userID, comment.RootID, content)
+		s.agentTrigger.OnCommentCreated(input.PostID, post.CircleID, comment.ID, userID, comment.RootID, content)
 	}
 
 	return comment.ID, nil

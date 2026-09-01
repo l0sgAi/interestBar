@@ -90,8 +90,9 @@ type CirclePostCountPort interface {
 // 不向发帖链路传播任何错误。
 type AgentPostTrigger interface {
 	// OnPostMentioned 发帖 @提及 触发入口。
+	// circleID 为帖子所属圈子（圈子级机器人只在同圈帖触发）；
 	// mentionUserIDs 为已校验落库的最终名单；authorID 为发帖人。
-	OnPostMentioned(postID, authorID uuid.UUID, mentionUserIDs []uuid.UUID)
+	OnPostMentioned(postID, circleID, authorID uuid.UUID, mentionUserIDs []uuid.UUID)
 }
 
 // ===== 搜索结果 DTO =====
@@ -296,6 +297,7 @@ type PostBrief struct {
 	Status   int16 // 帖子状态
 	IsLock   int16 // 是否锁定
 	AuthorID uuid.UUID
+	CircleID uuid.UUID // 帖子所属圈子（机器人回复作用域匹配用）
 }
 
 type postServiceImpl struct {
@@ -457,9 +459,10 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 			}
 		}
 		// AI 机器人触发：与通知同一门槛（仅已发布）、同一名单；
+		// 帖子圈子随事件透传（圈子级机器人只在同圈帖触发）；
 		// 同步回调立即返回，内部异步执行，不向发帖链路传播错误。
 		if postStatus == domain.PostStatusPublished && s.agentTrigger != nil {
-			s.agentTrigger.OnPostMentioned(post.ID, userID, mentionIDs)
+			s.agentTrigger.OnPostMentioned(post.ID, post.CircleID, userID, mentionIDs)
 		}
 	}
 
@@ -1156,6 +1159,7 @@ func (s *postServiceImpl) GetPostBrief(ctx context.Context, postID uuid.UUID) (*
 		Status:   post.Status,
 		IsLock:   post.IsLock,
 		AuthorID: post.UserID,
+		CircleID: post.CircleID,
 	}, nil
 }
 

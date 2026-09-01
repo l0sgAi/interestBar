@@ -192,14 +192,20 @@ func (r *agentRepoPG) SoftDelete(ctx context.Context, agentID uuid.UUID) error {
 		}).Error
 }
 
-// ListEnabled 获取全部启用中的全局机器人（circle_id IS NULL 防泄漏护栏：
-// 圈内机器人一创建就可能在全站触发回复，必须在这里挡住）。
-func (r *agentRepoPG) ListEnabled(ctx context.Context) ([]domain.AiAgent, error) {
+// ListEnabledForCircle 圈子作用域触发候选集：全局机器人 + 该圈启用中的机器人。
+// circleID=uuid.Nil 时仅返回全局机器人（全站场景，OR 分支退化为 IS NULL 单独成条，
+// 避免与全零 UUID 桶语义混淆）。原 ListEnabled 的"circle_id IS NULL 防泄漏护栏"
+// 由本方法的 OR 语义接棒：他圈机器人不进任何帖子的触发链。
+func (r *agentRepoPG) ListEnabledForCircle(ctx context.Context, circleID uuid.UUID) ([]domain.AiAgent, error) {
 	var agents []domain.AiAgent
-	err := r.db.WithContext(ctx).
-		Where("circle_id IS NULL AND deleted = ? AND status = ?", 0, domain.AgentStatusEnabled).
-		Order("create_time ASC").
-		Find(&agents).Error
+	query := r.db.WithContext(ctx).
+		Where("deleted = ? AND status = ?", 0, domain.AgentStatusEnabled)
+	if circleID == uuid.Nil {
+		query = query.Where("circle_id IS NULL")
+	} else {
+		query = query.Where("circle_id IS NULL OR circle_id = ?", circleID)
+	}
+	err := query.Order("create_time ASC").Find(&agents).Error
 	return agents, err
 }
 

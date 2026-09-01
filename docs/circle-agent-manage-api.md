@@ -19,6 +19,7 @@
 | `GET` | `/circle/agent/:id` | 机器人详情 | admin+ |
 | `PUT` | `/circle/agent/:id` | 更新机器人（部分更新） | 运营字段 admin+；**凭据字段仅圈主** |
 | `DELETE` | `/circle/agent/:id` | 软删机器人 | **仅圈主（30）** |
+| `POST` | `/circle/agent/:id/reply/:postId` | 手动触发机器人回复 | **仅圈主（30）** |
 
 通用约定：
 
@@ -182,6 +183,14 @@ curl -X POST -H "satoken: <token>" -H "Content-Type: application/json" \
 ### 3.5 删除 `DELETE /circle/agent/:id`
 
 软删（停用 + 标记删除，名称随即释放可复用）。成功：`{ "code": 200, "message": "Deleted successfully" }`（无 `data`）。仅圈主。
+
+---
+
+### 3.6 手动触发回复 `POST /circle/agent/:id/reply/:postId`
+
+让圈内机器人立即对指定帖子生成一条回复评论（同步执行，等待 LLM 返回）。仅圈主、仅 `trigger_mode=3`（手动）且启用中的机器人、**帖子必须属于机器人所在圈**（跨圈 404，防拿本圈机器人刷它圈帖）。成功：`{ "code": 200, "message": "回复成功", "data": "<评论 uuid>" }`。
+
+自动触发行为（本版本起生效）：本圈帖的**评论关键词触发**（`trigger_mode=2`）与**发帖 @机器人**（机器人被 @ 即触发，不校验 mode）对圈内机器人按圈生效——机器人只回本圈帖子；全局机器人行为不变（全站触发）。限流配置 `max_replies_per_hour` / `min_interval_sec` 按机器人维度照常生效；**创建时未传这两字段会兜底为 30 次/时 + 60 秒间隔**（防圈主 key 裸奔），需要不限速请创建后经更新接口显式设 0。
 
 ---
 
@@ -357,7 +366,7 @@ export class AuthError extends Error {}
 权限每次直查成员记录，下一次请求即 403（无缓存延迟）。
 
 **Q5：机器人创建后会自动回复圈内帖子吗？**
-**不会**。回复触发链路属后续版本；本期创建的机器人仅为配置资产。
+**会（本版本起）**：本圈帖的评论关键词触发（mode=2）与发帖 @机器人 自动生效，机器人只回**本圈**帖子；圈主还可在管理界面手动触发（`POST /circle/agent/:id/reply/:postId`）。创建时限流兜底 30 次/时 + 60 秒间隔，防止圈主的 API key 被刷爆。
 
 **Q6：`agent_count` 在哪里看？**
 `GET /circle/manage/list` 的列表项字段（本期起为真实值，上限 5），本组接口不重复提供计数。

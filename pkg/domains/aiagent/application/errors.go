@@ -29,9 +29,10 @@ var (
 	errRateLimited      = errors.New("agent reply rate limited")
 	errSkippedByFilter  = errors.New("reply skipped by classifier")
 	errLLMCall          = errors.New("llm call failed")
-	// errCircleReplyUnsupported 圈内机器人不参与回复触发（P1 前护栏：
-	// 防超管经手动入口误触发圈内机器人全站回复）。
-	errCircleReplyUnsupported = errors.New("circle agent reply not supported yet")
+	// errPostNotInAgentCircle 圈内手动触发的帖子不属于机器人所在圈（跨圈防刷：
+	// 不允许拿本圈机器人的计费凭据去回它圈帖子）。handler 映射 404，
+	// 不暴露它圈帖子与机器人的存在性。
+	errPostNotInAgentCircle = errors.New("post does not belong to the agent's circle")
 )
 
 // 圈内机器人管理（CircleAgentService）的错误。
@@ -64,8 +65,8 @@ func IsRateLimitedErr(err error) bool      { return errors.Is(err, errRateLimite
 func IsSkippedByFilterErr(err error) bool  { return errors.Is(err, errSkippedByFilter) }
 func IsLLMCallErr(err error) bool          { return errors.Is(err, errLLMCall) }
 
-// IsCircleReplyUnsupportedErr 圈内机器人不支持回复触发（手动入口护栏）。
-func IsCircleReplyUnsupportedErr(err error) bool { return errors.Is(err, errCircleReplyUnsupported) }
+// IsPostNotInAgentCircleErr 圈内手动触发的帖子不属于机器人所在圈（handler 映射 404）。
+func IsPostNotInAgentCircleErr(err error) bool { return errors.Is(err, errPostNotInAgentCircle) }
 
 // 圈内机器人管理错误谓词（供 handler 层使用）。
 func IsNotCircleAdminErr(err error) bool   { return errors.Is(err, errNotCircleAdmin) }

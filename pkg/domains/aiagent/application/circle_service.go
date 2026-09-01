@@ -4,7 +4,8 @@
 // 权限模型与 circle 管理域同构：admin+ 可列表/详情/创建/更新运营字段；
 // 凭据字段（api_protocol/base_url/api_key，计费凭据由圈主持有）与删除仅圈主。
 // 平台超管（users.role=1）不特殊处理——其控制台是 /agent/*（全局机器人）。
-// 圈内机器人不参与任何回复触发（ListEnabled/ManualReply 已加 circle_id IS NULL 守卫）。
+// 圈内机器人回复触发已按圈落地（docs/circle-agent-reply-design.md）：本圈帖
+// 关键词/@提及/圈主手动触发，限流缺省防圈主 key 裸奔。
 // 权限每次直查 member 记录（无缓存）：任免/转让/禁言即时生效；圈子被封禁不阻断管理
 //（owner 需要能停用/删除机器人止血），权限只看 member 记录。
 // 设计见 docs/circle-agent-manage-design.md。
@@ -27,6 +28,15 @@ const (
 	circleRoleAdmin    = 20
 	circleRoleOwner    = 30
 	memberStatusNormal = 1
+)
+
+// 圈内机器人限流缺省值（决策项 B，docs/circle-agent-reply-design.md §2.6）：
+// 创建入参未传（<=0）时补默认，防止圈主持有的计费 key 裸奔不限速；
+// 数值与 DDL 列默认一致。代价：圈内创建无法直接表达"不限"——需创建后经
+// 更新接口显式设 0（更新链路原样透传，语义不变）。全局链路不做此兜底。
+const (
+	circleBotDefaultMaxRepliesPerHour = 30
+	circleBotDefaultMinIntervalSec    = 60
 )
 
 // CircleRoleReader 跨域端口：读取用户在圈内的角色/成员状态（composition 桥接 circle 域）。
@@ -139,6 +149,14 @@ func (s *circleAgentServiceImpl) CreateCircleAgent(ctx context.Context, operator
 	agent, err := validateAndBuildAgent(input)
 	if err != nil {
 		return nil, err
+	}
+	// 圈内限流缺省（决策项 B）：计费 key 由圈主持有，创建未传即兜底防裸奔；
+	// 全局链路语义不变（0=不限）。
+	if agent.MaxRepliesPerHour <= 0 {
+		agent.MaxRepliesPerHour = circleBotDefaultMaxRepliesPerHour
+	}
+	if agent.MinIntervalSec <= 0 {
+		agent.MinIntervalSec = circleBotDefaultMinIntervalSec
 	}
 
 	// 名称唯一预检（圈内桶；并发兜底靠 (circle 桶, name) 部分唯一索引）。

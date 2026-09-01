@@ -146,8 +146,13 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	circleSvc.SetAgentCounter(&circleAgentCounterForCircle{repo: agentRepo})
 
 	// aiagent 回复执行链路：LLM(eino) + 帖子摘要(post) + 评论创建(comment)。
+	// 触发链按帖子所在圈收口候选集（全局机器人 + 本圈机器人，circle-agent-reply）；
+	// 圈内手动触发需圈主鉴权（复用 circleRoleReaderForAgent 桥）。
 	replySvc := newAgentReplyService(deps, postSvc, commentSvc)
 	replySvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
+	replySvc.SetCircleRoleReader(&circleRoleReaderForAgent{
+		delegate: circleapp.NewCircleMemberRoleReader(memberRepo),
+	})
 	// comment -> aiagent：评论创建后触发关键词机器人（同步回调、内部异步执行）。
 	commentSvc.SetAgentTrigger(&commentAgentTrigger{delegate: replySvc})
 	// post -> aiagent：发帖 @机器人 触发回复（同步回调、内部异步执行）。

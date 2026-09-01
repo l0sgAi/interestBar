@@ -18,12 +18,13 @@ import (
 
 // CircleAgentHandler 圈子级 AI 机器人管理 HTTP 处理器。
 type CircleAgentHandler struct {
-	svc application.CircleAgentService
+	svc      application.CircleAgentService
+	replySvc application.ReplyService
 }
 
-// NewCircleAgentHandler 构造 CircleAgentHandler。
-func NewCircleAgentHandler(svc application.CircleAgentService) *CircleAgentHandler {
-	return &CircleAgentHandler{svc: svc}
+// NewCircleAgentHandler 构造 CircleAgentHandler（replySvc 供圈内手动触发回复）。
+func NewCircleAgentHandler(svc application.CircleAgentService, replySvc application.ReplyService) *CircleAgentHandler {
+	return &CircleAgentHandler{svc: svc, replySvc: replySvc}
 }
 
 // createCircleAgentReq 创建圈内机器人请求（字段定义同全局 createAgentReq，仅多 circle_id）。
@@ -187,6 +188,32 @@ func (h *CircleAgentHandler) DeleteCircleAgent(c appctx.AppContext) {
 		return
 	}
 	httputil.SuccessWithMessage(c, httputil.MsgDeleted, nil)
+}
+
+// CircleManualReply POST /circle/agent/:id/reply/:postId 圈主手动触发圈内机器人回复。
+//
+// 仅该圈圈主 + trigger_mode=3 + 启用中的圈内机器人，且帖子必须属于机器人所在圈；
+// 同步执行 LLM 调用，成功返回生成的评论 ID，失败返回错误（失败日志行已照常落库）。
+func (h *CircleAgentHandler) CircleManualReply(c appctx.AppContext) {
+	userID, ok := requireUserID(c)
+	if !ok {
+		return
+	}
+	agentID, ok := requireAgentID(c)
+	if !ok {
+		return
+	}
+	postID, err := uuid.Parse(c.Param("postId"))
+	if err != nil {
+		httputil.BadRequest(c, "Invalid post id")
+		return
+	}
+	commentID, err := h.replySvc.CircleManualReply(c, userID, agentID, postID)
+	if err != nil {
+		writeReplyError(c, err)
+		return
+	}
+	httputil.SuccessWithMessage(c, "回复成功", commentID)
 }
 
 // writeCircleAgentError 把圈内机器人管理的错误映射为 HTTP 响应。
