@@ -50,6 +50,9 @@ type UserFacade interface {
 	// keyword 为空返回空列表。
 	// 供跨领域"按用户名/邮箱过滤成员"类场景使用（如圈子成员管理搜索）。
 	SearchBriefs(ctx context.Context, keyword string, limit int) ([]UserBrief, int64, error)
+	// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含圈内机器人行）。
+	// 供 post/comment 域 mention 兜底剔除越圈机器人。
+	GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 }
 
 // UserListItemVO 用户列表项（搜索结果用）。
@@ -100,7 +103,8 @@ type UpdateProfileResult struct {
 // 抽象出来是为了让 UserService 依赖接口而非直接 import ES 包。
 type UserSearcher interface {
 	// Search 按关键字搜索用户，支持 search_after 分页。
-	Search(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*UserSearchResult, error)
+	// circleID 为圈子作用域（Nil=全站：排除圈内机器人；非 Nil=圈内@：本圈机器人可见）。
+	Search(ctx context.Context, keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*UserSearchResult, error)
 }
 
 // UserService 是 user 领域的应用服务接口。
@@ -114,7 +118,15 @@ type UserService interface {
 	// UpdateProfile 修改用户资料（部分字段更新）。
 	UpdateProfile(ctx context.Context, userID uuid.UUID, input UpdateProfileInput) (*UpdateProfileResult, error)
 	// Search 搜索用户。searchAfter 为已解析的分页游标（可为 nil）。
-	Search(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*UserSearchResult, error)
+	// circleID 为圈子作用域（Nil=全站；非 Nil=圈内@选人，见 UserSearcher.Search）。
+	Search(ctx context.Context, keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*UserSearchResult, error)
+	// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含 agent_circle_id 非 NULL 的行，
+	// 普通用户/全局机器人不出现在 map 里）。直查 repo 不走缓存（mention 校验低频，数据新鲜度优先）。
+	// 供 post/comment 域 mention 兜底剔除越圈机器人。
+	GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
+	// ClearAgentCircleScope 清除机器人账号的圈子绑定（users.agent_circle_id 置 NULL，
+	// 恢复"全局可见"语义），并刷新 userinfo 缓存。供 aiagent 域删除机器人后调用（幂等）。
+	ClearAgentCircleScope(ctx context.Context, userID uuid.UUID) error
 }
 
 type userServiceImpl struct {
@@ -213,7 +225,7 @@ func (f *userFacadeAdapter) SearchBriefs(ctx context.Context, keyword string, li
 	if limit <= 0 || limit > 100 {
 		limit = 100
 	}
-	res, err := f.svc.Search(ctx, keyword, limit, nil)
+	res, err := f.svc.Search(ctx, keyword, limit, nil, uuid.Nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -222,6 +234,11 @@ func (f *userFacadeAdapter) SearchBriefs(ctx context.Context, keyword string, li
 		out = append(out, UserBrief{ID: u.ID, Username: u.Username, AvatarURL: u.AvatarURL})
 	}
 	return out, res.Total, nil
+}
+
+// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（薄转发 UserService 同名方法）。
+func (f *userFacadeAdapter) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	return f.svc.GetAgentCircleIDs(ctx, userIDs)
 }
 
 // GetByID 获取用户详情，先查缓存再回源 DB。
@@ -366,7 +383,39 @@ func (s *userServiceImpl) UpdateProfile(ctx context.Context, userID uuid.UUID, i
 	}, nil
 }
 
-// Search 搜索用户。
-func (s *userServiceImpl) Search(ctx context.Context, keyword string, size int, searchAfter []interface{}) (*UserSearchResult, error) {
-	return s.searcher.Search(ctx, keyword, size, searchAfter)
+// Search 搜索用户。service 层纯透传（过滤全部下沉 ES），circleID 语义见 UserSearcher.Search。
+func (s *userServiceImpl) Search(ctx context.Context, keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*UserSearchResult, error) {
+	return s.searcher.Search(ctx, keyword, size, searchAfter, circleID)
+}
+
+// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含 agent_circle_id 非 NULL 的行）。
+// 直查 repo.GetByIDs 不走缓存：mention 兜底校验低频，数据新鲜度优先（防越圈@依赖投影列即时一致）。
+func (s *userServiceImpl) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	result := make(map[uuid.UUID]uuid.UUID, len(userIDs))
+	if len(userIDs) == 0 {
+		return result, nil
+	}
+	users, err := s.repo.GetByIDs(ctx, userIDs)
+	if err != nil {
+		return nil, err
+	}
+	for id, u := range users {
+		if u != nil && u.AgentCircleID != nil {
+			result[id] = *u.AgentCircleID
+		}
+	}
+	return result, nil
+}
+
+// ClearAgentCircleScope 清除机器人账号的圈子绑定（users.agent_circle_id 置 NULL）。
+// 幂等：列本为 NULL 时更新无副作用。清列后重读最新行覆盖 userinfo 缓存，
+// 避免 GetByID 短期内回显旧实体（缓存刷新失败不影响结果，TTL 到期自愈）。
+func (s *userServiceImpl) ClearAgentCircleScope(ctx context.Context, userID uuid.UUID) error {
+	if err := s.repo.UpdateFields(ctx, userID, map[string]interface{}{"agent_circle_id": nil}); err != nil {
+		return err
+	}
+	if user, err := s.repo.GetByID(ctx, userID); err == nil && user != nil {
+		_ = s.cache.SetUser(ctx, userID, user)
+	}
+	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/elastic/go-elasticsearch/v8/esapi"
+	"github.com/google/uuid"
 )
 
 // UserDocument 用户文档结构
@@ -34,14 +35,16 @@ type UserListResponse struct {
 // keyword: 搜索关键字，为空时返回所有符合条件的用户，优先使用 username 字段检索，其次使用 email 字段检索
 // size: 每页数量，默认 20
 // searchAfter: 上一页返回的 search_after 值，用于获取下一页
+// circleID: 圈子作用域（@选人场景）。Nil=全站（排除所有圈内机器人）；
+// 非 Nil=圈内（可见普通用户+全局机器人+本圈机器人，排除他圈机器人）。
 // 返回：用户列表响应（包含用户列表、总数、分页信息）
-func SearchUsers(keyword string, size int, searchAfter []interface{}) (*UserListResponse, error) {
+func SearchUsers(keyword string, size int, searchAfter []interface{}, circleID uuid.UUID) (*UserListResponse, error) {
 	// 默认每页 20 条
 	if size <= 0 || size > 100 {
 		size = 20
 	}
 
-	searchQuery := buildUserSearchQuery(keyword, size)
+	searchQuery := buildUserSearchQuery(keyword, size, circleID)
 
 	// 添加 search_after 参数（如果提供）
 	if len(searchAfter) > 0 {
@@ -90,10 +93,44 @@ func userBaseFilterConditions() []map[string]interface{} {
 	}
 }
 
+// agentCircleScopeCondition 圈内机器人 @提及 作用域过滤条件（users.agent_circle_id，
+// CDC 自 PG 同步；存量文档无该字段 → must_not exists 天然命中，零重建索引）。
+// circleID == Nil（全站@/用户搜索页）：排除所有圈内机器人；
+// circleID 非 Nil（圈内@）：普通用户 + 全局机器人 + 本圈机器人可见，他圈机器人排除。
+// 两路均放 must（filter 语义，不参与算分）。
+func agentCircleScopeCondition(circleID uuid.UUID) map[string]interface{} {
+	if circleID == uuid.Nil {
+		return map[string]interface{}{
+			"bool": map[string]interface{}{
+				"must_not": map[string]interface{}{
+					"exists": map[string]interface{}{"field": "agent_circle_id"},
+				},
+			},
+		}
+	}
+	return map[string]interface{}{
+		"bool": map[string]interface{}{
+			"should": []map[string]interface{}{
+				{
+					"bool": map[string]interface{}{
+						"must_not": map[string]interface{}{
+							"exists": map[string]interface{}{"field": "agent_circle_id"},
+						},
+					},
+				},
+				{
+					"term": map[string]interface{}{"agent_circle_id": circleID.String()},
+				},
+			},
+			"minimum_should_match": 1,
+		},
+	}
+}
+
 // buildUserSearchQuery 构建用户搜索 DSL。keyword 为空时按 id 倒序全量翻页；
-// 非空时按 _score 相关性排序。
-func buildUserSearchQuery(keyword string, size int) map[string]interface{} {
-	mustConditions := userBaseFilterConditions()
+// 非空时按 _score 相关性排序。circleID 语义见 agentCircleScopeCondition。
+func buildUserSearchQuery(keyword string, size int, circleID uuid.UUID) map[string]interface{} {
+	mustConditions := append(userBaseFilterConditions(), agentCircleScopeCondition(circleID))
 
 	if keyword == "" {
 		// 无关键字时，返回所有符合条件的用户，按id倒序(UUIDv7 字典序 == 时间序)

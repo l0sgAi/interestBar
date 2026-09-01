@@ -87,6 +87,12 @@ func (f *postUserFacade) GetBrief(ctx context.Context, userID string) (*postapp.
 	return &postapp.UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}, nil
 }
 
+// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（mention 兜底剔除越圈机器人用，
+// 入出参类型一致直接透传）。
+func (f *postUserFacade) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	return f.delegate.GetAgentCircleIDs(ctx, userIDs)
+}
+
 // ===== circle → post =====
 
 // postCircleFacade 把 circle.application.CircleFacade 适配为 post.application.CircleFacade。
@@ -193,6 +199,12 @@ func (f *commentUserFacade) GetBrief(ctx context.Context, userID string) (*comme
 	return &commentapp.UserBrief{ID: b.ID, Username: b.Username, AvatarURL: b.AvatarURL}, nil
 }
 
+// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（mention 兜底剔除越圈机器人用，
+// 入出参类型一致直接透传）。
+func (f *commentUserFacade) GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	return f.delegate.GetAgentCircleIDs(ctx, userIDs)
+}
+
 // ===== user → notice =====
 
 // noticeUserFacade 把 user.application.UserFacade 适配为 notice.application.UserFacade。
@@ -229,9 +241,10 @@ func (l *commentPostLookup) GetPost(ctx context.Context, postID uuid.UUID) (*com
 		return nil, err
 	}
 	return &commentapp.PostInfo{
-		ID:     meta.ID,
-		Status: meta.Status,
-		IsLock: meta.IsLock,
+		ID:       meta.ID,
+		Status:   meta.Status,
+		IsLock:   meta.IsLock,
+		CircleID: meta.CircleID,
 	}, nil
 }
 

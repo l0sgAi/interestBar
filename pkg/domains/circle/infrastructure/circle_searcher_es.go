@@ -87,6 +87,26 @@ func (s *circleSearcherES) SearchActive(ctx context.Context, size, offset int) (
 	}, nil
 }
 
+// SearchRandom 随机圈子查询（ES random_score，每次结果不同；只取 ID，明细由 application 层组装）。
+func (s *circleSearcherES) SearchRandom(ctx context.Context, size int) (*application.RawRandomCircleResult, error) {
+	result, err := elasticsearch.SearchRandomCircles(size)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uuid.UUID, 0, len(result.Circles))
+	for _, doc := range result.Circles {
+		id, parseErr := uuid.Parse(doc.ID)
+		if parseErr != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return &application.RawRandomCircleResult{
+		CircleIDs: ids,
+		Total:     result.Total,
+	}, nil
+}
+
 func toCircleSearchResult(r *elasticsearch.CircleListResponse) *application.CircleSearchResult {
 	circles := make([]application.CircleDoc, 0, len(r.Circles))
 	for _, doc := range r.Circles {

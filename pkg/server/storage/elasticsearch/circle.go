@@ -187,6 +187,71 @@ func SearchCircles(keyword string, size int, searchAfter []interface{}) (*Circle
 	return parseCircleSearchResponse(res, size)
 }
 
+// SearchRandomCircles 随机获取圈子列表（侧栏推荐场景）。
+// size: 返回数量，默认 20（<=0 或 >100 回落 20）
+// 用 function_score + random_score（无 seed）实现随机排序，每次请求结果不同；
+// 过滤条件与 SearchCircles 一致（正常状态、未删除、非私密）。无 search_after 分页。
+func SearchRandomCircles(size int) (*CircleListResponse, error) {
+	// 默认每页 20 条
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+
+	searchQuery := map[string]interface{}{
+		"query": map[string]interface{}{
+			"function_score": map[string]interface{}{
+				"query": map[string]interface{}{
+					"bool": map[string]interface{}{
+						"must": []map[string]interface{}{
+							{
+								"term": map[string]interface{}{
+									"status": 1, // 只返回正常状态的圈子
+								},
+							},
+							{
+								"term": map[string]interface{}{
+									"deleted": 0, // 过滤掉已删除的圈子
+								},
+							},
+						},
+						"must_not": []map[string]interface{}{
+							{
+								"term": map[string]interface{}{
+									"join_type": 2, // 过滤掉私密圈子
+								},
+							},
+						},
+					},
+				},
+				"random_score": map[string]interface{}{},
+			},
+		},
+		"size": size,
+	}
+
+	queryJSON, err := json.Marshal(searchQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal random circles query: %w", err)
+	}
+
+	res, err := Client.Search(
+		Client.Search.WithContext(nil),
+		Client.Search.WithIndex(GetCircleIndexName()),
+		Client.Search.WithBody(bytes.NewReader(queryJSON)),
+		Client.Search.WithTrackTotalHits(true),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search random circles: %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.IsError() {
+		return nil, fmt.Errorf("elasticsearch search error: %s", res.String())
+	}
+
+	return parseCircleSearchResponse(res, size)
+}
+
 // SearchMyCircles 搜索我加入的圈子
 // circleIDs: 圈子ID列表（必须）
 // keyword: 搜索关键字，为空时不过滤关键词

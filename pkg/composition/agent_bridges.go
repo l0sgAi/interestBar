@@ -10,6 +10,8 @@ import (
 	"context"
 
 	agentapp "interestBar/pkg/domains/aiagent/application"
+	agentdomain "interestBar/pkg/domains/aiagent/domain"
+	circleapp "interestBar/pkg/domains/circle/application"
 	commentapp "interestBar/pkg/domains/comment/application"
 	postapp "interestBar/pkg/domains/post/application"
 	userapp "interestBar/pkg/domains/user/application"
@@ -53,15 +55,18 @@ const botUserRole = 2
 // CreateBotUser 创建 role=2 的机器人系统用户，返回其 ID。
 // 机器人账号不登录不发帖，仅作为 ai_agent 以该身份发评论的载体。
 // username 用机器人 name（允许重复）；email 由调用方保证唯一；avatarURL 为机器人头像。
-func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string) (uuid.UUID, error) {
+// circleID 非 nil 时写入 users.agent_circle_id（圈内机器人 @提及 作用域投影；
+// 全局链路传 nil）。
+func (b *agentBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID) (uuid.UUID, error) {
 	u := userdomain.SysUser{
-		ID:        sharedomain.NewID(),
-		Username:  username,
-		Email:     email,
-		AvatarURL: avatarURL,
-		Role:      botUserRole,
-		Status:    userdomain.UserStatusActive,
-		Deleted:   0,
+		ID:            sharedomain.NewID(),
+		Username:      username,
+		Email:         email,
+		AvatarURL:     avatarURL,
+		AgentCircleID: circleID,
+		Role:          botUserRole,
+		Status:        userdomain.UserStatusActive,
+		Deleted:       0,
 	}
 	if err := b.db.WithContext(ctx).Create(&u).Error; err != nil {
 		return uuid.Nil, err
@@ -85,14 +90,55 @@ func (b *agentBotUserUpdater) UpdateBotUserProfile(ctx context.Context, userID u
 	return err
 }
 
+// agentBotUserScopeCleaner 桥接 aiagent.BotUserScopeCleaner -> user.UserService.ClearAgentCircleScope。
+//
+// 走 user Service 而非直写库：清列后自动刷新 userinfo 缓存（避免 @列表/详情回显旧绑定）。
+type agentBotUserScopeCleaner struct {
+	delegate userapp.UserService
+}
+
+// ClearBotCircleScope 机器人软删后清 users.agent_circle_id（幂等）。
+func (b *agentBotUserScopeCleaner) ClearBotCircleScope(ctx context.Context, userID uuid.UUID) error {
+	return b.delegate.ClearAgentCircleScope(ctx, userID)
+}
+
 // 编译期保证：桥接器满足 aiagent 领域端口。
 var (
 	_ agentapp.RoleReader            = (*agentRoleReader)(nil)
 	_ agentapp.BotUserCreator        = (*agentBotUserCreator)(nil)
 	_ agentapp.BotUserProfileUpdater = (*agentBotUserUpdater)(nil)
+	_ agentapp.BotUserScopeCleaner   = (*agentBotUserScopeCleaner)(nil)
 	_ agentapp.PostReader            = (*agentPostReader)(nil)
 	_ agentapp.CommentCreator        = (*agentCommentCreator)(nil)
+	_ agentapp.CircleRoleReader      = (*circleRoleReaderForAgent)(nil)
+	_ circleapp.CircleAgentCounter   = (*circleAgentCounterForCircle)(nil)
 )
+
+// circleRoleReaderForAgent 桥接 aiagent.CircleRoleReader -> circle 域成员角色 Facade。
+//
+// 薄转发：delegate 直查 member 记录（无缓存，含惰性解禁自愈），
+// 圈内机器人管理权随角色变更即时生效。
+type circleRoleReaderForAgent struct {
+	delegate circleapp.CircleMemberRoleReader
+}
+
+// GetCircleMembership 返回操作者在圈内的 (role, status)；非成员/圈子不存在 ok=false。
+func (b *circleRoleReaderForAgent) GetCircleMembership(ctx context.Context, circleID, userID uuid.UUID) (int16, int16, bool, error) {
+	return b.delegate.GetMemberRole(ctx, circleID, userID)
+}
+
+// circleAgentCounterForCircle 桥接 circle.CircleAgentCounter -> aiagent.AgentRepository.CountByCircleIDs。
+//
+// 方向反转的桥接：circle 域声明端口（可管理圈子列表 agent_count 回填），
+// 由 aiagent 同域仓储实现（代理数据属 ai_agent 表）。
+type circleAgentCounterForCircle struct {
+	repo agentdomain.AgentRepository
+}
+
+// CountByCircleIDs 批量统计各圈未删除机器人数。
+func (b *circleAgentCounterForCircle) CountByCircleIDs(ctx context.Context, circleIDs []uuid.UUID) (map[uuid.UUID]int, error) {
+	return b.repo.CountByCircleIDs(ctx, circleIDs)
+}
 
 // agentPostReader 桥接 aiagent.PostReader -> post.PostService.GetPostBrief。
 type agentPostReader struct {
@@ -112,6 +158,7 @@ func (b *agentPostReader) GetPostBrief(ctx context.Context, postID uuid.UUID) (*
 		Status:   brief.Status,
 		IsLock:   brief.IsLock,
 		AuthorID: brief.AuthorID,
+		CircleID: brief.CircleID,
 	}, nil
 }
 
@@ -143,13 +190,15 @@ type commentAgentTrigger struct {
 }
 
 // OnCommentCreated 评论创建完成后的机器人触发入口。
-func (b *commentAgentTrigger) OnCommentCreated(postID, commentID, userID uuid.UUID, rootID *uuid.UUID, content string) {
+// postCircleID 随事件透传（圈子级机器人只在同圈帖触发）。
+func (b *commentAgentTrigger) OnCommentCreated(postID, postCircleID, commentID, userID uuid.UUID, rootID *uuid.UUID, content string) {
 	b.delegate.OnCommentCreated(agentapp.CommentEvent{
-		CommentID: commentID,
-		PostID:    postID,
-		UserID:    userID,
-		RootID:    rootID,
-		Content:   content,
+		CommentID:    commentID,
+		PostID:       postID,
+		PostCircleID: postCircleID,
+		UserID:       userID,
+		RootID:       rootID,
+		Content:      content,
 	})
 }
 
@@ -165,9 +214,11 @@ type postAgentTrigger struct {
 }
 
 // OnPostMentioned 发帖 @提及 后的机器人触发入口。
-func (b *postAgentTrigger) OnPostMentioned(postID, authorID uuid.UUID, mentionUserIDs []uuid.UUID) {
+// circleID 随事件透传（圈子级机器人只在同圈帖触发）。
+func (b *postAgentTrigger) OnPostMentioned(postID, circleID, authorID uuid.UUID, mentionUserIDs []uuid.UUID) {
 	b.delegate.OnPostMentioned(agentapp.PostMentionEvent{
 		PostID:         postID,
+		PostCircleID:   circleID,
 		UserID:         authorID,
 		MentionUserIDs: mentionUserIDs,
 	})

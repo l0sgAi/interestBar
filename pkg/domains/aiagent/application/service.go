@@ -35,7 +35,16 @@ type BotUserCreator interface {
 	// CreateBotUser 按给定 username/email/avatarURL 创建系统用户，返回其 ID。
 	// username 用机器人 name（users.username 无唯一约束，允许重复）；
 	// email 由调用方保证全局唯一（users.email 有唯一索引）。
-	CreateBotUser(ctx context.Context, username, email, avatarURL string) (uuid.UUID, error)
+	// circleID 非 nil 时写入 users.agent_circle_id（圈内机器人 @提及 作用域投影；
+	// 全局链路传 nil）。其余语义不变。
+	CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID) (uuid.UUID, error)
+}
+
+// BotUserScopeCleaner 跨域端口：机器人软删时清 users.agent_circle_id（恢复"全局可见"语义）。
+// 只清列，不动 users.status（已删全局机器人仍可被@的存量行为不变，决策①见
+// docs/circle-agent-mention-scope-design.md）。实现方需同步失效 userinfo 缓存。
+type BotUserScopeCleaner interface {
+	ClearBotCircleScope(ctx context.Context, userID uuid.UUID) error
 }
 
 // BotUserProfileUpdater 跨域端口：同步机器人资料到关联系统用户。
@@ -102,6 +111,7 @@ type AgentVO struct {
 	Name              string                 `json:"name"`
 	AvatarURL         string                 `json:"avatar_url,omitempty"`
 	LinkedUserID      uuid.UUID              `json:"linked_user_id"`
+	CircleID          *uuid.UUID             `json:"circle_id,omitempty"` // 绑定圈子ID;nil=平台全局（不回显）
 	APIProtocol       string                 `json:"api_protocol"`
 	BaseURL           string                 `json:"base_url,omitempty"`
 	HasAPIKey         bool                   `json:"has_api_key"`
@@ -149,6 +159,9 @@ type AgentService interface {
 	SetBotUserCreator(c BotUserCreator)
 	// SetBotUserProfileUpdater 注入跨域机器人资料同步端口（composition 桥接）。
 	SetBotUserProfileUpdater(u BotUserProfileUpdater)
+	// SetBotUserScopeCleaner 注入跨域机器人圈子绑定清理端口（composition 桥接；
+	// 未注入时删除机器人跳过清列，仅记日志，见 clearBotCircleScope fail-open）。
+	SetBotUserScopeCleaner(c BotUserScopeCleaner)
 }
 
 type agentServiceImpl struct {
@@ -156,6 +169,7 @@ type agentServiceImpl struct {
 	roleReader     RoleReader            // 注入前 nil，鉴权 fail-closed
 	botUserCreator BotUserCreator        // 注入前 nil，创建时 fail-fast
 	botUserUpdater BotUserProfileUpdater // 注入前 nil，改名/换头像时跳过同步
+	scopeCleaner   BotUserScopeCleaner   // 注入前 nil，删除时跳过清列（fail-open）
 }
 
 // NewAgentService 构造一个 AgentService（跨域依赖 setter 注入）。
@@ -168,6 +182,7 @@ func (s *agentServiceImpl) SetBotUserCreator(c BotUserCreator) { s.botUserCreato
 func (s *agentServiceImpl) SetBotUserProfileUpdater(u BotUserProfileUpdater) {
 	s.botUserUpdater = u
 }
+func (s *agentServiceImpl) SetBotUserScopeCleaner(c BotUserScopeCleaner) { s.scopeCleaner = c }
 
 // ensureAdmin 校验操作者是 role=1 管理员。端口未注入/用户不存在均拒绝（fail-closed）。
 func (s *agentServiceImpl) ensureAdmin(ctx context.Context, adminID uuid.UUID) error {
@@ -187,6 +202,281 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		return nil, err
 	}
 
+	agent, err := validateAndBuildAgent(input)
+	if err != nil {
+		return nil, err
+	}
+
+	// 名称唯一预检（全局桶；并发兜底靠 idx_ai_agent_name 唯一索引）
+	exists, err := s.repo.ExistsByNameInScope(ctx, uuid.Nil, agent.Name, uuid.Nil)
+	if err != nil {
+		return nil, err
+	}
+	if exists {
+		return nil, errAgentNameExists
+	}
+
+	// 创建关联系统用户（role=2 机器人账号）。
+	// username 直接用机器人 name（users.username 允许重复，评论区展示该名）；
+	// email 需全局唯一（users.email 唯一索引），用 uuidv7 + 时间戳保证。
+	if s.botUserCreator == nil {
+		return nil, errNotAdmin // 端口未注入视为装配错误，拒绝创建
+	}
+	agentID := sharedomain.NewID()
+	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, agent.Name, botEmailForID(agentID), agent.AvatarURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	agent.ID = agentID
+	agent.LinkedUserID = linkedUserID
+	if err := s.repo.Create(ctx, agent); err != nil {
+		return nil, err
+	}
+	vo := toVO(agent)
+	return &vo, nil
+}
+
+// GetAgent 获取机器人详情（全局链）。
+func (s *agentServiceImpl) GetAgent(ctx context.Context, adminID, agentID uuid.UUID) (*AgentVO, error) {
+	if err := s.ensureAdmin(ctx, adminID); err != nil {
+		return nil, err
+	}
+	agent, err := s.loadGlobalAgent(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	vo := toVO(agent)
+	return &vo, nil
+}
+
+// ListAgents offset 分页列表，keyword 非空时按 name 模糊过滤（仅全局机器人）。
+func (s *agentServiceImpl) ListAgents(ctx context.Context, adminID uuid.UUID, keyword string, page, size int) (*AgentListResult, error) {
+	if err := s.ensureAdmin(ctx, adminID); err != nil {
+		return nil, err
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+	agents, total, err := s.repo.ListByOffset(ctx, strings.TrimSpace(keyword), (page-1)*size, size)
+	if err != nil {
+		return nil, err
+	}
+	result := &AgentListResult{
+		Total:  total,
+		Page:   page,
+		Size:   size,
+		Agents: make([]AgentVO, 0, len(agents)),
+	}
+	for i := range agents {
+		result.Agents = append(result.Agents, toVO(&agents[i]))
+	}
+	return result, nil
+}
+
+// UpdateAgent 部分字段更新（全局链）。
+func (s *agentServiceImpl) UpdateAgent(ctx context.Context, adminID, agentID uuid.UUID, input UpdateAgentInput) (*AgentVO, error) {
+	if err := s.ensureAdmin(ctx, adminID); err != nil {
+		return nil, err
+	}
+	// 存在性 + 作用域检查（圈内机器人 → 404，不暴露存在性）。
+	if _, err := s.loadGlobalAgent(ctx, agentID); err != nil {
+		return nil, err
+	}
+
+	fields, err := buildAgentUpdateFields(ctx, s.repo, agentID, input, uuid.Nil)
+	if err != nil {
+		return nil, err
+	}
+	if len(fields) == 0 {
+		return nil, errNoFieldsToUpdate
+	}
+
+	if err := s.repo.UpdateFields(ctx, agentID, fields); err != nil {
+		return nil, err
+	}
+	updated, err := s.repo.GetByID(ctx, agentID)
+	if err != nil {
+		return nil, mapRepoError(err)
+	}
+
+	// 改名/换头像时同步到关联系统用户（users.username/avatar_url）。
+	syncBotUserProfile(ctx, s.botUserUpdater, updated.LinkedUserID, fields)
+
+	vo := toVO(updated)
+	return &vo, nil
+}
+
+// botProfileSyncMaxAttempts 资料同步失败后的异步重试次数（不含首次同步调用）。
+const botProfileSyncMaxAttempts = 3
+
+// syncBotUserProfile 改名/换头像后同步机器人资料到关联系统用户（users.username/avatar_url，
+// 评论区展示从 users 表取）。全局/圈内更新共用。同步失败转异步重试（指数退避，有限次数）：
+// ai_agent 已提交最新值，不能让瞬时失败把 users 资料长期撂在不一致状态；
+// 重试耗尽后记 Error 日志，待人工回填（当前无 outbox 表，进程重启即丢）。
+func syncBotUserProfile(ctx context.Context, updater BotUserProfileUpdater, linkedUserID uuid.UUID, fields map[string]interface{}) {
+	if updater == nil {
+		return
+	}
+	var username, avatar *string
+	if v, ok := fields["name"].(string); ok {
+		username = &v
+	}
+	if v, ok := fields["avatar_url"].(string); ok {
+		avatar = &v
+	}
+	if username == nil && avatar == nil {
+		return
+	}
+	if err := updater.UpdateBotUserProfile(ctx, linkedUserID, username, avatar); err != nil {
+		logger.Log.Error("Sync bot user profile failed, scheduling async retry: " + err.Error())
+		go retryBotUserProfileSync(updater, linkedUserID, username, avatar)
+	}
+}
+
+// retryBotUserProfileSync 机器人资料同步失败后的异步补偿：指数退避重试，
+// 带全量载荷（username/avatar 指针 + linkedUserID），任一尝试成功即收敛。
+// 重试耗尽后只能依赖人工回填（当前无 outbox 表，进程退出即丢失待重试任务）。
+func retryBotUserProfileSync(updater BotUserProfileUpdater, userID uuid.UUID, username, avatarURL *string) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Log.Error(fmt.Sprintf("bot user profile sync retry panic: user=%s: %v", userID, r))
+		}
+	}()
+	backoff := time.Second
+	for attempt := 1; attempt <= botProfileSyncMaxAttempts; attempt++ {
+		time.Sleep(backoff)
+		// 脱离请求 ctx：更新接口已返回，重试不应随请求取消而中断。
+		if err := updater.UpdateBotUserProfile(context.Background(), userID, username, avatarURL); err == nil {
+			logger.Log.Info(fmt.Sprintf("Bot user profile sync recovered on retry %d: user=%s", attempt, userID))
+			return
+		} else {
+			logger.Log.Warn(fmt.Sprintf("Bot user profile sync retry %d/%d failed: user=%s: %s",
+				attempt, botProfileSyncMaxAttempts, userID, err.Error()))
+		}
+		backoff *= 4
+	}
+	logger.Log.Error(fmt.Sprintf("Bot user profile sync permanently failed after %d retries, manual backfill required: user=%s",
+		botProfileSyncMaxAttempts, userID))
+}
+
+// DeleteAgent 软删（deleted=1 且 status=0）。软删生效后清机器人账号的圈子绑定
+//（清列失败不回滚，仅记日志：软删已优先生效，最坏后果=已删机器人仍在原圈@列表
+// 短暂可见，与 CDC 延迟窗口同级，见设计文档风险表）。
+func (s *agentServiceImpl) DeleteAgent(ctx context.Context, adminID, agentID uuid.UUID) error {
+	if err := s.ensureAdmin(ctx, adminID); err != nil {
+		return err
+	}
+	agent, err := s.loadGlobalAgent(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	if err := s.repo.SoftDelete(ctx, agentID); err != nil {
+		return err
+	}
+	clearBotCircleScope(ctx, s.scopeCleaner, agent.LinkedUserID)
+	return nil
+}
+
+// clearBotCircleScope 机器人软删后清 users.agent_circle_id 的统一入口（全局/圈内共用）。
+// fail-open：端口未注入或清列失败均只记日志不报错——软删已生效，列未清可幂等补偿
+//（重试/人工清），不阻断删除主流程。
+func clearBotCircleScope(ctx context.Context, cleaner BotUserScopeCleaner, linkedUserID uuid.UUID) {
+	if cleaner == nil {
+		logger.Log.Warn("BotUserScopeCleaner not injected, skip clearing agent_circle_id: user=" + linkedUserID.String())
+		return
+	}
+	if linkedUserID == uuid.Nil {
+		return
+	}
+	if err := cleaner.ClearBotCircleScope(ctx, linkedUserID); err != nil {
+		logger.Log.Error("Clear bot agent_circle_id failed (soft-delete already applied, retry/manual fix needed): user=" +
+			linkedUserID.String() + ": " + err.Error())
+	}
+}
+
+// loadGlobalAgent 加载**全局**机器人：不存在或为圈子级机器人（CircleID != nil）一律
+// ErrAgentNotFound——跨作用域不可见，全局链路不暴露圈内机器人的存在性。
+func (s *agentServiceImpl) loadGlobalAgent(ctx context.Context, agentID uuid.UUID) (*domain.AiAgent, error) {
+	agent, err := s.repo.GetByID(ctx, agentID)
+	if err != nil {
+		return nil, mapRepoError(err)
+	}
+	if agent.CircleID != nil {
+		return nil, errAgentNotFound
+	}
+	return agent, nil
+}
+
+// toVO 实体转视图（全局/圈内共用）。api_key 解密后仅给掩码；解密失败（如换了 data_key）
+// 不让读接口失败，退化为 "****"。CircleID 仅圈内机器人回显（nil 全局不回显）。
+func toVO(a *domain.AiAgent) AgentVO {
+	vo := AgentVO{
+		ID:                a.ID,
+		Name:              a.Name,
+		AvatarURL:         a.AvatarURL,
+		LinkedUserID:      a.LinkedUserID,
+		CircleID:          a.CircleID,
+		APIProtocol:       a.APIProtocol,
+		BaseURL:           a.BaseURL,
+		HasAPIKey:         a.APIKeyEnc != "",
+		Model:             a.Model,
+		LLMParams:         map[string]interface{}(a.LLMParams),
+		SystemPrompt:      a.SystemPrompt,
+		FilterPrompt:      a.FilterPrompt,
+		TriggerMode:       int(a.TriggerMode),
+		TriggerKeywords:   []string(a.TriggerKeywords),
+		MaxRepliesPerHour: a.MaxRepliesPerHour,
+		MinIntervalSec:    a.MinIntervalSec,
+		Status:            int(a.Status),
+		CreateTime:        a.CreateTime,
+		UpdateTime:        a.UpdateTime,
+	}
+	if a.APIKeyEnc != "" {
+		if plain, err := crypto.Decrypt(conf.Config.Security.DataKey, a.APIKeyEnc); err == nil {
+			vo.APIKeyMasked = crypto.Mask(plain)
+		} else {
+			vo.APIKeyMasked = "****"
+		}
+	}
+	if vo.LLMParams == nil {
+		vo.LLMParams = map[string]interface{}{}
+	}
+	if vo.TriggerKeywords == nil {
+		vo.TriggerKeywords = []string{}
+	}
+	return vo
+}
+
+// mapRepoError 把 repo 错误归一为 application 哨兵。
+func mapRepoError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if err == domain.ErrAgentNotFound {
+		return errAgentNotFound
+	}
+	if err == domain.ErrCircleAgentLimit {
+		return errCircleAgentLimit
+	}
+	return err
+}
+
+// ---- 创建/更新的公共构建（全局与圈内链路共用，防两处校验规则漂移）----
+
+// botEmailForID 生成机器人系统用户 email（users.email 唯一索引：
+// uuidv7 ID + 毫秒时间戳，全局/圈内创建共用，全局唯一）。
+func botEmailForID(agentID uuid.UUID) string {
+	return fmt.Sprintf("%s.%d@bot.qubar.local", agentID.String(), time.Now().UnixMilli())
+}
+
+// validateAndBuildAgent 校验创建入参并构建实体公共部分（全局/圈内创建共用）。
+// 全量过 validateXxx 函数组 + api_key 加密 + 默认值补齐；ID/LinkedUserID/CircleID/
+// CreatorID 等归属字段由调用方按各自链路补齐。
+func validateAndBuildAgent(input CreateAgentInput) (*domain.AiAgent, error) {
 	name := utils.SanitizeForPg(strings.TrimSpace(input.Name))
 	if err := validateName(name); err != nil {
 		return nil, err
@@ -230,35 +520,9 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		apiKeyEnc = enc
 	}
 
-	// 名称唯一预检（并发兜底靠 idx_ai_agent_name 唯一索引）
-	exists, err := s.repo.ExistsByName(ctx, name, uuid.Nil)
-	if err != nil {
-		return nil, err
-	}
-	if exists {
-		return nil, errAgentNameExists
-	}
-
-	// 创建关联系统用户（role=2 机器人账号）。
-	// username 直接用机器人 name（users.username 允许重复，评论区展示该名）；
-	// email 需全局唯一（users.email 唯一索引），用 uuidv7 + 时间戳保证。
-	if s.botUserCreator == nil {
-		return nil, errNotAdmin // 端口未注入视为装配错误，拒绝创建
-	}
-	agentID := sharedomain.NewID()
-	ts := time.Now().UnixMilli()
-	botEmail := fmt.Sprintf("%s.%d@bot.qubar.local", agentID.String(), ts)
-	avatarURL := utils.SanitizeForPg(input.AvatarURL)
-	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, name, botEmail, avatarURL)
-	if err != nil {
-		return nil, err
-	}
-
 	agent := &domain.AiAgent{
-		ID:                agentID,
 		Name:              name,
-		AvatarURL:         avatarURL,
-		LinkedUserID:      linkedUserID,
+		AvatarURL:         utils.SanitizeForPg(input.AvatarURL),
 		APIProtocol:       input.APIProtocol,
 		BaseURL:           utils.SanitizeForPg(strings.TrimSpace(input.BaseURL)),
 		APIKeyEnc:         apiKeyEnc,
@@ -283,65 +547,14 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 	if input.TriggerMode == 0 {
 		agent.TriggerMode = domain.TriggerModeAllPost // DDL 默认 1
 	}
-
-	if err := s.repo.Create(ctx, agent); err != nil {
-		return nil, err
-	}
-	vo := s.toVO(agent)
-	return &vo, nil
+	return agent, nil
 }
 
-// GetAgent 获取机器人详情。
-func (s *agentServiceImpl) GetAgent(ctx context.Context, adminID, agentID uuid.UUID) (*AgentVO, error) {
-	if err := s.ensureAdmin(ctx, adminID); err != nil {
-		return nil, err
-	}
-	agent, err := s.repo.GetByID(ctx, agentID)
-	if err != nil {
-		return nil, mapRepoError(err)
-	}
-	vo := s.toVO(agent)
-	return &vo, nil
-}
-
-// ListAgents offset 分页列表，keyword 非空时按 name 模糊过滤。
-func (s *agentServiceImpl) ListAgents(ctx context.Context, adminID uuid.UUID, keyword string, page, size int) (*AgentListResult, error) {
-	if err := s.ensureAdmin(ctx, adminID); err != nil {
-		return nil, err
-	}
-	if page <= 0 {
-		page = 1
-	}
-	if size <= 0 || size > 100 {
-		size = 20
-	}
-	agents, total, err := s.repo.ListByOffset(ctx, strings.TrimSpace(keyword), (page-1)*size, size)
-	if err != nil {
-		return nil, err
-	}
-	result := &AgentListResult{
-		Total:  total,
-		Page:   page,
-		Size:   size,
-		Agents: make([]AgentVO, 0, len(agents)),
-	}
-	for i := range agents {
-		result.Agents = append(result.Agents, s.toVO(&agents[i]))
-	}
-	return result, nil
-}
-
-// UpdateAgent 部分字段更新。
-func (s *agentServiceImpl) UpdateAgent(ctx context.Context, adminID, agentID uuid.UUID, input UpdateAgentInput) (*AgentVO, error) {
-	if err := s.ensureAdmin(ctx, adminID); err != nil {
-		return nil, err
-	}
-
-	// 存在性检查（顺带把 NotFound 与字段校验错误区分开）
-	if _, err := s.repo.GetByID(ctx, agentID); err != nil {
-		return nil, mapRepoError(err)
-	}
-
+// buildAgentUpdateFields 校验部分更新入参并组装字段 map（全局/圈内更新共用）。
+// scope 为名称唯一预检的作用域：uuid.Nil=全局桶（circle_id IS NULL），否则圈内桶，
+// 与 idx_ai_agent_name 的分桶口径一致。返回空 map 表示无字段要更新
+//（调用方决定是否报 errNoFieldsToUpdate）。
+func buildAgentUpdateFields(ctx context.Context, repo domain.AgentRepository, agentID uuid.UUID, input UpdateAgentInput, scope uuid.UUID) (map[string]interface{}, error) {
 	fields := make(map[string]interface{})
 
 	if input.Name != nil {
@@ -349,7 +562,7 @@ func (s *agentServiceImpl) UpdateAgent(ctx context.Context, adminID, agentID uui
 		if err := validateName(name); err != nil {
 			return nil, err
 		}
-		exists, err := s.repo.ExistsByName(ctx, name, agentID)
+		exists, err := repo.ExistsByNameInScope(ctx, scope, name, agentID)
 		if err != nil {
 			return nil, err
 		}
@@ -439,129 +652,7 @@ func (s *agentServiceImpl) UpdateAgent(ctx context.Context, adminID, agentID uui
 		}
 		fields["status"] = *input.Status
 	}
-
-	if len(fields) == 0 {
-		return nil, errNoFieldsToUpdate
-	}
-
-	if err := s.repo.UpdateFields(ctx, agentID, fields); err != nil {
-		return nil, err
-	}
-	agent, err := s.repo.GetByID(ctx, agentID)
-	if err != nil {
-		return nil, mapRepoError(err)
-	}
-
-	// 改名/换头像时同步到关联系统用户（users.username/avatar_url），
-	// 评论区展示从 users 表取。同步失败转异步重试（指数退避，有限次数）：
-	// ai_agent 已提交最新值，不能让瞬时失败把 users 资料长期撂在不一致状态；
-	// 重试耗尽后记 Error 日志，待人工回填（当前无 outbox 表，进程重启即丢）。
-	if s.botUserUpdater != nil && (input.Name != nil || input.AvatarURL != nil) {
-		var username, avatar *string
-		if v, ok := fields["name"].(string); ok {
-			username = &v
-		}
-		if v, ok := fields["avatar_url"].(string); ok {
-			avatar = &v
-		}
-		if err := s.botUserUpdater.UpdateBotUserProfile(ctx, agent.LinkedUserID, username, avatar); err != nil {
-			logger.Log.Error("Sync bot user profile failed, scheduling async retry: " + err.Error())
-			go s.retryBotUserProfileSync(agent.LinkedUserID, username, avatar)
-		}
-	}
-
-	vo := s.toVO(agent)
-	return &vo, nil
-}
-
-// botProfileSyncMaxAttempts 资料同步失败后的异步重试次数（不含首次同步调用）。
-const botProfileSyncMaxAttempts = 3
-
-// retryBotUserProfileSync 机器人资料同步失败后的异步补偿：指数退避重试，
-// 带全量载荷（username/avatar 指针 + linkedUserID），任一尝试成功即收敛。
-// 重试耗尽后只能依赖人工回填（当前无 outbox 表，进程退出即丢失待重试任务）。
-func (s *agentServiceImpl) retryBotUserProfileSync(userID uuid.UUID, username, avatarURL *string) {
-	defer func() {
-		if r := recover(); r != nil {
-			logger.Log.Error(fmt.Sprintf("bot user profile sync retry panic: user=%s: %v", userID, r))
-		}
-	}()
-	backoff := time.Second
-	for attempt := 1; attempt <= botProfileSyncMaxAttempts; attempt++ {
-		time.Sleep(backoff)
-		// 脱离请求 ctx：更新接口已返回，重试不应随请求取消而中断。
-		if err := s.botUserUpdater.UpdateBotUserProfile(context.Background(), userID, username, avatarURL); err == nil {
-			logger.Log.Info(fmt.Sprintf("Bot user profile sync recovered on retry %d: user=%s", attempt, userID))
-			return
-		} else {
-			logger.Log.Warn(fmt.Sprintf("Bot user profile sync retry %d/%d failed: user=%s: %s",
-				attempt, botProfileSyncMaxAttempts, userID, err.Error()))
-		}
-		backoff *= 4
-	}
-	logger.Log.Error(fmt.Sprintf("Bot user profile sync permanently failed after %d retries, manual backfill required: user=%s",
-		botProfileSyncMaxAttempts, userID))
-}
-
-// DeleteAgent 软删（deleted=1 且 status=0）。
-func (s *agentServiceImpl) DeleteAgent(ctx context.Context, adminID, agentID uuid.UUID) error {
-	if err := s.ensureAdmin(ctx, adminID); err != nil {
-		return err
-	}
-	if _, err := s.repo.GetByID(ctx, agentID); err != nil {
-		return mapRepoError(err)
-	}
-	return s.repo.SoftDelete(ctx, agentID)
-}
-
-// toVO 实体转视图。api_key 解密后仅给掩码；解密失败（如换了 data_key）
-// 不让读接口失败，退化为 "****"。
-func (s *agentServiceImpl) toVO(a *domain.AiAgent) AgentVO {
-	vo := AgentVO{
-		ID:                a.ID,
-		Name:              a.Name,
-		AvatarURL:         a.AvatarURL,
-		LinkedUserID:      a.LinkedUserID,
-		APIProtocol:       a.APIProtocol,
-		BaseURL:           a.BaseURL,
-		HasAPIKey:         a.APIKeyEnc != "",
-		Model:             a.Model,
-		LLMParams:         map[string]interface{}(a.LLMParams),
-		SystemPrompt:      a.SystemPrompt,
-		FilterPrompt:      a.FilterPrompt,
-		TriggerMode:       int(a.TriggerMode),
-		TriggerKeywords:   []string(a.TriggerKeywords),
-		MaxRepliesPerHour: a.MaxRepliesPerHour,
-		MinIntervalSec:    a.MinIntervalSec,
-		Status:            int(a.Status),
-		CreateTime:        a.CreateTime,
-		UpdateTime:        a.UpdateTime,
-	}
-	if a.APIKeyEnc != "" {
-		if plain, err := crypto.Decrypt(conf.Config.Security.DataKey, a.APIKeyEnc); err == nil {
-			vo.APIKeyMasked = crypto.Mask(plain)
-		} else {
-			vo.APIKeyMasked = "****"
-		}
-	}
-	if vo.LLMParams == nil {
-		vo.LLMParams = map[string]interface{}{}
-	}
-	if vo.TriggerKeywords == nil {
-		vo.TriggerKeywords = []string{}
-	}
-	return vo
-}
-
-// mapRepoError 把 repo 错误归一为 application 哨兵。
-func mapRepoError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if err == domain.ErrAgentNotFound {
-		return errAgentNotFound
-	}
-	return err
+	return fields, nil
 }
 
 // ---- 校验 ----

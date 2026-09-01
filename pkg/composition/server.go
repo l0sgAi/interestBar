@@ -2,6 +2,7 @@
 package composition
 
 import (
+	"interestBar/pkg/conf"
 	agentapp "interestBar/pkg/domains/aiagent/application"
 	agentinfra "interestBar/pkg/domains/aiagent/infrastructure"
 	agenthttp "interestBar/pkg/domains/aiagent/interfaces/http"
@@ -53,11 +54,24 @@ import (
 	"interestBar/pkg/shared/routing"
 )
 
+// noticeStreamHub 包级句柄：RegisterDomainRoutes 装配时设置，供 StopNoticeStreamHub 关停。
+var noticeStreamHub noticeapp.StreamHub
+
+// StopNoticeStreamHub 停止 SSE 推流 hub 的 sweeper（server 关停序列调用，幂等安全）。
+func StopNoticeStreamHub() {
+	if noticeStreamHub != nil {
+		noticeStreamHub.Stop()
+	}
+}
+
 // RegisterDomainRoutes 把所有"已搬迁到 domains/"的领域路由挂到 Web server 上。
 //
 // root 是框架无关的 RouterGroup（由入口层用 composition/hertzadapter.ForEngine
 // 从 *server.Hertz 包装而来）。这样本函数彻底不感知底层框架。
-func RegisterDomainRoutes(root routing.RouterGroup) {
+//
+// 返回 SSE 未读推流 hub（nil 不可用），供路由层注册裸 hertz 的 /notice/stream
+// （SSE 需 hijack writer，不走 AppContext 抽象）。
+func RegisterDomainRoutes(root routing.RouterGroup) noticeapp.StreamHub {
 	deps := NewDeps()
 	authCheck := RequireLogin
 
@@ -107,6 +121,16 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	// notice 需要 user Facade（通知列表 actor 批量组装）
 	noticeSvc.SetUserFacade(&noticeUserFacade{delegate: userFacade})
 
+	// SSE 未读数推流 hub（设计 docs/design/sse-notification-design.md §四#5）：
+	// 构造 → 注入 service（MarkRead/MarkAllRead 触发）→ CountReader（推送值与
+	// GET /notice/unread-count 同源）→ consumer hook（Redpanda flush 触发，包级函数注入）。
+	streamCfg := conf.Config.NoticeStream
+	streamHub := noticeapp.NewStreamHub(streamCfg.MaxConnsPerUser, streamCfg.CoalesceMs)
+	noticeSvc.SetStreamHub(streamHub)
+	streamHub.SetCountReader(noticeSvc.GetUnreadCount)
+	redpanda.SetNoticeUnreadHook(streamHub.PublishBatch)
+	noticeStreamHub = streamHub
+
 	// 跨领域 Facade 注入完成。如遗漏注入，相关领域会在请求时表现为空数据/校验失败，
 	// 这里打一条启动日志便于排查（强类型断言成本过高，用日志替代 panic，见 review P2-2）。
 	if logger.Log != nil {
@@ -124,14 +148,35 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	discoverSvc := newDiscoverService(postSvc, circleRepo, circleSvc)
 
 	// aiagent 跨域依赖：role 读取（user 缓存）+ 机器人账号创建（role=2）。
-	agentSvc := newAgentService(deps)
+	// 全局/圈内两个 Service 共享同一仓储实例（无状态薄封装）。
+	agentRepo := agentinfra.NewAgentRepository(deps.DB.Get())
+	agentSvc := agentapp.NewAgentService(agentRepo)
 	agentSvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
 	agentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
 	agentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
+	agentSvc.SetBotUserScopeCleaner(&agentBotUserScopeCleaner{delegate: userSvc})
+
+	// aiagent 圈内机器人管理：圈内角色读取（circle Facade 直查 member，权限即时生效）
+	// + 机器人账号创建/资料同步/圈子绑定清理（复用全局端口桥接器）。
+	circleAgentSvc := agentapp.NewCircleAgentService(agentRepo)
+	circleAgentSvc.SetCircleRoleReader(&circleRoleReaderForAgent{
+		delegate: circleapp.NewCircleMemberRoleReader(memberRepo),
+	})
+	circleAgentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
+	circleAgentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
+	circleAgentSvc.SetBotUserScopeCleaner(&agentBotUserScopeCleaner{delegate: userSvc})
+
+	// circle -> aiagent：可管理圈子列表的 agent_count 回填（方向反转桥接，失败降级 0）。
+	circleSvc.SetAgentCounter(&circleAgentCounterForCircle{repo: agentRepo})
 
 	// aiagent 回复执行链路：LLM(eino) + 帖子摘要(post) + 评论创建(comment)。
+	// 触发链按帖子所在圈收口候选集（全局机器人 + 本圈机器人，circle-agent-reply）；
+	// 圈内手动触发需圈主鉴权（复用 circleRoleReaderForAgent 桥）。
 	replySvc := newAgentReplyService(deps, postSvc, commentSvc)
 	replySvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
+	replySvc.SetCircleRoleReader(&circleRoleReaderForAgent{
+		delegate: circleapp.NewCircleMemberRoleReader(memberRepo),
+	})
 	// comment -> aiagent：评论创建后触发关键词机器人（同步回调、内部异步执行）。
 	commentSvc.SetAgentTrigger(&commentAgentTrigger{delegate: replySvc})
 	// post -> aiagent：发帖 @机器人 触发回复（同步回调、内部异步执行）。
@@ -152,10 +197,12 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	registerRecommend(root, recommendSvc, authCheck, OptionalLoginFn)
 	registerTrending(root, trendingSvc, authCheck, OptionalLoginFn)
 	registerDiscover(root, discoverSvc, authCheck)
-	registerAgent(root, agentSvc, replySvc, authCheck)
+	registerAgent(root, agentSvc, circleAgentSvc, replySvc, authCheck)
 
 	// 启动 Discover pool syncer（需要 discoverSvc 复用 RebuildPool；其它无依赖 syncer 在 apps/server.go）。
 	go redpanda.StartDiscoverSyncerWithRetry(discoverSvc)
+
+	return streamHub
 }
 
 // registerCategory 装配 category 领域。
@@ -298,10 +345,16 @@ func registerDiscover(root routing.RouterGroup, svc discoverapp.DiscoverService,
 	discoverhttp.RegisterRoutes(root, svc, OptionalLoginFn)
 }
 
-// registerAgent 装配 aiagent 领域（管理端机器人 CRUD + 手动触发回复，
-// role 校验在 service 层）。
-func registerAgent(root routing.RouterGroup, svc agentapp.AgentService, replySvc agentapp.ReplyService, authCheck routing.HandlerFunc) {
-	agenthttp.RegisterRoutes(root, svc, replySvc, authCheck)
+// registerAgent 装配 aiagent 领域（全局机器人 CRUD + 圈子级机器人 CRUD + 手动触发回复；
+// role=1 / 圈内 admin+ 校验都在 service 层）。
+func registerAgent(
+	root routing.RouterGroup,
+	svc agentapp.AgentService,
+	circleAgentSvc agentapp.CircleAgentService,
+	replySvc agentapp.ReplyService,
+	authCheck routing.HandlerFunc,
+) {
+	agenthttp.RegisterRoutes(root, svc, circleAgentSvc, replySvc, authCheck)
 }
 
 // ===== Service 构造函数 =====
@@ -327,14 +380,6 @@ func newCircleService(deps *Deps) (circleapp.CircleService, circledomain.CircleR
 		circleRepo, memberRepo, baseCache, statsCache, joinedCache, searcher, publisher,
 	)
 	return svc, circleRepo, memberRepo
-}
-
-// newAgentService 构造 AgentService。
-//
-// user 跨领域依赖（role 读取 + 机器人账号创建）通过 setter 注入（见 RegisterDomainRoutes）。
-func newAgentService(deps *Deps) agentapp.AgentService {
-	repo := agentinfra.NewAgentRepository(deps.DB.Get())
-	return agentapp.NewAgentService(repo)
 }
 
 // newAgentReplyService 构造机器人回复执行服务（eino LLM + post/comment 跨域桥接，

@@ -87,6 +87,20 @@ type MemberRepository interface {
 	// TransferOwner 转让圈主（单事务：from 降为普通成员、to 升为圈主）。
 	// 任一条前置状态不满足则整体回滚并返回 ErrMemberStateConflict。
 	TransferOwner(ctx context.Context, circleID, fromUser, toUser uuid.UUID) error
+	// ListManagedCircles 列出用户作为圈主/管理员（role IN (20,30), status=normal）
+	// 的圈子，keyword 非空时按 name/description 子串过滤；offset 分页返回 total。
+	// 管理控制台专用：直查 PG 不走缓存/ES，角色变更立即可见。
+	ListManagedCircles(ctx context.Context, userID uuid.UUID, keyword string, offset, size int) ([]ManagedCircle, int64, error)
+}
+
+// ManagedCircle 用户可管理的圈子视图（Circle + 当前用户在圈内的角色）。
+//
+// 领域自有结构（无基础设施依赖）：infrastructure 的 ListManagedCircles 扫描结果，
+// application 层映射为管理端 DTO。嵌入 Circle 复用其 gorm 列标签，JOIN 查询
+// `SELECT c.*, m.role AS my_role` 可直接扫描。
+type ManagedCircle struct {
+	Circle
+	MyRole int16 `json:"my_role" gorm:"column:my_role"`
 }
 
 // CircleBaseCache 圈子基础信息缓存（不含统计）。

@@ -4,7 +4,11 @@
 
 ## AI 回复机器人配置表
 
-> 全局 AI 回复机器人（agent）配置，仅管理员（`users.role = 1`）可增删改（应用层校验）。
+> AI 回复机器人（agent）配置，分两种作用域：
+> - **平台全局机器人**（`circle_id IS NULL`）：仅管理员（`users.role = 1`）可增删改（应用层校验），
+>   参与全站回复触发链路；
+> - **圈子级机器人**（`circle_id` 指向 `domains.circle.id`）：由该圈圈主/管理员管理（每圈上限 5），
+>   创建后 `circle_id` 不可变，本期不参与任何回复触发（见 docs/circle-agent-manage-design.md）。
 > 机器人以 `linked_user_id` 关联的系统用户身份发表评论--创建 agent 时应用层同步创建一个
 > `users` 行（如 status=1, role=2 保留段），评论外键即可复用现有 `comment.user_id` 链路。
 >
@@ -20,10 +24,12 @@ CREATE TABLE domains.ai_agent (
     -- ID主键 (UUIDv7)
     id UUID PRIMARY KEY DEFAULT uuidv7(),
 
-    -- 1. 机器人身份
-    name VARCHAR(50) NOT NULL,               -- 机器人名称(展示名,全局唯一)
+    -- 1. 机器人身份与归属
+    name VARCHAR(50) NOT NULL,               -- 机器人名称(展示名,作用域内唯一:全局桶或单圈桶)
     avatar_url VARCHAR(500),                 -- 机器人头像
     linked_user_id UUID NOT NULL,            -- 关联系统用户ID(机器人以该身份发评论)
+    circle_id UUID,                          -- 绑定圈子ID(domains.circle.id,无FK应用层保证);NULL=平台全局机器人(超管维护);创建后不可变
+    creator_id UUID,                         -- 创建者用户ID(users.id,审计用;存量行无法追溯为NULL)
 
     -- 2. LLM 接入配置
     api_protocol VARCHAR(20) NOT NULL,       -- API协议: openai/anthropic/gemini/ollama(白名单应用层校验)
@@ -56,9 +62,11 @@ CREATE TABLE domains.ai_agent (
 );
 
 -- --- 注释 ---
-COMMENT ON TABLE domains.ai_agent IS 'AI回复机器人配置表(管理员维护)';
-COMMENT ON COLUMN domains.ai_agent.name IS '机器人名称(展示名,未删除行内唯一)';
+COMMENT ON TABLE domains.ai_agent IS 'AI回复机器人配置表(全局机器人管理员维护/圈内机器人圈主管理员维护)';
+COMMENT ON COLUMN domains.ai_agent.name IS '机器人名称(展示名,未删除行内作用域唯一:全局机器人共享全零UUID桶,圈内按circle_id各自唯一)';
 COMMENT ON COLUMN domains.ai_agent.linked_user_id IS '关联系统用户ID(机器人发评论的身份,创建agent时同步创建)';
+COMMENT ON COLUMN domains.ai_agent.circle_id IS '绑定圈子ID(domains.circle.id,无FK应用层保证);NULL=平台全局机器人(超管维护);创建后不可变';
+COMMENT ON COLUMN domains.ai_agent.creator_id IS '创建者用户ID(users.id,审计用)';
 COMMENT ON COLUMN domains.ai_agent.api_protocol IS 'API协议: openai/anthropic/gemini/ollama(白名单应用层校验)';
 COMMENT ON COLUMN domains.ai_agent.base_url IS 'API基础地址(兼容OpenAI协议的中转/自托管端点)';
 COMMENT ON COLUMN domains.ai_agent.api_key IS 'API密钥(应用层加密存密文,任何接口不得回显明文)';
@@ -74,14 +82,20 @@ COMMENT ON COLUMN domains.ai_agent.status IS '状态: 0=停用, 1=启用';
 
 -- --- 索引优化 ---
 
--- 1. 名称唯一(排除逻辑删除行)
-CREATE UNIQUE INDEX idx_ai_agent_name ON domains.ai_agent(name) WHERE deleted = 0;
+-- 1. 名称唯一(排除逻辑删除行;作用域分桶:全局机器人共享全零UUID桶保持全局唯一,
+--    圈内按各自circle_id桶唯一——两个圈可以都有叫"小助手"的机器人)
+CREATE UNIQUE INDEX idx_ai_agent_name ON domains.ai_agent
+    (COALESCE(circle_id, '00000000-0000-0000-0000-000000000000'::uuid), name)
+    WHERE deleted = 0;
 
 -- 2. 调度器扫描启用中的机器人(表小,部分索引足够)
 CREATE INDEX idx_ai_agent_active ON domains.ai_agent(id) WHERE deleted = 0 AND status = 1;
 
 -- 3. 反查机器人关联的系统用户(登录/鉴权链路排除机器人账号)
 CREATE INDEX idx_ai_agent_linked_user ON domains.ai_agent(linked_user_id) WHERE deleted = 0;
+
+-- 4. 圈内机器人列表/计数(部分索引,全局机器人circle_id为NULL不占索引行)
+CREATE INDEX idx_ai_agent_circle ON domains.ai_agent (circle_id) WHERE deleted = 0;
 ```
 
 ## AI 回复日志表
@@ -164,4 +178,27 @@ DROP INDEX IF EXISTS domains.idx_ai_reply_unique;
 ALTER TABLE domains.ai_agent ADD COLUMN filter_prompt TEXT NOT NULL DEFAULT '';
 COMMENT ON COLUMN domains.ai_agent.filter_prompt IS '回复判定条件(自然语言,如"只回复编程相关问题";空=不判定直接回复;仅trigger_mode=2关键词触发生效,见docs/agent-reply-filter-design.md)';
 COMMENT ON COLUMN domains.ai_agent_reply_log.status IS '结果: 0=失败, 1=成功, 2=分类器跳过, 3=分类器超时降级直回(运维事件,不参与限频统计)';
+```
+
+## 存量表迁移（圈子级机器人：circle_id/creator_id 列 + 名称唯一索引重定作用域）
+
+> 2026-08-31 变更：支持圈子级 AI 机器人——圈主/管理员管理本圈机器人（每圈上限 5），
+> 设计见 [circle-agent-manage-design.md](../circle-agent-manage-design.md)。
+> `circle_id` NULL=平台全局机器人（存量行全部保持 NULL，语义与行为零变化）；
+> 名称唯一索引从 `(name) WHERE deleted=0` 全局唯一改为 `(COALESCE(circle_id, 全零UUID), name)`
+> 作用域桶唯一——存量名称本就全局唯一（同落全零桶），新索引可直接建、不会撞。
+> 已建表的存量库由 DB-owner 执行：
+
+```sql
+ALTER TABLE domains.ai_agent ADD COLUMN circle_id UUID NULL;
+ALTER TABLE domains.ai_agent ADD COLUMN creator_id UUID NULL;
+COMMENT ON COLUMN domains.ai_agent.circle_id IS '绑定圈子ID(domains.circle.id,无FK应用层保证);NULL=平台全局机器人(超管维护);创建后不可变';
+COMMENT ON COLUMN domains.ai_agent.creator_id IS '创建者用户ID(users.id,审计用)';
+
+DROP INDEX IF EXISTS domains.idx_ai_agent_name;
+CREATE UNIQUE INDEX idx_ai_agent_name ON domains.ai_agent
+    (COALESCE(circle_id, '00000000-0000-0000-0000-000000000000'::uuid), name)
+    WHERE deleted = 0;
+
+CREATE INDEX idx_ai_agent_circle ON domains.ai_agent (circle_id) WHERE deleted = 0;
 ```

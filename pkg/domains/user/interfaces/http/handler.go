@@ -60,6 +60,9 @@ type SearchUsersRequest struct {
 	Keyword     string `query:"keyword"`
 	Size        int    `query:"size"`
 	SearchAfter string `query:"search_after"`
+	// CircleID 圈子作用域（@选人）：空=全站（排除圈内机器人）；
+	// 传圈子 uuid=圈内@选人（普通用户+全局机器人+本圈机器人可见）。
+	CircleID string `query:"circle_id" binding:"omitempty,uuid"`
 }
 
 // UpdateProfile PUT /user/update —— 修改用户自身资料。
@@ -114,7 +117,18 @@ func (h *Handler) SearchUsers(c appctx.AppContext) {
 		}
 	}
 
-	result, err := h.svc.Search(c, req.Keyword, size, searchAfter)
+	// circle_id：空=Nil=全站；非空必须为合法 uuid（binding 已校验，此处兜底）。
+	circleID := uuid.Nil
+	if req.CircleID != "" {
+		id, err := uuid.Parse(req.CircleID)
+		if err != nil {
+			httputil.BadRequest(c, "Invalid circle_id parameter")
+			return
+		}
+		circleID = id
+	}
+
+	result, err := h.svc.Search(c, req.Keyword, size, searchAfter, circleID)
 	if err != nil {
 		logger.Log.Error("Failed to search users: " + err.Error())
 		httputil.InternalError(c, "Failed to search users")

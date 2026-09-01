@@ -10,6 +10,12 @@
 > - F：限频统计口径 = `ai_agent_reply_log` **全部行（含失败）**。
 > - G：Prompt 组装 = `system_prompt` + 帖子 `title` + `summary`；评论关键词触发时**追加评论原文**。
 > - H：新增配置节 `aiagent`（timeout_sec / max_content_chars / reply_concurrency）。
+>
+> **圈内机器人阶段注记（2026-08-31）**：圈子级 AI 机器人管理已交付（见
+> [circle-agent-manage-design.md](circle-agent-manage-design.md)）——圈主/管理员可维护本圈机器人
+>（每圈 ≤5），但本期**不参与任何回复触发**：`ListEnabled` 加 `circle_id IS NULL` 守卫（关键词/
+> @提及候选集不含圈内机器人），`ManualReply` 校验 `agent.CircleID == nil`（手动入口返回不支持）。
+> 圈内回复触发（触发链匹配 `post.circle_id == agent.circle_id`）为后续演进项，届时移除/改造上述守卫。
 
 ---
 

@@ -19,6 +19,7 @@ CREATE TABLE domains.users (
     github_id       VARCHAR(100),
     microsoft_id    VARCHAR(100),
     avatar_url      VARCHAR(500),
+    agent_circle_id UUID,
     gender          SMALLINT DEFAULT 0,
     birthdate       DATE,
     status          SMALLINT DEFAULT 1,
@@ -35,6 +36,7 @@ COMMENT ON COLUMN domains.users.email IS '邮箱(唯一凭证)';
 COMMENT ON COLUMN domains.users.google_id IS 'Google平台唯一ID';
 COMMENT ON COLUMN domains.users.x_id IS 'X/Twitter平台唯一ID';
 COMMENT ON COLUMN domains.users.github_id IS 'Github平台唯一ID';
+COMMENT ON COLUMN domains.users.agent_circle_id IS '机器人绑定圈子ID(domains.circle.id,无FK应用层保证);NULL=普通用户或全局机器人;仅 role=2 行有意义(ai_agent.circle_id 的投影,供 @提及 作用域过滤)';
 COMMENT ON COLUMN domains.users.status IS '状态：0=禁用，1=启用';
 COMMENT ON COLUMN domains.users.deleted IS '逻辑删除：0=正常，1=已删除';
 
@@ -44,4 +46,45 @@ CREATE INDEX idx_users_google_id ON domains.users(google_id);
 CREATE INDEX idx_users_x_id ON domains.users(x_id);
 CREATE INDEX idx_users_github_id ON domains.users(github_id);
 CREATE INDEX idx_users_phone ON domains.users(phone);
+```
+
+## 存量表迁移（agent_circle_id 可空列）
+
+> 2026-08-31 变更：圈内机器人 @提及 可见范围改造——users 行记录机器人绑定圈子
+> （`ai_agent.circle_id` 的投影，CDC 同步 ES user 文档后供 `GET /user/search` 作用域过滤，
+> 设计见 [../circle-agent-mention-scope-design.md](../circle-agent-mention-scope-design.md)）。
+> `agent_circle_id` NULL=普通用户或全局机器人；不加索引：过滤全在 ES 侧，PG 仅按主键回查。
+> 已建表的存量库由 DB-owner 执行：
+
+```sql
+ALTER TABLE domains.users ADD COLUMN agent_circle_id uuid NULL;
+COMMENT ON COLUMN domains.users.agent_circle_id IS
+    '机器人绑定圈子ID(domains.circle.id,无FK应用层保证);NULL=普通用户或全局机器人;仅 role=2 行有意义';
+
+-- 存量圈内机器人回填投影（幂等，可重复执行）：
+-- 本列由应用层仅在"创建机器人"时写入，本功能上线前已创建的圈内机器人
+-- （ai_agent.circle_id 非 NULL 但 users 行无绑定）没有任何代码路径会补写，
+-- 不回填则其 users 行永远落入"非圈内机器人"桶、全站 @ 列表可见（作用域失效）。
+-- ai_agent.circle_id 为权威，users 列仅投影；只回填未删除的圈内机器人。
+UPDATE domains.users u
+SET agent_circle_id = a.circle_id
+FROM domains.ai_agent a
+WHERE a.linked_user_id = u.id
+  AND a.deleted = 0
+  AND a.circle_id IS NOT NULL
+  AND u.agent_circle_id IS DISTINCT FROM a.circle_id;
+
+-- 清孤儿绑定（幂等）：users 行有绑定但已无对应未删除圈内机器人——
+-- 建机器人时 users 行写入成功而 ai_agent 插入失败（如每圈限额 409）的遗留，
+-- 或删除机器人时清列失败的补偿（删除链路清列 fail-open，见设计文档风险表）。
+UPDATE domains.users u
+SET agent_circle_id = NULL
+WHERE u.agent_circle_id IS NOT NULL
+  AND u.role = 2
+  AND NOT EXISTS (
+      SELECT 1 FROM domains.ai_agent a
+      WHERE a.linked_user_id = u.id
+        AND a.deleted = 0
+        AND a.circle_id = u.agent_circle_id
+  );
 ```

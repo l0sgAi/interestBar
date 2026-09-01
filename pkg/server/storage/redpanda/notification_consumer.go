@@ -221,7 +221,39 @@ func (a *NotificationEventAggregator) flush() {
 		return
 	}
 	incrNoticeUnread(unreadDeltas)
+	notifyUnreadChanged(unreadDeltas)
 	logger.Log.Info(fmt.Sprintf("Successfully upserted %d notifications", len(rows)))
+}
+
+// ===== 未读数变更回调（SSE 推送触发源）=====
+
+// 包级 hook：composition 层注入 notice StreamHub.PublishBatch。
+// 走函数注入而非 import notice application，守跨域红线（redpanda 不依赖领域应用层）。
+var (
+	noticeUnreadHookMu sync.RWMutex
+	noticeUnreadHook   func([]uuid.UUID)
+)
+
+// SetNoticeUnreadHook 注册未读数变更回调（幂等覆盖，nil 跳过）。
+func SetNoticeUnreadHook(f func([]uuid.UUID)) {
+	noticeUnreadHookMu.Lock()
+	noticeUnreadHook = f
+	noticeUnreadHookMu.Unlock()
+}
+
+// notifyUnreadChanged 在未读计数器更新成功后通知回调（keys of unreadDeltas）。
+func notifyUnreadChanged(deltas map[uuid.UUID]int64) {
+	noticeUnreadHookMu.RLock()
+	hook := noticeUnreadHook
+	noticeUnreadHookMu.RUnlock()
+	if hook == nil || len(deltas) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(deltas))
+	for id := range deltas {
+		ids = append(ids, id)
+	}
+	hook(ids)
 }
 
 // ===== 接收人解析与规则过滤 =====

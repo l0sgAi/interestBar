@@ -31,6 +31,148 @@ const maxMuteHours = 720
 // 游标翻页在该集合内精确进行；超过则提示细化关键词。
 const memberSearchMaxUsers = 100
 
+// manageKeywordMaxRunes 可管理圈子列表关键词长度上限（rune 计），控制台过滤框防超长输入。
+const manageKeywordMaxRunes = 50
+
+// ===== 跨域 Facade / 端口（圈子级 AI 机器人管理支撑，见 docs/circle-agent-manage-design.md）=====
+
+// CircleMemberRoleReader circle 域对外暴露的成员角色只读 Facade。
+//
+// 供 aiagent 域经 composition 桥接做圈内机器人管理权限判断（aiagent 侧声明
+// CircleRoleReader 端口，桥接器薄转发本接口）。独立声明而非让 aiagent import 本包。
+type CircleMemberRoleReader interface {
+	// GetMemberRole 返回用户在圈内的 (role, status)；非成员/圈子不存在 ok=false
+	//（不区分两种情况，防成员身份探测）。直查 member 记录（无缓存：角色变更即时生效；
+	// GetMember 含惰性解禁自愈）。
+	GetMemberRole(ctx context.Context, circleID, userID uuid.UUID) (role, status int16, ok bool, err error)
+}
+
+// NewCircleMemberRoleReader 从 MemberRepository 构造跨域角色读取 Facade。
+func NewCircleMemberRoleReader(memberRepo domain.MemberRepository) CircleMemberRoleReader {
+	return &circleMemberRoleReader{repo: memberRepo}
+}
+
+type circleMemberRoleReader struct {
+	repo domain.MemberRepository
+}
+
+// GetMemberRole 直查 member 记录（无缓存）。
+func (f *circleMemberRoleReader) GetMemberRole(ctx context.Context, circleID, userID uuid.UUID) (int16, int16, bool, error) {
+	m, err := f.repo.GetMember(ctx, circleID, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrMemberNotFound) {
+			return 0, 0, false, nil
+		}
+		return 0, 0, false, err
+	}
+	return m.Role, m.Status, true, nil
+}
+
+// CircleAgentCounter 跨域端口：批量统计各圈已绑定 AI 代理数（可管理圈子列表
+// agent_count 回填用）。代理数据属 aiagent 领域——circle 域声明端口，
+// composition 桥接 aiagent.AgentRepository.CountByCircleIDs 实现（方向反转桥接）。
+type CircleAgentCounter interface {
+	CountByCircleIDs(ctx context.Context, circleIDs []uuid.UUID) (map[uuid.UUID]int, error)
+}
+
+// ===== 可管理圈子列表（AI 代理管理控制台）=====
+
+// ManagedCircleItem 我可管理的圈子列表项。
+//
+// AgentCount 为该圈已绑定 AI 代理数（实时统计，上限 5；统计失败降级为 0）。
+type ManagedCircleItem struct {
+	ID          uuid.UUID `json:"id"`
+	Name        string    `json:"name"`
+	Slug        string    `json:"slug,omitempty"`
+	AvatarURL   string    `json:"avatar_url,omitempty"`
+	Description string    `json:"description"`
+	MemberCount int       `json:"member_count"`
+	PostCount   int       `json:"post_count"`
+	JoinType    int16     `json:"join_type"`
+	Status      int16     `json:"status"`
+	// MyRole 调用者在该圈的角色（20=admin / 30=owner），驱动 UI 能力差异
+	//（如仅圈主可删圈/转让/改代理凭据）。
+	MyRole     int16     `json:"my_role"`
+	AgentCount int       `json:"agent_count"`
+	CreateTime time.Time `json:"create_time"`
+}
+
+// ManagedCircleListResult 可管理圈子列表（offset 分页，形状对齐 aiagent.AgentListResult）。
+type ManagedCircleListResult struct {
+	Total int64               `json:"total"`
+	Page  int                 `json:"page"`
+	Size  int                 `json:"size"`
+	Data  []ManagedCircleItem `json:"data"`
+}
+
+// ListManagedCircles 列出"我可管理 AI 代理的圈子"（owner/admin，offset 分页）。
+//
+// 权限模型：登录即可调用，查询本身即权限过滤（WHERE role IN (20,30) AND status=normal），
+// 无 ensureAdmin 式门槛；平台管理员（users.role=1）不特殊处理——其全局控制台是 /agent/list。
+// keyword 非空时按圈子 name/description 子串过滤（trim + SanitizeForPg + 50 rune 截断）；
+// 含非正常状态圈子（banned/pending），UI 依据 status 置灰。不缓存：角色变更须立即可见。
+func (s *circleServiceImpl) ListManagedCircles(ctx context.Context, operatorID uuid.UUID, keyword string, page, size int) (*ManagedCircleListResult, error) {
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 || size > 100 {
+		size = 20
+	}
+	keyword = sanitizeManageKeyword(keyword)
+
+	circles, total, err := s.memberRepo.ListManagedCircles(ctx, operatorID, keyword, (page-1)*size, size)
+	if err != nil {
+		return nil, err
+	}
+
+	// 回填各圈 AI 代理数（实时 COUNT：表小 + idx_ai_agent_circle 部分索引，成本低；
+	// 端口未注入或查询失败降级为 0，不阻断列表）。
+	agentCounts := make(map[uuid.UUID]int, len(circles))
+	if s.agentCounter != nil && len(circles) > 0 {
+		ids := make([]uuid.UUID, 0, len(circles))
+		for i := range circles {
+			ids = append(ids, circles[i].ID)
+		}
+		counts, err := s.agentCounter.CountByCircleIDs(ctx, ids)
+		if err != nil {
+			logger.Log.Error("Failed to count circle agents for managed list: " + err.Error())
+		} else {
+			agentCounts = counts
+		}
+	}
+
+	items := make([]ManagedCircleItem, 0, len(circles))
+	for i := range circles {
+		c := &circles[i]
+		items = append(items, ManagedCircleItem{
+			ID:          c.ID,
+			Name:        c.Name,
+			Slug:        c.Slug,
+			AvatarURL:   c.AvatarURL,
+			Description: c.Description,
+			MemberCount: c.MemberCount,
+			PostCount:   c.PostCount,
+			JoinType:    c.JoinType,
+			Status:      c.Status,
+			MyRole:      c.MyRole,
+			AgentCount:  agentCounts[c.ID],
+			CreateTime:  c.CreateTime,
+		})
+	}
+	return &ManagedCircleListResult{Total: total, Page: page, Size: size, Data: items}, nil
+}
+
+// sanitizeManageKeyword 规整管理列表关键词：trim → SanitizeForPg（防 PG UTF8 错误）
+// → 超 50 rune 截断（控制台过滤场景截断优于报错）。
+func sanitizeManageKeyword(kw string) string {
+	kw = utils.SanitizeForPg(strings.TrimSpace(kw))
+	if utf8.RuneCountInString(kw) > manageKeywordMaxRunes {
+		runes := []rune(kw)
+		kw = string(runes[:manageKeywordMaxRunes])
+	}
+	return kw
+}
+
 // ===== 管理端 DTO =====
 
 // CircleMemberItem 管理端成员列表项（含用户精简信息，由 UserFacade 组装）。
