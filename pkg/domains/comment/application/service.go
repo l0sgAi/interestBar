@@ -37,6 +37,9 @@ type UserFacade interface {
 	GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error)
 	// GetBrief 获取单个用户精简视图。未找到返回 nil, nil。
 	GetBrief(ctx context.Context, userID string) (*UserBrief, error)
+	// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含圈内机器人行，
+	// 普通用户/全局机器人不出现在 map）。mention 兜底剔除越圈机器人用。
+	GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 }
 
 // PostInfo comment 领域需要的帖子信息（发评论时校验用）。
@@ -44,6 +47,8 @@ type PostInfo struct {
 	ID     uuid.UUID
 	Status int16 // 帖子状态（PostStatusPublished=1 表示可评论）
 	IsLock int16 // 是否锁定（1=锁定）
+	// 帖子所属圈子（mention 兜底剔除越圈机器人用；草稿可能为 Nil）。
+	CircleID uuid.UUID
 }
 
 // PostLookup comment 领域需要的帖子查询端口。
@@ -298,7 +303,7 @@ func (s *commentServiceImpl) CreateComment(ctx context.Context, userID uuid.UUID
 	// 6. 累积帖子热度（评论 +5，per-post 上限 cap.comment，Lua 原子 clamp；best-effort）
 	// @提及：校验一次得到最终名单 → 落库（best-effort 不阻断发评论）→
 	// 通知使用同一份落库名单（通知名单 == 落库名单）。
-	mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs)
+	mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs, post.CircleID)
 	if len(mentionIDs) > 0 {
 		if err := s.repo.CreateMentions(ctx, comment.ID, mentionIDs); err != nil {
 			logger.Log.Error("Failed to save comment mentions: " + err.Error())
@@ -692,9 +697,12 @@ func (s *commentServiceImpl) publishCommentNotifications(ctx context.Context, us
 	}
 }
 
-// filterMentionUserIDs 校验 @提及用户列表：去重 → 去自己 → 存在性（UserFacade）→ 截断上限。
-// 校验失败（如 user 服务不可用）降级为不发 mention 通知，不影响评论主流程。
-func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid.UUID, mentionUserIDs []uuid.UUID) []uuid.UUID {
+// filterMentionUserIDs 校验 @提及用户列表：去重 → 去自己 → 存在性（UserFacade）→
+// 剔除越圈机器人 → 截断上限。
+// 圈子作用域兜底：圈内机器人（GetAgentCircleIDs 命中且绑定圈子 ≠ 帖子圈子）静默剔除，
+// 只防手搓 ID 构造请求（@选人列表已在 ES 侧过滤）。校验失败（如 user 服务不可用）
+// 降级为不发 mention 通知，不影响评论主流程。
+func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid.UUID, mentionUserIDs []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
 	if len(mentionUserIDs) == 0 || s.userFacade == nil {
 		return nil
 	}
@@ -723,22 +731,47 @@ func (s *commentServiceImpl) filterMentionUserIDs(ctx context.Context, actorID u
 		return nil
 	}
 
+	// 按去重后的原始顺序筛选，不存在的用户静默过滤；重复提及既不重复入列，
+	// 也不占用 MentionMax 配额（截断在剔除之后，见下）。
 	max := conf.Config.Notice.MentionMax
 	if max <= 0 {
 		max = 10
 	}
-	// 按去重后的原始顺序筛选：重复提及既不重复入列，也不占用 MentionMax 配额。
 	valid := make([]uuid.UUID, 0, len(briefs))
 	for _, id := range ordered {
 		if _, ok := briefs[id.String()]; !ok {
 			continue // 不存在的用户静默过滤
 		}
 		valid = append(valid, id)
-		if len(valid) >= max {
-			break
-		}
+	}
+	// 越圈机器人剔除先于截断：越圈机器人不占用 MentionMax 配额。
+	valid = stripOutOfScopeAgents(ctx, s.userFacade, valid, postCircleID)
+	if len(valid) > max {
+		valid = valid[:max]
 	}
 	return valid
+}
+
+// stripOutOfScopeAgents 从 mention 候选中剔除越圈的圈内机器人：绑定圈子 ≠ postCircleID
+// 的机器人静默移除；普通用户/全局机器人（map 无记录）保留。查询失败 fail-open 跳过剔除。
+// post/comment 两域同构逻辑（各自 UserFacade 名义类型不同，无法共用实现）。
+func stripOutOfScopeAgents(ctx context.Context, facade UserFacade, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
+	if len(candidates) == 0 {
+		return candidates
+	}
+	agentCircles, err := facade.GetAgentCircleIDs(ctx, candidates)
+	if err != nil {
+		logger.Log.Warn("Failed to load agent circle scope, skip out-of-scope filtering: " + err.Error())
+		return candidates
+	}
+	kept := make([]uuid.UUID, 0, len(candidates))
+	for _, id := range candidates {
+		if bound, ok := agentCircles[id]; ok && bound != postCircleID {
+			continue
+		}
+		kept = append(kept, id)
+	}
+	return kept
 }
 
 // truncateRunes 按 rune 截断字符串。

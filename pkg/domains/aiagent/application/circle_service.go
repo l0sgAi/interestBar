@@ -61,6 +61,9 @@ type CircleAgentService interface {
 	SetBotUserCreator(c BotUserCreator)
 	// SetBotUserProfileUpdater 注入跨域机器人资料同步端口（复用全局链路端口）。
 	SetBotUserProfileUpdater(u BotUserProfileUpdater)
+	// SetBotUserScopeCleaner 注入跨域机器人圈子绑定清理端口（复用全局链路端口；
+	// 未注入时删除机器人跳过清列，仅记日志，见 clearBotCircleScope fail-open）。
+	SetBotUserScopeCleaner(c BotUserScopeCleaner)
 }
 
 type circleAgentServiceImpl struct {
@@ -68,6 +71,7 @@ type circleAgentServiceImpl struct {
 	circleRoles    CircleRoleReader      // 注入前 nil，鉴权 fail-closed
 	botUserCreator BotUserCreator        // 注入前 nil，创建时 fail-fast
 	botUserUpdater BotUserProfileUpdater // 注入前 nil，改名/换头像时跳过同步
+	scopeCleaner   BotUserScopeCleaner   // 注入前 nil，删除时跳过清列（fail-open）
 }
 
 // NewCircleAgentService 构造 CircleAgentService（跨域依赖 setter 注入）。
@@ -80,6 +84,7 @@ func (s *circleAgentServiceImpl) SetBotUserCreator(c BotUserCreator)     { s.bot
 func (s *circleAgentServiceImpl) SetBotUserProfileUpdater(u BotUserProfileUpdater) {
 	s.botUserUpdater = u
 }
+func (s *circleAgentServiceImpl) SetBotUserScopeCleaner(c BotUserScopeCleaner) { s.scopeCleaner = c }
 
 // requireCircleManager 校验操作者是该圈 admin+（role>=20）且成员状态正常。
 // 端口未注入/非成员/圈子不存在/状态非 normal（禁言/拉黑/待审/退出）一律拒绝
@@ -151,7 +156,10 @@ func (s *circleAgentServiceImpl) CreateCircleAgent(ctx context.Context, operator
 	}
 	agentID := sharedomain.NewID()
 	botEmail := botEmailForID(agentID)
-	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, agent.Name, botEmail, agent.AvatarURL)
+	// 圈内机器人：users.agent_circle_id 写入圈子ID（ai_agent.circle_id 的投影，
+	// CDC 同步 ES 后供 @选人 作用域过滤）。与 CreateInCircle 非同一事务（跨库行
+	// 本就独立写，孤儿行语义与全局链路一致）。
+	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, agent.Name, botEmail, agent.AvatarURL, &circleID)
 	if err != nil {
 		return nil, err
 	}
@@ -249,6 +257,7 @@ func (s *circleAgentServiceImpl) UpdateCircleAgent(ctx context.Context, operator
 }
 
 // DeleteCircleAgent 软删（仅圈主：破坏性操作，对齐转让/任免的 owner-only 惯例）。
+// 软删生效后清机器人账号的圈子绑定（fail-open，语义同全局链 DeleteAgent）。
 func (s *circleAgentServiceImpl) DeleteCircleAgent(ctx context.Context, operatorID, agentID uuid.UUID) error {
 	agent, err := s.loadCircleAgent(ctx, agentID)
 	if err != nil {
@@ -257,5 +266,9 @@ func (s *circleAgentServiceImpl) DeleteCircleAgent(ctx context.Context, operator
 	if err := s.requireCircleOwner(ctx, *agent.CircleID, operatorID); err != nil {
 		return err
 	}
-	return s.repo.SoftDelete(ctx, agentID)
+	if err := s.repo.SoftDelete(ctx, agentID); err != nil {
+		return err
+	}
+	clearBotCircleScope(ctx, s.scopeCleaner, agent.LinkedUserID)
+	return nil
 }

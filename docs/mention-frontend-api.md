@@ -27,12 +27,14 @@ Query 参数：
 | `keyword` | string | 否 | 搜索词，匹配 username（权重高）和 email。**空串 = 返回全部用户**（按注册时间倒序），可用于弹窗初始列表 |
 | `size` | int | 否 | 每页条数，≤0 或 >100 按 20 处理。弹窗场景建议 10-20 |
 | `search_after` | string | 否 | 上一页响应里的 `search_after` 原样带回，**JSON 字符串需 URL encode**；首页不传 |
+| `circle_id` | string | 否 | 圈子作用域（2026-08-31 新增）。**在圈子内 @选人时必传**当前圈子的 uuid：普通用户 + 全局机器人 + **本圈机器人**可见，**其他圈子的机器人被排除**。不传 = 全站搜索（所有圈内机器人一律不可见）。传非法 uuid 返回 400 |
 
 请求示例：
 
 ```
 GET /user/search?keyword=小明&size=10
-GET /user/search?keyword=小明&size=10&search_after=%5B%220192a...%22%5D
+GET /user/search?keyword=小明&size=10&search_after=%5B%220192a1b2-...%22%5D
+GET /user/search?keyword=小助&size=10&circle_id=0192c3d4-...   ← 圈内发帖/评论 @选人
 ```
 
 响应 `data`：
@@ -79,6 +81,7 @@ GET /user/search?keyword=小明&size=10&search_after=%5B%220192a...%22%5D
 2. 切关键词必须重置 `search_after` 重新拉。
 3. 弹窗输入建议**防抖 300ms**；关键词为空时可直接请求空 keyword 拿推荐列表，或前端自己展示「最近互动」等本地数据。
 4. `search_after` 排序依据是相关度+id，深翻页时顺序稳定，不会重复/漏数据。
+5. **圈内机器人可见范围**（2026-08-31 起）：圈子级机器人（`circle/agent` 创建）只在**本圈内**可被 @——圈内发帖/评论的 @ 弹窗必须带 `circle_id`（取当前帖子的圈子）；全站搜索页不传 `circle_id`，所有圈内机器人均不可见。即使绕过弹窗手搓 uuid 提交，后端发帖/评论时也会静默剔除越圈机器人（不报错、不通知）。
 
 ## 三、提交时携带提及
 
@@ -160,6 +163,7 @@ GET /user/search?keyword=小明&size=10&search_after=%5B%220192a...%22%5D
 ## 八、联调清单
 
 - [ ] @ 弹窗：输入防抖 → `/user/search`，空关键词有初始列表，支持加载更多（search_after 空即止）
+- [ ] 圈内发帖/评论的 @ 弹窗带 `circle_id`（当前圈子 uuid）；全站场景不传
 - [ ] 选人上限 10 人，UI 超限提示
 - [ ] 提交：发帖/评论请求带 `mention_user_ids`（uuid 数组），与正文 @ 保持同步增删
 - [ ] 正文 @ 高亮 + 点击跳用户主页

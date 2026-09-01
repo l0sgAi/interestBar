@@ -26,7 +26,10 @@ type SysUser struct {
 	GithubID    string     `json:"github_id,omitempty" gorm:"column:github_id"`
 	MicrosoftID string     `json:"microsoft_id,omitempty" gorm:"column:microsoft_id"`
 	AvatarURL   string     `json:"avatar_url,omitempty" gorm:"column:avatar_url"`
-	Gender      int        `json:"gender" gorm:"column:gender;default:0"`
+	// AgentCircleID 机器人绑定圈子ID（ai_agent.circle_id 的投影，供 @提及 作用域过滤）。
+	// nil=普通用户或全局机器人；仅 role=2 行有意义。不回显（内部机制）。
+	AgentCircleID *uuid.UUID `json:"-" gorm:"column:agent_circle_id;type:uuid"`
+	Gender        int        `json:"gender" gorm:"column:gender;default:0"`
 	Birthdate   *time.Time `json:"birthdate,omitempty" gorm:"column:birthdate"`
 	Status      int        `json:"status" gorm:"column:status;default:1"`
 	Role        int        `json:"role" gorm:"column:role;default:0"`

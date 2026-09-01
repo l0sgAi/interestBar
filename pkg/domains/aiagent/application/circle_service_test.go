@@ -15,15 +15,19 @@ import (
 
 	"interestBar/pkg/conf"
 	"interestBar/pkg/domains/aiagent/domain"
+	"interestBar/pkg/logger"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 )
 
 // TestMain 测试装配：api_key 加密路径依赖 conf.Config.Security.DataKey（生产由
-// 配置加载写入），单测注入固定 32 字节测试密钥（SHA-256 派生后即 AES-256 密钥）。
+// 配置加载写入），单测注入固定 32 字节测试密钥（SHA-256 派生后即 AES-256 密钥）；
+// logger 注入 Nop 实现（fail-open 路径会打日志，避免 nil logger panic）。
 func TestMain(m *testing.M) {
 	conf.Config = &conf.AppConfig{}
 	conf.Config.Security.DataKey = "unit-test-data-key-0123456789abcdef"
+	logger.Log = zap.NewNop()
 	m.Run()
 }
 
@@ -101,6 +105,12 @@ func (f *fakeAgentRepo) CreateInCircle(ctx context.Context, a *domain.AiAgent, m
 	if f.createErr != nil {
 		return f.createErr
 	}
+	cp := *a
+	f.byID[a.ID] = &cp
+	return nil
+}
+
+func (f *fakeAgentRepo) Create(ctx context.Context, a *domain.AiAgent) error {
 	cp := *a
 	f.byID[a.ID] = &cp
 	return nil
@@ -189,12 +199,27 @@ func (f *fakeCircleRoles) GetCircleMembership(ctx context.Context, circleID, use
 	return m[0], m[1], true, nil
 }
 
-// fakeBotUserCreator 记录调用次数的机器人账号创建 fake。
-type fakeBotUserCreator struct{ created int }
+// fakeBotUserCreator 记录调用与圈子绑定参数的机器人账号创建 fake。
+type fakeBotUserCreator struct {
+	created   int
+	gotCircle *uuid.UUID // 最后一次 CreateBotUser 收到的 circleID（nil=全局链路）
+}
 
-func (f *fakeBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string) (uuid.UUID, error) {
+func (f *fakeBotUserCreator) CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID) (uuid.UUID, error) {
 	f.created++
+	f.gotCircle = circleID
 	return uuid.New(), nil
+}
+
+// fakeBotUserScopeCleaner 记录清列调用的机器人圈子绑定清理 fake。
+type fakeBotUserScopeCleaner struct {
+	cleared  []uuid.UUID
+	clearErr error // 非 nil 时模拟清列失败（fail-open 断言用）
+}
+
+func (f *fakeBotUserScopeCleaner) ClearBotCircleScope(ctx context.Context, userID uuid.UUID) error {
+	f.cleared = append(f.cleared, userID)
+	return f.clearErr
 }
 
 // fakeUserRoleReader 全局 role 读取 fake（全局链守卫测试用，模拟平台超管 role=1）。

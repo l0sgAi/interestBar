@@ -43,6 +43,9 @@ type MentionVO struct {
 type UserFacade interface {
 	GetBriefs(ctx context.Context, userIDs []string) (map[string]UserBrief, error)
 	GetBrief(ctx context.Context, userID string) (*UserBrief, error)
+	// GetAgentCircleIDs 批量返回 userID → 机器人绑定圈子ID（仅含圈内机器人行，
+	// 普通用户/全局机器人不出现在 map）。mention 兜底剔除越圈机器人用。
+	GetAgentCircleIDs(ctx context.Context, userIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error)
 }
 
 // CircleBrief 圈子精简视图。
@@ -281,6 +284,8 @@ type PostMeta struct {
 	ID     uuid.UUID
 	Status int16 // 帖子状态
 	IsLock int16 // 是否锁定
+	// 帖子所属圈子（comment 域 mention 兜底剔除越圈机器人用；草稿可能为 Nil）。
+	CircleID uuid.UUID
 }
 
 // PostBrief 帖子内容摘要（供 aiagent 领域组装机器人回复 prompt 用）。
@@ -442,7 +447,7 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	// @提及：校验一次得到最终名单 → 落库（不区分状态，草稿正文同样含提及）→
 	// 仅已发布按同一名单发通知（草稿/审核中帖子不应对外产生通知）。
 	// 落库/通知均为 best-effort，不阻断发帖；通知名单 == 落库名单。
-	if mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs); len(mentionIDs) > 0 {
+	if mentionIDs := s.filterMentionUserIDs(ctx, userID, input.MentionUserIDs, input.CircleID); len(mentionIDs) > 0 {
 		if err := s.repo.CreateMentions(ctx, post.ID, mentionIDs); err != nil {
 			logger.Log.Error("Failed to save post mentions: " + err.Error())
 		}
@@ -461,9 +466,13 @@ func (s *postServiceImpl) CreatePost(ctx context.Context, userID uuid.UUID, inpu
 	return post.ID, nil
 }
 
-// filterMentionUserIDs 校验 @提及 列表：去重 → 去掉自己/Nil → 校验用户存在 → 按上限截断。
+// filterMentionUserIDs 校验 @提及 列表：去重 → 去掉自己/Nil → 校验用户存在 →
+// 剔除越圈机器人 → 按上限截断。
+// 圈子作用域兜底：圈内机器人（UserFacade.GetAgentCircleIDs 命中且绑定圈子 ≠ 本帖圈子）
+// 静默剔除——@选人列表已在 ES 侧过滤，此处只防手搓 ID 构造请求。查询失败时 fail-open
+// 跳过剔除（与列表过滤的兜底口径一致），不阻断主流程。
 // 用户查询失败时降级为 nil（不发通知），不阻断主流程。
-func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid.UUID, raw []uuid.UUID) []uuid.UUID {
+func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid.UUID, raw []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
 	seen := make(map[uuid.UUID]struct{}, len(raw))
 	ids := make([]uuid.UUID, 0, len(raw))
 	for _, id := range raw {
@@ -495,6 +504,8 @@ func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid
 		}
 	}
 
+	valid = s.stripOutOfScopeAgents(ctx, valid, postCircleID)
+
 	max := conf.Config.Notice.MentionMax
 	if max <= 0 {
 		max = 10
@@ -503,6 +514,28 @@ func (s *postServiceImpl) filterMentionUserIDs(ctx context.Context, actorID uuid
 		valid = valid[:max]
 	}
 	return valid
+}
+
+// stripOutOfScopeAgents 从 mention 候选中剔除越圈的圈内机器人：绑定圈子 ≠ postCircleID
+// 的机器人静默移除；普通用户/全局机器人（map 无记录）保留。查询失败 fail-open 跳过剔除
+//（正常用户已被 @选人列表过滤，兜底只防构造请求）。
+func (s *postServiceImpl) stripOutOfScopeAgents(ctx context.Context, candidates []uuid.UUID, postCircleID uuid.UUID) []uuid.UUID {
+	if len(candidates) == 0 {
+		return candidates
+	}
+	agentCircles, err := s.userFacade.GetAgentCircleIDs(ctx, candidates)
+	if err != nil {
+		logger.Log.Warn("Failed to load agent circle scope, skip out-of-scope filtering: " + err.Error())
+		return candidates
+	}
+	kept := make([]uuid.UUID, 0, len(candidates))
+	for _, id := range candidates {
+		if bound, ok := agentCircles[id]; ok && bound != postCircleID {
+			continue
+		}
+		kept = append(kept, id)
+	}
+	return kept
 }
 
 // checkMemberStatus 检查成员状态是否允许发帖。
@@ -1100,9 +1133,10 @@ func (s *postServiceImpl) GetPostMeta(ctx context.Context, postID uuid.UUID) (*P
 		return nil, err
 	}
 	return &PostMeta{
-		ID:     post.ID,
-		Status: post.Status,
-		IsLock: post.IsLock,
+		ID:       post.ID,
+		Status:   post.Status,
+		IsLock:   post.IsLock,
+		CircleID: post.CircleID,
 	}, nil
 }
 

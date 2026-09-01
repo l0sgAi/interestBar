@@ -130,15 +130,17 @@ func RegisterDomainRoutes(root routing.RouterGroup) {
 	agentSvc.SetRoleReader(&agentRoleReader{delegate: userSvc})
 	agentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
 	agentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
+	agentSvc.SetBotUserScopeCleaner(&agentBotUserScopeCleaner{delegate: userSvc})
 
 	// aiagent 圈内机器人管理：圈内角色读取（circle Facade 直查 member，权限即时生效）
-	// + 机器人账号创建/资料同步（复用全局端口桥接器）。
+	// + 机器人账号创建/资料同步/圈子绑定清理（复用全局端口桥接器）。
 	circleAgentSvc := agentapp.NewCircleAgentService(agentRepo)
 	circleAgentSvc.SetCircleRoleReader(&circleRoleReaderForAgent{
 		delegate: circleapp.NewCircleMemberRoleReader(memberRepo),
 	})
 	circleAgentSvc.SetBotUserCreator(&agentBotUserCreator{db: deps.DB.Get()})
 	circleAgentSvc.SetBotUserProfileUpdater(&agentBotUserUpdater{delegate: userSvc})
+	circleAgentSvc.SetBotUserScopeCleaner(&agentBotUserScopeCleaner{delegate: userSvc})
 
 	// circle -> aiagent：可管理圈子列表的 agent_count 回填（方向反转桥接，失败降级 0）。
 	circleSvc.SetAgentCounter(&circleAgentCounterForCircle{repo: agentRepo})

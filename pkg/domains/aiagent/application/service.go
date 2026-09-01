@@ -35,7 +35,16 @@ type BotUserCreator interface {
 	// CreateBotUser 按给定 username/email/avatarURL 创建系统用户，返回其 ID。
 	// username 用机器人 name（users.username 无唯一约束，允许重复）；
 	// email 由调用方保证全局唯一（users.email 有唯一索引）。
-	CreateBotUser(ctx context.Context, username, email, avatarURL string) (uuid.UUID, error)
+	// circleID 非 nil 时写入 users.agent_circle_id（圈内机器人 @提及 作用域投影；
+	// 全局链路传 nil）。其余语义不变。
+	CreateBotUser(ctx context.Context, username, email, avatarURL string, circleID *uuid.UUID) (uuid.UUID, error)
+}
+
+// BotUserScopeCleaner 跨域端口：机器人软删时清 users.agent_circle_id（恢复"全局可见"语义）。
+// 只清列，不动 users.status（已删全局机器人仍可被@的存量行为不变，决策①见
+// docs/circle-agent-mention-scope-design.md）。实现方需同步失效 userinfo 缓存。
+type BotUserScopeCleaner interface {
+	ClearBotCircleScope(ctx context.Context, userID uuid.UUID) error
 }
 
 // BotUserProfileUpdater 跨域端口：同步机器人资料到关联系统用户。
@@ -150,6 +159,9 @@ type AgentService interface {
 	SetBotUserCreator(c BotUserCreator)
 	// SetBotUserProfileUpdater 注入跨域机器人资料同步端口（composition 桥接）。
 	SetBotUserProfileUpdater(u BotUserProfileUpdater)
+	// SetBotUserScopeCleaner 注入跨域机器人圈子绑定清理端口（composition 桥接；
+	// 未注入时删除机器人跳过清列，仅记日志，见 clearBotCircleScope fail-open）。
+	SetBotUserScopeCleaner(c BotUserScopeCleaner)
 }
 
 type agentServiceImpl struct {
@@ -157,6 +169,7 @@ type agentServiceImpl struct {
 	roleReader     RoleReader            // 注入前 nil，鉴权 fail-closed
 	botUserCreator BotUserCreator        // 注入前 nil，创建时 fail-fast
 	botUserUpdater BotUserProfileUpdater // 注入前 nil，改名/换头像时跳过同步
+	scopeCleaner   BotUserScopeCleaner   // 注入前 nil，删除时跳过清列（fail-open）
 }
 
 // NewAgentService 构造一个 AgentService（跨域依赖 setter 注入）。
@@ -169,6 +182,7 @@ func (s *agentServiceImpl) SetBotUserCreator(c BotUserCreator) { s.botUserCreato
 func (s *agentServiceImpl) SetBotUserProfileUpdater(u BotUserProfileUpdater) {
 	s.botUserUpdater = u
 }
+func (s *agentServiceImpl) SetBotUserScopeCleaner(c BotUserScopeCleaner) { s.scopeCleaner = c }
 
 // ensureAdmin 校验操作者是 role=1 管理员。端口未注入/用户不存在均拒绝（fail-closed）。
 func (s *agentServiceImpl) ensureAdmin(ctx context.Context, adminID uuid.UUID) error {
@@ -209,7 +223,7 @@ func (s *agentServiceImpl) CreateAgent(ctx context.Context, adminID uuid.UUID, i
 		return nil, errNotAdmin // 端口未注入视为装配错误，拒绝创建
 	}
 	agentID := sharedomain.NewID()
-	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, agent.Name, botEmailForID(agentID), agent.AvatarURL)
+	linkedUserID, err := s.botUserCreator.CreateBotUser(ctx, agent.Name, botEmailForID(agentID), agent.AvatarURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -349,15 +363,39 @@ func retryBotUserProfileSync(updater BotUserProfileUpdater, userID uuid.UUID, us
 		botProfileSyncMaxAttempts, userID))
 }
 
-// DeleteAgent 软删（deleted=1 且 status=0）。
+// DeleteAgent 软删（deleted=1 且 status=0）。软删生效后清机器人账号的圈子绑定
+//（清列失败不回滚，仅记日志：软删已优先生效，最坏后果=已删机器人仍在原圈@列表
+// 短暂可见，与 CDC 延迟窗口同级，见设计文档风险表）。
 func (s *agentServiceImpl) DeleteAgent(ctx context.Context, adminID, agentID uuid.UUID) error {
 	if err := s.ensureAdmin(ctx, adminID); err != nil {
 		return err
 	}
-	if _, err := s.loadGlobalAgent(ctx, agentID); err != nil {
+	agent, err := s.loadGlobalAgent(ctx, agentID)
+	if err != nil {
 		return err
 	}
-	return s.repo.SoftDelete(ctx, agentID)
+	if err := s.repo.SoftDelete(ctx, agentID); err != nil {
+		return err
+	}
+	clearBotCircleScope(ctx, s.scopeCleaner, agent.LinkedUserID)
+	return nil
+}
+
+// clearBotCircleScope 机器人软删后清 users.agent_circle_id 的统一入口（全局/圈内共用）。
+// fail-open：端口未注入或清列失败均只记日志不报错——软删已生效，列未清可幂等补偿
+//（重试/人工清），不阻断删除主流程。
+func clearBotCircleScope(ctx context.Context, cleaner BotUserScopeCleaner, linkedUserID uuid.UUID) {
+	if cleaner == nil {
+		logger.Log.Warn("BotUserScopeCleaner not injected, skip clearing agent_circle_id: user=" + linkedUserID.String())
+		return
+	}
+	if linkedUserID == uuid.Nil {
+		return
+	}
+	if err := cleaner.ClearBotCircleScope(ctx, linkedUserID); err != nil {
+		logger.Log.Error("Clear bot agent_circle_id failed (soft-delete already applied, retry/manual fix needed): user=" +
+			linkedUserID.String() + ": " + err.Error())
+	}
 }
 
 // loadGlobalAgent 加载**全局**机器人：不存在或为圈子级机器人（CircleID != nil）一律
